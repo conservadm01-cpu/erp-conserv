@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef } from "react";
-import { Clock, Users, Package, BarChart3, Plus, Trash2, X, Play, Loader2, ClipboardList, Paperclip, Check, ChevronUp, ChevronDown, ListOrdered, ArrowRight, Scissors, Printer, MessageCircle, Send } from "lucide-react";
+import { Clock, Users, Package, BarChart3, Plus, Trash2, X, Play, Loader2, ClipboardList, Paperclip, Check, ChevronUp, ChevronDown, ListOrdered, Scissors, Printer, MessageCircle, Send } from "lucide-react";
 
 // ---------- Identidade visual (tema de confecção) ----------
 // Fonte de destaque "Fraunces" (serifada, com entalhes que lembram costura)
@@ -223,23 +223,7 @@ const SEED_SETORES = [
   { key: "silk", nome: "Silk" },
   { key: "preparacao", nome: "Preparação" },
 ];
-const SEED_ETAPAS = [
-  { nome: "Fechamento de ombro", tempoEstimadoSeg: 25, setorKey: "costura" },
-  { nome: "Pregação de gola/decote", tempoEstimadoSeg: 50, setorKey: "costura" },
-  { nome: "Colocação de manga", tempoEstimadoSeg: 37, setorKey: "costura" },
-  { nome: "Fechamento lateral", tempoEstimadoSeg: 50, setorKey: "costura" },
-  { nome: "Bainha da manga", tempoEstimadoSeg: 25, setorKey: "costura" },
-  { nome: "Bainha da barra", tempoEstimadoSeg: 37, setorKey: "costura" },
-  { nome: "Pregação de etiqueta", tempoEstimadoSeg: 17, setorKey: "costura" },
-  { nome: "Revisão/limpeza de linhas", tempoEstimadoSeg: 45, setorKey: "costura" },
-];
-const SEED_ETAPAS_CORTE = [
-  { nome: "Risco", tempoEstimadoSeg: 20 },
-  { nome: "Enfesto", tempoEstimadoSeg: 15 },
-  { nome: "Corte", tempoEstimadoSeg: 30 },
-  { nome: "Amarração", tempoEstimadoSeg: 10 },
-  { nome: "Conferência", tempoEstimadoSeg: 8 },
-];
+
 
 // ---------- Storage hooks ----------
 // Corrigido: os cadastros (setores, etapas, produtos, vínculos, colaboradores,
@@ -495,7 +479,7 @@ export default function App() {
   // de produção para impedir programar domingos e feriados, e para
   // exigir autorização de Gestor/Administrador aos sábados.
   const [feriados, setFeriados, feriadosLoaded] = useRecordCollectionArray("feriado", null);
-  const { items: registros, loaded: registrosLoaded, salvar: salvarRegistro, salvarVarios: salvarRegistros, remover: removerRegistro } = useRecordCollection("registro");
+  const { items: registros, loaded: registrosLoaded, salvar: salvarRegistro, remover: removerRegistro } = useRecordCollection("registro");
   const { items: avaliacoes, loaded: avaliacoesLoaded, salvar: salvarAvaliacao, remover: removerAvaliacao } = useRecordCollection("avaliacao");
   const { items: anexos, loaded: anexosLoaded, salvarVarios: salvarAnexos, remover: removerAnexo } = useRecordCollection("anexo");
   const { items: acessos, loaded: acessosLoaded, salvar: salvarAcesso } = useRecordCollection("acesso");
@@ -714,6 +698,7 @@ export default function App() {
             ordensProducao={ordensProducao} onSalvarOrdem={salvarOrdemProducao} onRemoverOrdem={removerOrdemProducao}
             clientes={clientes} onImprimirGrade={setRelatorioGradeImpressao} feriados={feriados}
             podeAutorizarCargaExtra={usuarioAtual.perfil === "administrador" || usuarioAtual.perfil === "gestor"}
+            consumosMaterial={consumosMaterial} materiais={materiais}
           />
         )}
         {tab === "avaliacao" && perfilAtual.abas.includes("avaliacao") && (
@@ -887,7 +872,7 @@ function LoginGate({ colaboradores, onEntrar }) {
 
 
 // ---------- Produção (iniciar, acompanhar em aberto, concluir) ----------
-function Producao({ setores, produtos, etapas, vinculos, colaboradores, equipes, equipamentos, registros, onSalvarRegistro, onRemoverRegistro, ordensProducao, onSalvarOrdem, onRemoverOrdem, clientes, onImprimirGrade, podeAutorizarCargaExtra, feriados }) {
+function Producao({ setores, produtos, etapas, vinculos, colaboradores, equipes, equipamentos, registros, onSalvarRegistro, onRemoverRegistro, ordensProducao, onSalvarOrdem, onRemoverOrdem, clientes, onImprimirGrade, podeAutorizarCargaExtra, feriados, consumosMaterial, materiais }) {
   const [sub, setSub] = useState("ordens");
   const abertos = registros.filter(r => r.status === "aberto");
   const concluidos = registros.filter(r => r.status === "concluido");
@@ -913,6 +898,8 @@ function Producao({ setores, produtos, etapas, vinculos, colaboradores, equipes,
         <EmAberto
           abertos={abertos} produtos={produtos} etapas={etapas} setores={setores} colaboradores={colaboradores}
           onSalvarRegistro={onSalvarRegistro} onRemoverRegistro={onRemoverRegistro} onImprimirGrade={onImprimirGrade}
+          consumosMaterial={consumosMaterial} materiais={materiais}
+          ordensProducao={ordensProducao} onSalvarOrdem={onSalvarOrdem}
         />
       )}
       {sub === "historico" && (
@@ -923,7 +910,7 @@ function Producao({ setores, produtos, etapas, vinculos, colaboradores, equipes,
           ordensProducao={ordensProducao} produtos={produtos} etapas={etapas} setores={setores} vinculos={vinculos}
           colaboradores={colaboradores} equipes={equipes} equipamentos={equipamentos} registros={registros} onSalvarOrdem={onSalvarOrdem} onRemoverOrdem={onRemoverOrdem}
           onSalvarRegistro={onSalvarRegistro} onImprimirGrade={onImprimirGrade} podeAutorizarCargaExtra={podeAutorizarCargaExtra} feriados={feriados}
-          clientes={clientes}
+          clientes={clientes} consumosMaterial={consumosMaterial} materiais={materiais}
         />
       )}
     </div>
@@ -931,8 +918,88 @@ function Producao({ setores, produtos, etapas, vinculos, colaboradores, equipes,
 }
 
 // ---------- Em aberto (lista de processos abertos + concluir) ----------
-function EmAberto({ abertos, produtos, etapas, setores, colaboradores, onSalvarRegistro, onRemoverRegistro, onImprimirGrade }) {
+function EmAberto({ abertos, produtos, etapas, setores, colaboradores, onSalvarRegistro, onRemoverRegistro, onImprimirGrade, consumosMaterial, materiais, ordensProducao, onSalvarOrdem }) {
+  // Adicionado: monta a lista de materiais necessários de um item em
+  // aberto — mesma conta usada na Ordem de Produção (consumo por peça ×
+  // quantidade do item), pra quem está executando ver aqui na tela de
+  // trabalho o que precisa separar, sem ter que voltar na OP.
+  function materiaisDoRegistro(r) {
+    return (consumosMaterial || [])
+      .filter(c => c.produtoId === r.produtoId)
+      .map(c => {
+        const material = (materiais || []).find(m => m.id === c.materialId);
+        return {
+          id: c.id, nome: material?.nome || "—", unidade: material?.unidade || "",
+          quantidade: Math.round((c.quantidadePorPeca || 0) * (r.quantidade || 0) * 1000) / 1000,
+          estoque: material?.quantidadeEstoque ?? null,
+        };
+      })
+      .sort((a, b) => a.nome.localeCompare(b.nome));
+  }
+  // A marcação de "separado" continua guardada na etapa da OP — assim o
+  // que for marcado aqui aparece igual na Ordem de Produção e vice-versa.
+  function separadosDoRegistro(r) {
+    const op = (ordensProducao || []).find(o => o.id === r.ordemProducaoId);
+    const etapa = op && r.ordemEtapaIndex != null ? op.etapas[r.ordemEtapaIndex] : null;
+    return etapa?.materiaisSeparados || [];
+  }
+  async function alternarSeparado(r, consumoId) {
+    const op = (ordensProducao || []).find(o => o.id === r.ordemProducaoId);
+    if (!op || r.ordemEtapaIndex == null) return;
+    const etapasAtualizadas = op.etapas.map((e, i) => {
+      if (i !== r.ordemEtapaIndex) return e;
+      const atuais = e.materiaisSeparados || [];
+      return { ...e, materiaisSeparados: atuais.includes(consumoId) ? atuais.filter(id => id !== consumoId) : [...atuais, consumoId] };
+    });
+    await onSalvarOrdem({ ...op, etapas: etapasAtualizadas });
+  }
+
   const [concluindoId, setConcluindoId] = useState(null);
+  // Adicionado: comentários por item em aberto — quem está executando
+  // pode registrar uma ocorrência (ex.: "tecido veio com falha no rolo 3")
+  // e anexar foto/arquivo como evidência. Fica gravado no próprio
+  // registro, então aparece pra qualquer pessoa que abrir esse item.
+  const [comentandoId, setComentandoId] = useState(null);
+  const [textoComentario, setTextoComentario] = useState("");
+  const [anexosComentario, setAnexosComentario] = useState([]);
+  const anexoComentarioRef = useRef(null);
+
+  async function lerArquivos(fileList) {
+    const arquivos = Array.from(fileList || []);
+    const novos = [];
+    for (const file of arquivos) {
+      if (file.size > 4.5 * 1024 * 1024) { alert(`"${file.name}" é maior que 4,5MB e não pode ser anexado.`); continue; }
+      const dataUrl = await new Promise((res, rej) => {
+        const rd = new FileReader();
+        rd.onload = () => res(rd.result); rd.onerror = rej; rd.readAsDataURL(file);
+      });
+      novos.push({ id: uid(), nome: file.name, tipo: file.type, dataUrl });
+    }
+    return novos;
+  }
+  async function anexarNoComentario(fileList) {
+    const novos = await lerArquivos(fileList);
+    if (novos.length) setAnexosComentario(a => [...a, ...novos]);
+  }
+  function abrirComentario(id) {
+    setComentandoId(comentandoId === id ? null : id);
+    setTextoComentario(""); setAnexosComentario([]);
+  }
+  async function salvarComentario(r) {
+    if (!textoComentario.trim() && anexosComentario.length === 0) return;
+    const comentario = {
+      id: uid(), texto: textoComentario.trim(), anexos: anexosComentario,
+      autor: (r.colaboradorIds || []).map(nomeColab).join(", ") || "—",
+      criadoEm: new Date().toISOString(),
+    };
+    await onSalvarRegistro({ ...r, comentarios: [...(r.comentarios || []), comentario] });
+    setComentandoId(null); setTextoComentario(""); setAnexosComentario([]);
+  }
+  async function removerComentario(r, comentarioId) {
+    if (!window.confirm("Excluir este comentário?")) return;
+    await onSalvarRegistro({ ...r, comentarios: (r.comentarios || []).filter(c => c.id !== comentarioId) });
+  }
+
   const [filtroSetorId, setFiltroSetorId] = useState("");
   const [filtroEtapaId, setFiltroEtapaId] = useState("");
   const [filtroColaboradorId, setFiltroColaboradorId] = useState("");
@@ -1075,14 +1142,123 @@ function EmAberto({ abertos, produtos, etapas, setores, colaboradores, onSalvarR
                     Previsão de conclusão: <b>{projecao.toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}</b>{atrasado ? " — já passou do previsto" : ""}
                   </div>
                 )}
+                {(() => {
+                  const mats = materiaisDoRegistro(r);
+                  if (mats.length === 0) return null;
+                  const separados = separadosDoRegistro(r);
+                  const podeMarcar = !!r.ordemProducaoId && r.ordemEtapaIndex != null;
+                  const totalSeparados = mats.filter(m => separados.includes(m.id)).length;
+                  const tudoSeparado = totalSeparados === mats.length;
+                  return (
+                    <div style={{ marginBottom: 10, paddingTop: 8, borderTop: "1px dashed #d9cfb7" }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 5 }}>
+                        <span style={{ fontSize: 11, fontWeight: 700, color: "#6b5d49" }}>Materiais para {r.quantidade} peças</span>
+                        {podeMarcar && (
+                          <span style={{
+                            fontSize: 10.5, fontWeight: 700, padding: "2px 8px 2px 7px", borderRadius: "3px 8px 8px 3px",
+                            color: tudoSeparado ? "#1a7a4c" : "#8a6510", background: tudoSeparado ? "#e6f4ec" : "#fdf3e0",
+                            border: `1px dashed ${tudoSeparado ? "#1a7a4c" : "#b5820a"}`,
+                          }}>{tudoSeparado ? "✓ tudo separado" : `${totalSeparados}/${mats.length} separados`}</span>
+                        )}
+                      </div>
+                      <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+                        {mats.map(m => {
+                          const marcado = separados.includes(m.id);
+                          const faltaEstoque = m.estoque != null && m.estoque < m.quantidade;
+                          return (
+                            <label key={m.id} style={{
+                              display: "flex", alignItems: "center", gap: 8, cursor: podeMarcar ? "pointer" : "default",
+                              background: marcado ? "#e6f4ec" : faltaEstoque ? "#f8e6e6" : "#fff",
+                              border: `1px solid ${marcado ? "#bfe3cf" : faltaEstoque ? "#e8c4c4" : "#e6ddc8"}`,
+                              borderRadius: 7, padding: "6px 9px",
+                            }}>
+                              {podeMarcar && (
+                                <input type="checkbox" checked={marcado} onChange={() => alternarSeparado(r, m.id)} style={{ width: 16, height: 16, flexShrink: 0 }} />
+                              )}
+                              <span style={{ flex: 1, fontSize: 12, color: "#2a2015", textDecoration: marcado ? "line-through" : "none", opacity: marcado ? 0.65 : 1 }}>
+                                {m.nome}
+                                {faltaEstoque && !marcado && <span style={{ fontSize: 10.5, color: "#b13232", marginLeft: 6 }}>falta {Math.round((m.quantidade - m.estoque) * 1000) / 1000} {m.unidade}</span>}
+                              </span>
+                              <span style={{ fontSize: 12, fontWeight: 700, color: marcado ? "#1a7a4c" : "#2a2015" }}>{m.quantidade} {m.unidade}</span>
+                            </label>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  );
+                })()}
                 <div style={{ display: "flex", gap: 8 }}>
                   <PrimaryButton onClick={() => setConcluindoId(concluindoId === r.id ? null : r.id)} style={{ flex: 1 }}>
                     <Check size={16} /> Concluir
                   </PrimaryButton>
+                  <button onClick={() => abrirComentario(r.id)} title="Comentar / anexar" style={{
+                    border: "1.5px solid #d9cfb7", background: comentandoId === r.id ? "#f4ecd8" : "#fff", borderRadius: 9,
+                    padding: "0 12px", color: "#2f4a63", fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", gap: 5,
+                  }}>
+                    <MessageCircle size={15} />{(r.comentarios || []).length > 0 ? ` ${(r.comentarios || []).length}` : ""}
+                  </button>
                   <IconButton onClick={() => cancelar(r.id)} danger title="Cancelar processo"><Trash2 size={16} /></IconButton>
                 </div>
+
+                {(r.comentarios || []).length > 0 && (
+                  <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 6 }}>
+                    {(r.comentarios || []).map(c => (
+                      <div key={c.id} style={{ background: "#faf6ec", border: "1px solid #e6ddc8", borderRadius: 8, padding: "8px 10px" }}>
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
+                          <div style={{ flex: 1 }}>
+                            {c.texto && <div style={{ fontSize: 12.5, color: "#2a2015", whiteSpace: "pre-wrap" }}>{c.texto}</div>}
+                            <div style={{ fontSize: 10.5, color: "#a3937a", marginTop: 2 }}>
+                              {c.autor} · {new Date(c.criadoEm).toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}
+                            </div>
+                          </div>
+                          <IconButton onClick={() => removerComentario(r, c.id)} danger title="Excluir comentário"><X size={13} /></IconButton>
+                        </div>
+                        {(c.anexos || []).length > 0 && (
+                          <div style={{ display: "flex", gap: 6, marginTop: 6, flexWrap: "wrap" }}>
+                            {c.anexos.map(a => (
+                              a.tipo && a.tipo.startsWith("image/")
+                                ? <img key={a.id} src={a.dataUrl} alt={a.nome} style={{ width: 54, height: 54, objectFit: "cover", borderRadius: 6, border: "1px solid #e6ddc8" }} />
+                                : <a key={a.id} href={a.dataUrl} download={a.nome} style={{ fontSize: 11, color: "#2f4a63", border: "1px solid #e6ddc8", borderRadius: 6, padding: "4px 8px", textDecoration: "none", display: "inline-flex", alignItems: "center", gap: 4 }}><Paperclip size={11} /> {a.nome}</a>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {comentandoId === r.id && (
+                  <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px solid #efe8d8" }}>
+                    <Field label="Comentário / ocorrência">
+                      <textarea value={textoComentario} onChange={e => setTextoComentario(e.target.value)} rows={2}
+                        placeholder="Ex.: tecido do rolo 3 veio com falha, avisar o corte"
+                        style={{ ...inputStyle, resize: "vertical", fontFamily: "inherit" }} />
+                    </Field>
+                    {anexosComentario.length > 0 && (
+                      <div style={{ display: "flex", gap: 6, marginBottom: 8, flexWrap: "wrap" }}>
+                        {anexosComentario.map(a => (
+                          <div key={a.id} style={{ position: "relative", border: "1px solid #e6ddc8", borderRadius: 6, overflow: "hidden" }}>
+                            {a.tipo && a.tipo.startsWith("image/")
+                              ? <img src={a.dataUrl} alt={a.nome} style={{ width: 54, height: 54, objectFit: "cover", display: "block" }} />
+                              : <div style={{ width: 54, height: 54, display: "flex", alignItems: "center", justifyContent: "center", color: "#a3937a" }}><Paperclip size={16} /></div>}
+                            <button onClick={() => setAnexosComentario(x => x.filter(y => y.id !== a.id))} style={{ position: "absolute", top: 2, right: 2, background: "rgba(255,255,255,0.9)", border: "none", borderRadius: 999, width: 17, height: 17, cursor: "pointer", color: "#b13232", display: "flex", alignItems: "center", justifyContent: "center" }}><X size={10} /></button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    <input ref={anexoComentarioRef} type="file" multiple accept="image/*,video/*,.pdf,.doc,.docx,.xls,.xlsx" style={{ display: "none" }}
+                      onChange={e => { anexarNoComentario(e.target.files); e.target.value = ""; }} />
+                    <div style={{ display: "flex", gap: 8 }}>
+                      <button type="button" onClick={() => anexoComentarioRef.current && anexoComentarioRef.current.click()} style={{
+                        fontSize: 12.5, border: "1px dashed #cdb98a", background: "#f4ecd8", borderRadius: 8, padding: "8px 11px",
+                        cursor: "pointer", display: "flex", alignItems: "center", gap: 6, color: "#2f4a63", fontWeight: 700,
+                      }}><Paperclip size={14} /> Anexar</button>
+                      <PrimaryButton onClick={() => salvarComentario(r)} disabled={!textoComentario.trim() && anexosComentario.length === 0} style={{ flex: 1 }}>Salvar comentário</PrimaryButton>
+                    </div>
+                  </div>
+                )}
                 {concluindoId === r.id && (
-                  <ConcluirForm registro={r} onSalvarRegistro={onSalvarRegistro} onFechar={() => setConcluindoId(null)} />
+                  <ConcluirForm registro={r} onSalvarRegistro={onSalvarRegistro} onFechar={() => setConcluindoId(null)} colaboradores={colaboradores} />
                 )}
               </Card>
             );
@@ -1093,7 +1269,7 @@ function EmAberto({ abertos, produtos, etapas, setores, colaboradores, onSalvarR
   );
 }
 
-function ConcluirForm({ registro, onSalvarRegistro, onFechar }) {
+function ConcluirForm({ registro, onSalvarRegistro, onFechar, colaboradores }) {
   const [fim, setFim] = useState(nowLocalInput());
   const [quantidadeReal, setQuantidadeReal] = useState(String(registro.quantidade));
   const [temDefeito, setTemDefeito] = useState(null);
@@ -1101,7 +1277,15 @@ function ConcluirForm({ registro, onSalvarRegistro, onFechar }) {
   const [fotosDefeito, setFotosDefeito] = useState([]);
   const [temRetrabalho, setTemRetrabalho] = useState(null);
   const [tempoRetrabalhoMin, setTempoRetrabalhoMin] = useState("");
+  // Adicionado: confirma (ou ajusta) quem de fato executou a atividade
+  // na hora de concluir — por padrão já vem marcado quem foi escalado ao
+  // iniciar, mas dá pra corrigir se quem terminou foi outra pessoa.
+  const [colaboradorIdsExecucao, setColaboradorIdsExecucao] = useState(registro.colaboradorIds || []);
   const fotoInputRef = useRef(null);
+
+  function toggleColaboradorExecucao(id) {
+    setColaboradorIdsExecucao(ids => ids.includes(id) ? ids.filter(x => x !== id) : [...ids, id]);
+  }
 
   const qtdNum = parseInt(quantidadeReal || "0", 10);
   const qtdDefeitoNum = Math.min(parseInt(qtdDefeito || "0", 10), qtdNum);
@@ -1110,6 +1294,7 @@ function ConcluirForm({ registro, onSalvarRegistro, onFechar }) {
   const tempoRetrabalhoPenalizadoSeg = tempoRetrabalhoSeg * 1.05;
 
   const podeSalvar = fim && qtdNum > 0 && new Date(fim) > new Date(registro.inicio)
+    && colaboradorIdsExecucao.length > 0
     && temDefeito !== null && (!temDefeito || qtdDefeitoNum >= 0)
     && temRetrabalho !== null && (!temRetrabalho || tempoRetrabalhoSeg > 0);
 
@@ -1158,6 +1343,7 @@ function ConcluirForm({ registro, onSalvarRegistro, onFechar }) {
     const classificacao = eficiencia != null ? classify(eficiencia) : null;
     const atualizado = {
       ...registro, status: "concluido", fim,
+      colaboradorIds: colaboradorIdsExecucao,
       quantidade: qtdNum, quantidadeDefeito: temDefeito ? qtdDefeitoNum : 0, quantidadeBoa: qtdBoaNum,
       fotosDefeito: temDefeito ? fotosDefeito : [],
       tempoRetrabalhoMin: temRetrabalho ? Math.max(parseFloat(tempoRetrabalhoMin || "0"), 0) : 0,
@@ -1177,6 +1363,14 @@ function ConcluirForm({ registro, onSalvarRegistro, onFechar }) {
           Esta etapa não tem tempo estimado cadastrado — a conclusão será salva sem cálculo de eficiência (sem nota A/B/C).
         </div>
       )}
+      <Field label="Colaborador(es) que executou(aram)">
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+          {colaboradores.map(c => (
+            <ToggleChip key={c.id} ativo={colaboradorIdsExecucao.includes(c.id)} onClick={() => toggleColaboradorExecucao(c.id)}>{c.nome}</ToggleChip>
+          ))}
+        </div>
+        <div style={{ fontSize: 11, color: "#a3937a", marginTop: 5 }}>Já vem marcado quem foi escalado ao iniciar — ajuste se quem concluiu foi outra pessoa.</div>
+      </Field>
       <Field label="Horário de fim">
         <input type="datetime-local" value={fim} onChange={e => setFim(e.target.value)} style={inputStyle} />
       </Field>
@@ -1697,7 +1891,7 @@ function IniciarEtapaOPForm({ passo, setorObj, quantidadeAlvo, colaboradores, eq
   );
 }
 
-function OrdensProducao({ ordensProducao, produtos, etapas, setores, vinculos, colaboradores, equipes, equipamentos, registros, onSalvarOrdem, onRemoverOrdem, onSalvarRegistro, clientes, onImprimirGrade, podeAutorizarCargaExtra, feriados }) {
+function OrdensProducao({ ordensProducao, produtos, etapas, setores, vinculos, colaboradores, equipes, equipamentos, registros, onSalvarOrdem, onRemoverOrdem, onSalvarRegistro, clientes, onImprimirGrade, podeAutorizarCargaExtra, feriados, consumosMaterial, materiais }) {
   const [clienteIdNovo, setClienteIdNovo] = useState("");
   const [dataEntregaNova, setDataEntregaNova] = useState("");
   const [produtoParaAdicionar, setProdutoParaAdicionar] = useState("");
@@ -1858,6 +2052,43 @@ function OrdensProducao({ ordensProducao, produtos, etapas, setores, vinculos, c
     setClienteIdNovo(""); setDataEntregaNova(""); setItensNovo([]); setProdutoParaAdicionar(""); setQuantidadeParaAdicionar(""); setAnexosNovaOP([]);
   }
 
+  // Adicionado: consolida os materiais necessários da OP inteira —
+  // percorre todos os produtos do pedido, cruza com a ficha de consumo
+  // de cada um (Cadastros → Produtos) e soma por material, para quem vai
+  // separar saber de uma vez tudo que precisa pra aquela ordem.
+  function materiaisDaOP(op) {
+    const soma = {};
+    (op.itens || []).forEach(item => {
+      (consumosMaterial || []).filter(c => c.produtoId === item.produtoId).forEach(c => {
+        const material = (materiais || []).find(m => m.id === c.materialId);
+        const chave = c.materialId;
+        if (!soma[chave]) soma[chave] = { id: chave, nome: material?.nome || "—", unidade: material?.unidade || "", quantidade: 0, estoque: material?.quantidadeEstoque ?? null };
+        soma[chave].quantidade += (c.quantidadePorPeca || 0) * item.quantidade;
+      });
+    });
+    return Object.values(soma)
+      .map(m => ({ ...m, quantidade: Math.round(m.quantidade * 1000) / 1000 }))
+      .sort((a, b) => a.nome.localeCompare(b.nome));
+  }
+
+  // Adicionado: marca ou desmarca um material como separado na etapa de
+  // Preparação — a marcação é gravada na própria etapa da OP, então
+  // persiste ao recarregar e todo mundo que abrir a ordem vê o mesmo
+  // estado da separação.
+  async function alternarMaterialSeparado(op, indexEtapa, consumoId) {
+    const etapasAtualizadas = op.etapas.map((e, i) => {
+      if (i !== indexEtapa) return e;
+      const atuais = e.materiaisSeparados || [];
+      return {
+        ...e,
+        materiaisSeparados: atuais.includes(consumoId)
+          ? atuais.filter(id => id !== consumoId)
+          : [...atuais, consumoId],
+      };
+    });
+    await onSalvarOrdem({ ...op, etapas: etapasAtualizadas });
+  }
+
   async function cancelarOP(op) {
     if (!window.confirm(`Cancelar a OP #${String(op.numero).padStart(3, "0")}? Essa ação não pode ser desfeita.`)) return;
     await onRemoverOrdem(op.id);
@@ -1872,6 +2103,9 @@ function OrdensProducao({ ordensProducao, produtos, etapas, setores, vinculos, c
       subtitulo: (op.itens || []).map(it => `${it.produtoNomeSnap} (${it.quantidade})`).join(", "),
       geradoEm: new Date().toLocaleString("pt-BR"),
       anexos: op.anexos || [],
+      // Adicionado: a lista de materiais necessários da OP também vai
+      // para o impresso, pra quem separa os materiais poder levar a folha.
+      materiais: materiaisDaOP(op),
       colunas: [
         { key: "ordem", label: "#", align: "right" }, { key: "etapa", label: "Etapa" }, { key: "produto", label: "Produto" },
         { key: "setor", label: "Departamento" }, { key: "colaboradores", label: "Colaborador(es)" },
@@ -2059,6 +2293,7 @@ function OrdensProducao({ ordensProducao, produtos, etapas, setores, vinculos, c
           const tempoTotal = op.tempoEstimadoTotalSeg ?? cronograma.reduce((s, p) => s + p.duracaoEstimadaSeg, 0);
           const pendentes = op.etapas.filter(e => !e.concluida).length;
           const expandido = expandidoId === op.id;
+          const materiaisOP = expandido ? materiaisDaOP(op) : [];
           return (
             <Card key={op.id} style={{ padding: 14 }}>
               <div onClick={() => setExpandidoId(expandido ? null : op.id)} style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8, marginBottom: 8, cursor: "pointer" }}>
@@ -2094,6 +2329,35 @@ function OrdensProducao({ ordensProducao, produtos, etapas, setores, vinculos, c
                 </span>
               </div>
 
+              {expandido && materiaisOP.length > 0 && (
+                <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px solid #efe8d8" }}>
+                  <div style={{ fontSize: 12.5, fontWeight: 700, color: "#1c2b39", marginBottom: 6 }}>Materiais necessários para esta OP</div>
+                  <div style={{ border: "1px solid #e6ddc8", borderRadius: 8, overflow: "hidden" }}>
+                    {materiaisOP.map((m, idx) => {
+                      const faltando = m.estoque != null && m.estoque < m.quantidade;
+                      return (
+                        <div key={m.id} style={{
+                          display: "flex", justifyContent: "space-between", alignItems: "center",
+                          padding: "6px 10px", fontSize: 12, color: "#2a2015",
+                          borderTop: idx > 0 ? "1px solid #f4efe2" : "none",
+                          background: faltando ? "#f8e6e6" : "transparent",
+                        }}>
+                          <span>{m.nome}</span>
+                          <span style={{ textAlign: "right" }}>
+                            <b>{m.quantidade} {m.unidade}</b>
+                            {m.estoque != null && (
+                              <span style={{ fontSize: 10.5, color: faltando ? "#b13232" : "#a3937a", marginLeft: 6 }}>
+                                {faltando ? `falta ${Math.round((m.quantidade - m.estoque) * 1000) / 1000} ${m.unidade}` : `estoque: ${m.estoque} ${m.unidade}`}
+                              </span>
+                            )}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
               {expandido && (
               <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 10, paddingTop: 10, borderTop: "1px solid #efe8d8" }}>
                 {cronograma.map((passo, i) => {
@@ -2110,6 +2374,21 @@ function OrdensProducao({ ordensProducao, produtos, etapas, setores, vinculos, c
                   const saldoRestante = Math.max(0, Math.round((passo.quantidade - quantidadeConcluida - quantidadeAlocadaAberta) * 1000) / 1000);
                   const setorObj = setores.find(s => s.id === passo.setorId);
                   const emAndamento = abertosDaEtapa.length > 0;
+                  // Adicionado: na etapa de Preparação, mostra a lista de
+                  // materiais necessários pra essa quantidade — cruza a
+                  // ficha de consumo do produto (Cadastros → Produtos)
+                  // com a quantidade pedida nessa etapa da OP, pra quem
+                  // for separar os materiais já saber quanto pegar.
+                  const ehPreparacao = (passo.setorNomeSnap || "").toLowerCase().includes("preparaç") || (passo.setorNomeSnap || "").toLowerCase().includes("preparac");
+                  const materiaisNecessarios = ehPreparacao
+                    ? (consumosMaterial || []).filter(c => c.produtoId === passo.produtoId).map(c => {
+                        const material = (materiais || []).find(m => m.id === c.materialId);
+                        return {
+                          id: c.id, nome: material?.nome || "—", unidade: material?.unidade || "",
+                          quantidadeNecessaria: Math.round((c.quantidadePorPeca || 0) * passo.quantidade * 1000) / 1000,
+                        };
+                      })
+                    : [];
                   return (
                     <div key={i} style={{
                       borderRadius: 8, padding: "8px 10px",
@@ -2139,6 +2418,49 @@ function OrdensProducao({ ordensProducao, produtos, etapas, setores, vinculos, c
                           </button>
                         )}
                       </div>
+                      {materiaisNecessarios.length > 0 && (() => {
+                        // Adicionado: checklist de separação — cada material
+                        // pode ser marcado como separado, e a marcação fica
+                        // salva na própria etapa da OP (persiste ao recarregar
+                        // e é vista por qualquer pessoa que abrir a ordem).
+                        const separados = passo.materiaisSeparados || [];
+                        const totalSeparados = materiaisNecessarios.filter(m => separados.includes(m.id)).length;
+                        const tudoSeparado = totalSeparados === materiaisNecessarios.length;
+                        return (
+                          <div style={{ marginTop: 8, paddingTop: 8, borderTop: "1px dashed #d9cfb7" }}>
+                            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 5 }}>
+                              <span style={{ fontSize: 11, fontWeight: 700, color: "#6b5d49" }}>Separação de materiais para {passo.quantidade} peças</span>
+                              <span style={{
+                                fontSize: 10.5, fontWeight: 700, padding: "2px 8px 2px 7px", borderRadius: "3px 8px 8px 3px",
+                                color: tudoSeparado ? "#1a7a4c" : "#8a6510", background: tudoSeparado ? "#e6f4ec" : "#fdf3e0",
+                                border: `1px dashed ${tudoSeparado ? "#1a7a4c" : "#b5820a"}`,
+                              }}>
+                                {tudoSeparado ? "✓ tudo separado" : `${totalSeparados}/${materiaisNecessarios.length} separados`}
+                              </span>
+                            </div>
+                            <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+                              {materiaisNecessarios.map(m => {
+                                const marcado = separados.includes(m.id);
+                                return (
+                                  <label key={m.id} style={{
+                                    display: "flex", alignItems: "center", gap: 8, cursor: "pointer",
+                                    background: marcado ? "#e6f4ec" : "#fff", border: `1px solid ${marcado ? "#bfe3cf" : "#e6ddc8"}`,
+                                    borderRadius: 7, padding: "6px 9px",
+                                  }}>
+                                    <input
+                                      type="checkbox" checked={marcado}
+                                      onChange={() => alternarMaterialSeparado(op, i, m.id)}
+                                      style={{ width: 16, height: 16, flexShrink: 0 }}
+                                    />
+                                    <span style={{ flex: 1, fontSize: 12, color: "#2a2015", textDecoration: marcado ? "line-through" : "none", opacity: marcado ? 0.65 : 1 }}>{m.nome}</span>
+                                    <span style={{ fontSize: 12, fontWeight: 700, color: marcado ? "#1a7a4c" : "#2a2015" }}>{m.quantidadeNecessaria} {m.unidade}</span>
+                                  </label>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        );
+                      })()}
                       {abertosDaEtapa.length > 0 && (
                         <div style={{ marginTop: 6, display: "flex", flexDirection: "column", gap: 3 }}>
                           {abertosDaEtapa.map(r => (
@@ -2361,6 +2683,11 @@ function ChatInterno({ usuarioAtual, ehAdministrador, colaboradores }) {
   const [mensagens, setMensagens] = useState([]);
   const [carregado, setCarregado] = useState(false);
   const [texto, setTexto] = useState("");
+  // Adicionado: anexos no chat — fotos, documentos ou qualquer arquivo,
+  // pra mandar evidência junto com a mensagem (ex.: foto de um defeito,
+  // PDF de uma ficha técnica).
+  const [anexosChat, setAnexosChat] = useState([]);
+  const anexoChatRef = useRef(null);
   const [enviando, setEnviando] = useState(false);
   // Adicionado: em muitas confecções o mesmo aparelho fica logado o dia
   // inteiro (ex.: um tablet fixo no chão de fábrica) — em vez de exigir
@@ -2408,16 +2735,31 @@ function ChatInterno({ usuarioAtual, ehAdministrador, colaboradores }) {
     primeiraCargaRef.current = false;
   }, [mensagens.length]);
 
+  async function anexarNoChat(fileList) {
+    const arquivos = Array.from(fileList || []);
+    const novos = [];
+    for (const file of arquivos) {
+      if (file.size > 4.5 * 1024 * 1024) { alert(`"${file.name}" é maior que 4,5MB e não pode ser anexado.`); continue; }
+      const dataUrl = await new Promise((res, rej) => {
+        const rd = new FileReader();
+        rd.onload = () => res(rd.result); rd.onerror = rej; rd.readAsDataURL(file);
+      });
+      novos.push({ id: uid(), nome: file.name, tipo: file.type, dataUrl });
+    }
+    if (novos.length) setAnexosChat(a => [...a, ...novos]);
+  }
+
   async function enviar() {
     const texto2 = texto.trim();
-    if (!texto2 || enviando) return;
+    // Corrigido: agora dá pra mandar só um anexo, sem escrever nada.
+    if ((!texto2 && anexosChat.length === 0) || enviando) return;
     setEnviando(true);
     const nova = {
       id: uid(), autorNome: remetenteSelecionado || usuarioAtual?.nome || "Usuário", autorPerfil: usuarioAtual?.perfil || "colaborador",
-      texto: texto2, criadoEm: new Date().toISOString(),
+      texto: texto2, anexos: anexosChat, criadoEm: new Date().toISOString(),
     };
     setMensagens(msgs => [...msgs, nova]);
-    setTexto("");
+    setTexto(""); setAnexosChat([]);
     try {
       await window.storage.set(`mensagem:${nova.id}`, JSON.stringify(nova), true);
     } catch (e) {
@@ -2459,7 +2801,20 @@ function ChatInterno({ usuarioAtual, ehAdministrador, colaboradores }) {
                       {m.autorNome}{labelPerfil(m.autorPerfil) ? ` · ${labelPerfil(m.autorPerfil)}` : ""}
                     </div>
                   )}
-                  <div style={{ fontSize: 13.5, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{m.texto}</div>
+                  {m.texto && <div style={{ fontSize: 13.5, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{m.texto}</div>}
+                  {(m.anexos || []).length > 0 && (
+                    <div style={{ display: "flex", gap: 6, marginTop: m.texto ? 6 : 0, flexWrap: "wrap" }}>
+                      {m.anexos.map(a => (
+                        a.tipo && a.tipo.startsWith("image/")
+                          ? <a key={a.id} href={a.dataUrl} download={a.nome}><img src={a.dataUrl} alt={a.nome} style={{ width: 110, maxHeight: 110, objectFit: "cover", borderRadius: 6, display: "block" }} /></a>
+                          : <a key={a.id} href={a.dataUrl} download={a.nome} style={{
+                              fontSize: 11.5, color: propria ? "#fff" : "#2f4a63", textDecoration: "none",
+                              border: `1px solid ${propria ? "rgba(255,255,255,0.4)" : "#cdb98a"}`, borderRadius: 6,
+                              padding: "5px 8px", display: "inline-flex", alignItems: "center", gap: 5,
+                            }}><Paperclip size={12} /> {a.nome}</a>
+                      ))}
+                    </div>
+                  )}
                 </div>
                 <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 2 }}>
                   <span style={{ fontSize: 10, color: "#a3937a" }}>
@@ -2486,13 +2841,34 @@ function ChatInterno({ usuarioAtual, ehAdministrador, colaboradores }) {
             .map(c => <option key={c.id} value={c.nome}>{c.nome}</option>)}
         </Select>
       </div>
+      {anexosChat.length > 0 && (
+        <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap" }}>
+          {anexosChat.map(a => (
+            <div key={a.id} style={{ position: "relative", border: "1px solid #e6ddc8", borderRadius: 6, overflow: "hidden", background: "#fff" }}>
+              {a.tipo && a.tipo.startsWith("image/")
+                ? <img src={a.dataUrl} alt={a.nome} style={{ width: 56, height: 56, objectFit: "cover", display: "block" }} />
+                : <div style={{ width: 56, height: 56, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", color: "#a3937a", gap: 2 }}>
+                    <Paperclip size={15} />
+                    <span style={{ fontSize: 8, padding: "0 3px", textAlign: "center", overflow: "hidden", whiteSpace: "nowrap", textOverflow: "ellipsis", maxWidth: 52 }}>{a.nome}</span>
+                  </div>}
+              <button onClick={() => setAnexosChat(x => x.filter(y => y.id !== a.id))} style={{ position: "absolute", top: 2, right: 2, background: "rgba(255,255,255,0.92)", border: "none", borderRadius: 999, width: 17, height: 17, cursor: "pointer", color: "#b13232", display: "flex", alignItems: "center", justifyContent: "center" }}><X size={10} /></button>
+            </div>
+          ))}
+        </div>
+      )}
+      <input ref={anexoChatRef} type="file" multiple accept="image/*,video/*,.pdf,.doc,.docx,.xls,.xlsx" style={{ display: "none" }}
+        onChange={e => { anexarNoChat(e.target.files); e.target.value = ""; }} />
       <div style={{ display: "flex", gap: 8, marginTop: 6 }}>
+        <button type="button" onClick={() => anexoChatRef.current && anexoChatRef.current.click()} title="Anexar documento, foto ou arquivo" style={{
+          border: "1.5px solid #d9cfb7", background: "#fff", borderRadius: 8, padding: "0 12px",
+          cursor: "pointer", color: "#2f4a63", display: "flex", alignItems: "center",
+        }}><Paperclip size={16} /></button>
         <textarea
           value={texto} onChange={e => setTexto(e.target.value)} placeholder="Escreva uma mensagem…" rows={1}
           onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); enviar(); } }}
           style={{ ...inputStyle, flex: 1, resize: "none", fontFamily: "inherit" }}
         />
-        <PrimaryButton onClick={enviar} disabled={!texto.trim() || enviando} style={{ paddingLeft: 16, paddingRight: 16 }}>
+        <PrimaryButton onClick={enviar} disabled={(!texto.trim() && anexosChat.length === 0) || enviando} style={{ paddingLeft: 16, paddingRight: 16 }}>
           <Send size={16} />
         </PrimaryButton>
       </div>
@@ -3001,7 +3377,11 @@ function ComprasMateriais({ materiais, setMateriais, solicitacoesCompra, onSalva
 
 // ---------- Relatórios ----------
 function Relatorios({ registros, produtos, etapas, colaboradores, setores, avaliacoes, onGerarRelatorio, onGerarRelatorioAbertos, movimentacoesMaterial, movimentacoesEstoque, materiais, solicitacoesCompra, cotacoesCompra, ehAdministrador }) {
-  const [preset, setPreset] = useState("dia");
+  // Corrigido: o padrão era "Diário" (só o dia de hoje), o que fazia os
+  // relatórios parecerem quebrados/vazios quando a produção tinha sido
+  // lançada em outro dia. O padrão agora é mensal, que é o recorte mais
+  // usado no dia a dia da fábrica.
+  const [preset, setPreset] = useState("mes");
   const [customStart, setCustomStart] = useState(todayStr());
   const [customEnd, setCustomEnd] = useState(todayStr());
   const [filtroColab, setFiltroColab] = useState("");
@@ -3313,6 +3693,19 @@ function Relatorios({ registros, produtos, etapas, colaboradores, setores, avali
             <Field label="Até"><input type="date" value={customEnd} onChange={e => setCustomEnd(e.target.value)} style={inputStyle} /></Field>
           </div>
         )}
+        {/* Adicionado: deixa explícito qual faixa de datas está sendo
+            considerada e quantos registros ela pegou — antes, um relatório
+            vazio parecia defeito quando na verdade era só o filtro de
+            período não alcançando os lançamentos. */}
+        <div style={{
+          fontSize: 11.5, color: concluidosPeriodo.length ? "#6b5d49" : "#8a6510",
+          background: concluidosPeriodo.length ? "#f4efe2" : "#fdf3e0",
+          border: `1px dashed ${concluidosPeriodo.length ? "#d9cfb7" : "#b5820a"}`,
+          borderRadius: 7, padding: "7px 10px", marginBottom: 12,
+        }}>
+          {start.toLocaleDateString("pt-BR")} a {end.toLocaleDateString("pt-BR")} · {concluidosPeriodo.length} produção{concluidosPeriodo.length !== 1 ? "ões" : ""} concluída{concluidosPeriodo.length !== 1 ? "s" : ""}
+          {concluidosPeriodo.length === 0 && " — nada lançado nesse período. Experimente um período maior (Mensal, Anual) ou use Personalizado."}
+        </div>
         <Field label="Colaborador (opcional)">
           <Select value={filtroColab} onChange={e => setFiltroColab(e.target.value)}>
             <option value="">Todos</option>
@@ -4029,6 +4422,32 @@ function RelatorioGradeImpressao({ payload, onFechar }) {
           </table>
         )}
 
+        {payload.materiais && payload.materiais.length > 0 && (
+          <div style={{ marginTop: 22 }}>
+            <div style={{ fontSize: 13.5, fontWeight: 700, color: "#1c2b39", marginBottom: 10, fontFamily: FONT_DISPLAY }}>Materiais necessários</div>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+              <thead>
+                <tr style={{ background: "#f4efe2" }}>
+                  <th style={{ textAlign: "left", padding: "7px 10px", fontWeight: 700, color: "#6b5d49", borderBottom: "1.5px solid #e6ddc8" }}>Material</th>
+                  <th style={{ textAlign: "right", padding: "7px 10px", fontWeight: 700, color: "#6b5d49", borderBottom: "1.5px solid #e6ddc8" }}>Necessário</th>
+                  <th style={{ textAlign: "right", padding: "7px 10px", fontWeight: 700, color: "#6b5d49", borderBottom: "1.5px solid #e6ddc8" }}>Em estoque</th>
+                  <th style={{ textAlign: "center", padding: "7px 10px", fontWeight: 700, color: "#6b5d49", borderBottom: "1.5px solid #e6ddc8" }}>Separado</th>
+                </tr>
+              </thead>
+              <tbody>
+                {payload.materiais.map((m, i) => (
+                  <tr key={m.id} style={{ borderBottom: "1px solid #efe8d8", background: i % 2 === 1 ? "#faf6ec" : "transparent" }}>
+                    <td style={{ padding: "6px 10px" }}>{m.nome}</td>
+                    <td style={{ padding: "6px 10px", textAlign: "right", fontWeight: 700 }}>{m.quantidade} {m.unidade}</td>
+                    <td style={{ padding: "6px 10px", textAlign: "right" }}>{m.estoque != null ? `${m.estoque} ${m.unidade}` : "—"}</td>
+                    <td style={{ padding: "6px 10px", textAlign: "center", color: "#a3937a" }}>☐</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+
         {payload.anexos && payload.anexos.length > 0 && (
           <div style={{ marginTop: 22 }}>
             <div style={{ fontSize: 13.5, fontWeight: 700, color: "#1c2b39", marginBottom: 10, fontFamily: FONT_DISPLAY }}>Anexos</div>
@@ -4061,6 +4480,101 @@ function RelatorioGradeImpressao({ payload, onFechar }) {
 // ---------- Cadastros ----------
 function Cadastros({ produtos, setProdutos, etapas, setEtapas, vinculos, setVinculos, colaboradores, setColaboradores, setores, setSetores, equipes, setEquipes, anexos, onSalvarAnexos, onRemoverAnexo, acessos, clientes, setClientes, materiais, setMateriais, consumosMaterial, setConsumosMaterial, fornecedores, setFornecedores, equipamentos, setEquipamentos, solicitacoesCompra, cotacoesCompra, feriados, setFeriados, ehAdministrador }) {
   const [sub, setSub] = useState("departamentos");
+
+  // Adicionado: cria de uma vez uma camiseta básica completa para testes —
+  // usa os tempos reais de referência do próprio processo (Corte 80s,
+  // Gravação 55s, Preparação 35s, Costura 210s, Revisão/Embalagem 75s =
+  // 455s por peça). Reaproveita departamentos e materiais que já existem
+  // pelo nome, então rodar de novo não duplica nada.
+  async function criarCamisetaTeste() {
+    const NOME_PRODUTO = "Camiseta básica (teste)";
+    const jaExiste = produtos.find(p => p.nome === NOME_PRODUTO);
+    if (jaExiste) return { produtoId: jaExiste.id, jaExistia: true };
+
+    // 1) Departamentos — reaproveita os existentes, cria só o que faltar.
+    const DEPTOS = [
+      { nome: "Corte", tipo: "corte" },
+      { nome: "Silk", tipo: "silk" },
+      { nome: "Preparação", tipo: "padrao" },
+      { nome: "Costura", tipo: "padrao" },
+      { nome: "Embalagem", tipo: "padrao" },
+    ];
+    let setoresFinal = [...setores];
+    DEPTOS.forEach(d => {
+      if (!setoresFinal.some(s => s.nome.toLowerCase() === d.nome.toLowerCase())) {
+        setoresFinal.push({ id: uid(), nome: d.nome, tipo: d.tipo });
+      }
+    });
+    const idSetor = (nome) => setoresFinal.find(s => s.nome.toLowerCase() === nome.toLowerCase())?.id || null;
+
+    // 2) Atividades por departamento, com os tempos de referência.
+    //    "lote" = feito uma vez para o lote inteiro (não multiplica pela
+    //    quantidade); "peca" = tempo por peça.
+    const ATIVIDADES = [
+      { nome: "Enfesto", setor: "Corte", seg: 20, calc: "lote" },
+      { nome: "Risco / plotagem", setor: "Corte", seg: 20, calc: "lote" },
+      { nome: "Corte", setor: "Corte", seg: 20, calc: "peca" },
+      { nome: "Separação de kits", setor: "Corte", seg: 12, calc: "peca" },
+      { nome: "Identificação / amarração", setor: "Corte", seg: 8, calc: "peca" },
+      { nome: "Gravação (silk/DTF)", setor: "Silk", seg: 55, calc: "peca" },
+      { nome: "Preparação de aviamentos", setor: "Preparação", seg: 35, calc: "peca" },
+      { nome: "Fechamento de ombro (overlock)", setor: "Costura", seg: 30, calc: "peca" },
+      { nome: "Pregação de gola (overlock)", setor: "Costura", seg: 45, calc: "peca" },
+      { nome: "Colocação de manga (overlock)", setor: "Costura", seg: 40, calc: "peca" },
+      { nome: "Fechamento lateral (overlock)", setor: "Costura", seg: 45, calc: "peca" },
+      { nome: "Bainha de manga e barra (galoneira)", setor: "Costura", seg: 35, calc: "peca" },
+      { nome: "Pregação de etiqueta (reta)", setor: "Costura", seg: 15, calc: "peca" },
+      { nome: "Revisão e limpeza de linhas", setor: "Embalagem", seg: 45, calc: "peca" },
+      { nome: "Dobra e embalagem", setor: "Embalagem", seg: 30, calc: "peca" },
+    ];
+    let etapasFinal = [...etapas];
+    ATIVIDADES.forEach(a => {
+      const existente = etapasFinal.find(e => e.nome.toLowerCase() === a.nome.toLowerCase() && e.setorId === idSetor(a.setor));
+      if (!existente) {
+        etapasFinal.push({ id: uid(), nome: a.nome, setorId: idSetor(a.setor), tipoCalculo: a.calc });
+      }
+    });
+    const idEtapa = (nome, setor) => etapasFinal.find(e => e.nome.toLowerCase() === nome.toLowerCase() && e.setorId === idSetor(setor))?.id;
+
+    // 3) Materiais com consumo por peça de uma camiseta.
+    const MATERIAIS = [
+      { nome: "Malha 100% algodão", unidade: "kg", estoque: 50, minimo: 10, maximo: 100, preco: 38.9, porPeca: 0.16 },
+      { nome: "Linha de costura", unidade: "cone", estoque: 40, minimo: 8, maximo: 60, preco: 9.5, porPeca: 0.05 },
+      { nome: "Gola ribana", unidade: "m", estoque: 200, minimo: 40, maximo: 400, preco: 6.2, porPeca: 0.25 },
+      { nome: "Etiqueta bordada", unidade: "un", estoque: 500, minimo: 100, maximo: 1000, preco: 0.35, porPeca: 1 },
+      { nome: "Embalagem plástica", unidade: "un", estoque: 500, minimo: 100, maximo: 1000, preco: 0.28, porPeca: 1 },
+    ];
+    let materiaisFinal = [...materiais];
+    MATERIAIS.forEach(m => {
+      if (!materiaisFinal.some(x => x.nome.toLowerCase() === m.nome.toLowerCase())) {
+        materiaisFinal.push({
+          id: uid(), nome: m.nome, unidade: m.unidade, quantidadeEstoque: m.estoque,
+          estoqueMinimo: m.minimo, estoqueMaximo: m.maximo, preco: m.preco,
+        });
+      }
+    });
+    const idMaterial = (nome) => materiaisFinal.find(x => x.nome.toLowerCase() === nome.toLowerCase())?.id;
+
+    // 4) O produto, com a sequência inteira vinculada na ordem de produção
+    //    real: Corte → Silk → Preparação → Costura → Embalagem.
+    const produtoId = uid();
+    const vinculosNovos = ATIVIDADES.map((a, ordem) => ({
+      id: uid(), produtoId, etapaId: idEtapa(a.nome, a.setor), tempoEstimadoSeg: a.seg, ordem,
+    })).filter(v => v.etapaId);
+    const consumosNovos = MATERIAIS.map(m => ({
+      id: uid(), produtoId, materialId: idMaterial(m.nome), quantidadePorPeca: m.porPeca,
+    })).filter(c => c.materialId);
+
+    await setSetores(setoresFinal);
+    await setEtapas(etapasFinal);
+    await setMateriais(materiaisFinal);
+    await setProdutos([...produtos, { id: produtoId, nome: NOME_PRODUTO }]);
+    await setVinculos([...vinculos, ...vinculosNovos]);
+    await setConsumosMaterial([...consumosMaterial, ...consumosNovos]);
+
+    return { produtoId, jaExistia: false };
+  }
+
   return (
     <div>
       <div style={{ display: "flex", gap: 6, marginBottom: 16, flexWrap: "wrap" }}>
@@ -4085,7 +4599,7 @@ function Cadastros({ produtos, setProdutos, etapas, setEtapas, vinculos, setVinc
       {sub === "departamentos" && <DepartamentosCadastro setores={setores} setSetores={setSetores} etapas={etapas} setEtapas={setEtapas} vinculos={vinculos} setVinculos={setVinculos} equipes={equipes} setEquipes={setEquipes} anexos={anexos} onSalvarAnexos={onSalvarAnexos} onRemoverAnexo={onRemoverAnexo} />}
       {sub === "colaboradores" && <ColaboradoresCadastro colaboradores={colaboradores} setColaboradores={setColaboradores} acessos={acessos} ehAdministrador={ehAdministrador} />}
       {sub === "equipes" && <EquipesCadastro equipes={equipes} setEquipes={setEquipes} setores={setores} colaboradores={colaboradores} />}
-      {sub === "produtos" && <ProdutosCadastro produtos={produtos} setProdutos={setProdutos} etapas={etapas} vinculos={vinculos} setVinculos={setVinculos} setores={setores} materiais={materiais} consumosMaterial={consumosMaterial} setConsumosMaterial={setConsumosMaterial} />}
+      {sub === "produtos" && <ProdutosCadastro produtos={produtos} setProdutos={setProdutos} etapas={etapas} vinculos={vinculos} setVinculos={setVinculos} setores={setores} materiais={materiais} consumosMaterial={consumosMaterial} setConsumosMaterial={setConsumosMaterial} ehAdministrador={ehAdministrador} onCriarCamisetaTeste={criarCamisetaTeste} />}
       {sub === "materiais" && <MateriaisCadastro materiais={materiais} setMateriais={setMateriais} consumosMaterial={consumosMaterial} setConsumosMaterial={setConsumosMaterial} />}
       {sub === "fornecedores" && <FornecedoresCadastro fornecedores={fornecedores} setFornecedores={setFornecedores} solicitacoesCompra={solicitacoesCompra} cotacoesCompra={cotacoesCompra} materiais={materiais} />}
       {sub === "equipamentos" && <EquipamentosCadastro equipamentos={equipamentos} setEquipamentos={setEquipamentos} setores={setores} />}
@@ -5174,7 +5688,7 @@ function FeriadosCadastro({ feriados, setFeriados }) {
   );
 }
 
-function ProdutosCadastro({ produtos, setProdutos, etapas, vinculos, setVinculos, setores, materiais, consumosMaterial, setConsumosMaterial }) {
+function ProdutosCadastro({ produtos, setProdutos, etapas, vinculos, setVinculos, setores, materiais, consumosMaterial, setConsumosMaterial, ehAdministrador, onCriarCamisetaTeste }) {
   const [nome, setNome] = useState("");
   const [expandido, setExpandido] = useState(null);
   const [novaEtapaId, setNovaEtapaId] = useState("");
@@ -5184,6 +5698,20 @@ function ProdutosCadastro({ produtos, setProdutos, etapas, vinculos, setVinculos
   const [nomeEdicao, setNomeEdicao] = useState("");
   const [novoMaterialId, setNovoMaterialId] = useState("");
   const [novaQtdMaterial, setNovaQtdMaterial] = useState("");
+  const [criandoTeste, setCriandoTeste] = useState(false);
+  const [msgTeste, setMsgTeste] = useState("");
+
+  async function criarCamisetaTesteClick() {
+    if (!onCriarCamisetaTeste || criandoTeste) return;
+    setCriandoTeste(true); setMsgTeste("");
+    try {
+      const { produtoId, jaExistia } = await onCriarCamisetaTeste();
+      setExpandido(produtoId);
+      setMsgTeste(jaExistia
+        ? "A camiseta de teste já existia — abrindo ela abaixo."
+        : "Pronto: departamentos, 15 atividades, 5 materiais e a camiseta com a sequência inteira vinculada.");
+    } finally { setCriandoTeste(false); }
+  }
 
   async function adicionarProduto() {
     if (!nome.trim()) return;
@@ -5271,6 +5799,18 @@ function ProdutosCadastro({ produtos, setProdutos, etapas, vinculos, setVinculos
 
   return (
     <div>
+      {ehAdministrador && onCriarCamisetaTeste && (
+        <Card style={{ marginBottom: 16, borderStyle: "dashed", borderColor: "#cdb98a", background: "#f4ecd8" }}>
+          <div style={{ fontSize: 13.5, fontWeight: 700, color: "#1c2b39", marginBottom: 4 }}>Produto de teste: Camiseta básica</div>
+          <div style={{ fontSize: 12, color: "#6b5d49", marginBottom: 10 }}>
+            Cria uma camiseta completa para testar o sistema: os 5 departamentos, 15 atividades com os tempos de referência (455s por peça no total), 5 materiais com estoque e consumo, e o produto já com a sequência inteira vinculada — Corte → Silk → Preparação → Costura → Embalagem. Reaproveita o que já existir; rodar de novo não duplica.
+          </div>
+          <PrimaryButton onClick={criarCamisetaTesteClick} disabled={criandoTeste} style={{ width: "100%" }}>
+            {criandoTeste ? "Criando…" : "Criar camiseta de teste"}
+          </PrimaryButton>
+          {msgTeste && <div style={{ fontSize: 12, color: "#1a7a4c", fontWeight: 600, marginTop: 8 }}>{msgTeste}</div>}
+        </Card>
+      )}
       <Card style={{ marginBottom: 16 }}>
         <div style={{ fontSize: 15, fontWeight: 800, fontFamily: FONT_DISPLAY, marginBottom: 12, color: "#1c2b39" }}>Novo produto</div>
         <div style={{ display: "flex", gap: 8 }}>
