@@ -4737,7 +4737,7 @@ function Cadastros({ produtos, setProdutos, etapas, setEtapas, vinculos, setVinc
       {sub === "colaboradores" && <ColaboradoresCadastro colaboradores={colaboradores} setColaboradores={setColaboradores} acessos={acessos} ehAdministrador={ehAdministrador} />}
       {sub === "equipes" && <EquipesCadastro equipes={equipes} setEquipes={setEquipes} setores={setores} colaboradores={colaboradores} />}
       {sub === "produtos" && <ProdutosCadastro produtos={produtos} setProdutos={setProdutos} etapas={etapas} vinculos={vinculos} setVinculos={setVinculos} setores={setores} materiais={materiais} consumosMaterial={consumosMaterial} setConsumosMaterial={setConsumosMaterial} ehAdministrador={ehAdministrador} onCriarCamisetaTeste={criarCamisetaTeste} />}
-      {sub === "materiais" && <MateriaisCadastro materiais={materiais} setMateriais={setMateriais} consumosMaterial={consumosMaterial} setConsumosMaterial={setConsumosMaterial} />}
+      {sub === "materiais" && <MateriaisCadastro materiais={materiais} setMateriais={setMateriais} consumosMaterial={consumosMaterial} setConsumosMaterial={setConsumosMaterial} fornecedores={fornecedores} />}
       {sub === "fornecedores" && <FornecedoresCadastro fornecedores={fornecedores} setFornecedores={setFornecedores} solicitacoesCompra={solicitacoesCompra} cotacoesCompra={cotacoesCompra} materiais={materiais} />}
       {sub === "equipamentos" && <EquipamentosCadastro equipamentos={equipamentos} setEquipamentos={setEquipamentos} setores={setores} />}
       {sub === "clientes" && <ClientesCadastro clientes={clientes} setClientes={setClientes} />}
@@ -5297,22 +5297,25 @@ function ColaboradoresCadastro({ colaboradores, setColaboradores, acessos, ehAdm
 // baixa automática.
 const UNIDADES_MATERIAL = ["m", "kg", "un", "rolo", "cone", "l", "pacote"];
 
-function MateriaisCadastro({ materiais, setMateriais, consumosMaterial, setConsumosMaterial }) {
+function MateriaisCadastro({ materiais, setMateriais, consumosMaterial, setConsumosMaterial, fornecedores }) {
   const [nome, setNome] = useState("");
   const [unidade, setUnidade] = useState("m");
   const [quantidadeEstoque, setQuantidadeEstoque] = useState("");
   const [estoqueMinimo, setEstoqueMinimo] = useState("");
   const [estoqueMaximo, setEstoqueMaximo] = useState("");
   const [preco, setPreco] = useState("");
+  const [fornecedorId, setFornecedorId] = useState("");
   const [editandoId, setEditandoId] = useState(null);
   const [nomeEdicao, setNomeEdicao] = useState("");
   const [unidadeEdicao, setUnidadeEdicao] = useState("m");
   const [estoqueMinimoEdicao, setEstoqueMinimoEdicao] = useState("");
   const [estoqueMaximoEdicao, setEstoqueMaximoEdicao] = useState("");
   const [precoEdicao, setPrecoEdicao] = useState("");
+  const [fornecedorIdEdicao, setFornecedorIdEdicao] = useState("");
   const [ajusteId, setAjusteId] = useState(null);
   const [ajusteValor, setAjusteValor] = useState("");
   const [ajusteTipo, setAjusteTipo] = useState("entrada");
+  const nomeFornecedor = (id) => (fornecedores || []).find(f => f.id === id)?.nome || null;
 
   async function adicionar() {
     if (!nome.trim()) return;
@@ -5325,8 +5328,12 @@ function MateriaisCadastro({ materiais, setMateriais, consumosMaterial, setConsu
       // material nos relatórios e nas cotações de compra.
       estoqueMaximo: estoqueMaximo ? Math.round(parseFloat(estoqueMaximo) * 1000) / 1000 : null,
       preco: preco ? Math.round(parseFloat(preco) * 100) / 100 : null,
+      // Adicionado: fornecedor principal do material (do cadastro de
+      // Fornecedores) — o nome fica salvo junto (snapshot) pra continuar
+      // aparecendo mesmo se o fornecedor for renomeado ou excluído depois.
+      fornecedorId: fornecedorId || null, fornecedorNomeSnap: fornecedorId ? nomeFornecedor(fornecedorId) : null,
     }]);
-    setNome(""); setQuantidadeEstoque(""); setEstoqueMinimo(""); setEstoqueMaximo(""); setPreco("");
+    setNome(""); setQuantidadeEstoque(""); setEstoqueMinimo(""); setEstoqueMaximo(""); setPreco(""); setFornecedorId("");
   }
   async function excluir(id) {
     const consumosDoMaterial = consumosMaterial.filter(c => c.materialId === id);
@@ -5342,6 +5349,7 @@ function MateriaisCadastro({ materiais, setMateriais, consumosMaterial, setConsu
     setEstoqueMinimoEdicao(m.estoqueMinimo != null ? String(m.estoqueMinimo) : "");
     setEstoqueMaximoEdicao(m.estoqueMaximo != null ? String(m.estoqueMaximo) : "");
     setPrecoEdicao(m.preco != null ? String(m.preco) : "");
+    setFornecedorIdEdicao(m.fornecedorId || "");
   }
   async function salvarEdicao(id) {
     if (!nomeEdicao.trim()) return;
@@ -5350,6 +5358,7 @@ function MateriaisCadastro({ materiais, setMateriais, consumosMaterial, setConsu
       estoqueMinimo: estoqueMinimoEdicao ? Math.round(parseFloat(estoqueMinimoEdicao) * 1000) / 1000 : null,
       estoqueMaximo: estoqueMaximoEdicao ? Math.round(parseFloat(estoqueMaximoEdicao) * 1000) / 1000 : null,
       preco: precoEdicao ? Math.round(parseFloat(precoEdicao) * 100) / 100 : null,
+      fornecedorId: fornecedorIdEdicao || null, fornecedorNomeSnap: fornecedorIdEdicao ? nomeFornecedor(fornecedorIdEdicao) : null,
     } : m));
     setEditandoId(null);
   }
@@ -5391,6 +5400,12 @@ function MateriaisCadastro({ materiais, setMateriais, consumosMaterial, setConsu
             <input type="number" min="0" step="0.01" value={estoqueMaximo} onChange={e => setEstoqueMaximo(e.target.value)} placeholder="Ideal" style={inputStyle} />
           </Field>
         </div>
+        <Field label="Fornecedor (opcional)">
+          <Select value={fornecedorId} onChange={e => setFornecedorId(e.target.value)}>
+            <option value="">Sem fornecedor definido</option>
+            {[...(fornecedores || [])].sort((a, b) => a.nome.localeCompare(b.nome)).map(f => <option key={f.id} value={f.id}>{f.nome}</option>)}
+          </Select>
+        </Field>
         <PrimaryButton onClick={adicionar} disabled={!nome.trim()} style={{ width: "100%" }}><Plus size={16} /> Adicionar material</PrimaryButton>
       </Card>
 
@@ -5421,6 +5436,12 @@ function MateriaisCadastro({ materiais, setMateriais, consumosMaterial, setConsu
                       <input type="number" min="0" step="0.01" value={estoqueMaximoEdicao} onChange={e => setEstoqueMaximoEdicao(e.target.value)} style={inputStyle} />
                     </Field>
                   </div>
+                  <Field label="Fornecedor (opcional)">
+                    <Select value={fornecedorIdEdicao} onChange={e => setFornecedorIdEdicao(e.target.value)}>
+                      <option value="">Sem fornecedor definido</option>
+                      {[...(fornecedores || [])].sort((a, b) => a.nome.localeCompare(b.nome)).map(f => <option key={f.id} value={f.id}>{f.nome}</option>)}
+                    </Select>
+                  </Field>
                   <div style={{ display: "flex", gap: 8 }}>
                     <PrimaryButton onClick={() => salvarEdicao(m.id)} disabled={!nomeEdicao.trim()} style={{ flex: 1 }}>Salvar</PrimaryButton>
                     <button onClick={() => setEditandoId(null)} style={{ border: "1.5px solid #d9cfb7", background: "#fff", borderRadius: 9, padding: "0 14px", color: "#6b5d49", fontWeight: 700, cursor: "pointer" }}>Cancelar</button>
@@ -5436,6 +5457,7 @@ function MateriaisCadastro({ materiais, setMateriais, consumosMaterial, setConsu
                         {m.estoqueMinimo != null || m.estoqueMaximo != null ? ` (min ${m.estoqueMinimo ?? "—"} / máx ${m.estoqueMaximo ?? "—"})` : ""}
                       </div>
                       {fmtPreco(m.preco) && <div style={{ fontSize: 11.5, color: "#a3937a" }}>{fmtPreco(m.preco)}/{m.unidade}</div>}
+                      {m.fornecedorNomeSnap && <div style={{ fontSize: 11.5, color: "#a3937a" }}>Fornecedor: {m.fornecedorNomeSnap}</div>}
                     </div>
                     <div style={{ display: "flex" }}>
                       <IconButton onClick={() => abrirAjuste(m.id)} title="Ajustar estoque"><Plus size={15} /></IconButton>
