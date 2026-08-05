@@ -2934,7 +2934,7 @@ function ConsumoProdutos({ materiais, setMateriais, produtos, consumosMaterial, 
         id: `estoque:${mv.id}`, tipo: mv.tipo, materialId: mv.materialId,
         materialNomeSnap: mv.materialNomeSnap, materialUnidadeSnap: mv.materialUnidadeSnap,
         quantidade: mv.quantidade, saldoResultante: mv.saldoResultante, opNumero: null,
-        detalhe: `${base}${fornecedorTexto}`,
+        detalhe: `${base}${fornecedorTexto}`, precoUnitarioSnap: mv.precoUnitarioSnap ?? null,
         criadoEm: mv.criadoEm,
       };
     });
@@ -3057,6 +3057,7 @@ function ConsumoProdutos({ materiais, setMateriais, produtos, consumosMaterial, 
                     <div style={{ textAlign: "right" }}>
                       <div style={{ fontSize: 14, fontWeight: 800, color: mv.tipo === "entrada" ? "#1a7a4c" : "#b13232" }}>{mv.tipo === "entrada" ? "+" : "−"} {mv.quantidade} {mv.materialUnidadeSnap}</div>
                       {mv.saldoResultante != null && <div style={{ fontSize: 11, color: "#a3937a" }}>saldo: {mv.saldoResultante} {mv.materialUnidadeSnap}</div>}
+                      {mv.precoUnitarioSnap != null && <div style={{ fontSize: 11, color: "#a3937a" }}>{mv.precoUnitarioSnap.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}/{mv.materialUnidadeSnap}</div>}
                     </div>
                   </div>
                 </Card>
@@ -3093,31 +3094,40 @@ function EntradaMateriais({ materiais, setMateriais, onSalvarMovimentacaoEstoque
   // recebida) — pré-preenche com o fornecedor cadastrado no material,
   // mas pode ser trocado para essa entrada específica.
   const [fornecedorId, setFornecedorId] = useState("");
+  // Adicionado: preço unitário pago nesta entrada — quando informado,
+  // atualiza o preço de referência do material (mesmo comportamento já
+  // usado no fluxo de Compras), pra manter o custo de material dos
+  // relatórios em dia mesmo em entradas lançadas manualmente.
+  const [preco, setPreco] = useState("");
   const [confirmado, setConfirmado] = useState(false);
 
   const materialSelecionado = materiais.find(m => m.id === materialId);
   const qtdNum = parseFloat(quantidade || "0");
+  const precoNum = parseFloat(preco || "0");
   const podeLancar = materialId && qtdNum > 0 && (tipo === "entrada" || (materialSelecionado && materialSelecionado.quantidadeEstoque >= qtdNum));
 
   function selecionarMaterial(id) {
     setMaterialId(id);
     const m = materiais.find(mm => mm.id === id);
     setFornecedorId(m?.fornecedorId || "");
+    setPreco("");
   }
 
   async function lancar() {
     if (!podeLancar) return;
     const delta = tipo === "entrada" ? qtdNum : -qtdNum;
     const novoEstoque = Math.round((materialSelecionado.quantidadeEstoque + delta) * 1000) / 1000;
-    await setMateriais(materiais.map(m => m.id === materialId ? { ...m, quantidadeEstoque: novoEstoque } : m));
+    const novoPreco = tipo === "entrada" && precoNum > 0 ? Math.round(precoNum * 100) / 100 : materialSelecionado.preco;
+    await setMateriais(materiais.map(m => m.id === materialId ? { ...m, quantidadeEstoque: novoEstoque, preco: novoPreco } : m));
     const fornecedorNomeSnap = tipo === "entrada" && fornecedorId ? (fornecedores || []).find(f => f.id === fornecedorId)?.nome || null : null;
     await onSalvarMovimentacaoEstoque({
       id: uid(), materialId, materialNomeSnap: materialSelecionado.nome, materialUnidadeSnap: materialSelecionado.unidade,
       tipo, origem: "manual", quantidade: qtdNum, motivo: motivo.trim() || (tipo === "entrada" ? "Entrada manual" : "Saída manual"),
       fornecedorId: tipo === "entrada" ? (fornecedorId || null) : null, fornecedorNomeSnap,
+      precoUnitarioSnap: tipo === "entrada" && precoNum > 0 ? novoPreco : null,
       saldoResultante: novoEstoque, criadoEm: new Date().toISOString(),
     });
-    setMaterialId(""); setQuantidade(""); setMotivo(""); setTipo("entrada"); setFornecedorId("");
+    setMaterialId(""); setQuantidade(""); setMotivo(""); setTipo("entrada"); setFornecedorId(""); setPreco("");
     setConfirmado(true);
     setTimeout(() => setConfirmado(false), 2500);
   }
@@ -3159,6 +3169,16 @@ function EntradaMateriais({ materiais, setMateriais, onSalvarMovimentacaoEstoque
                 <div style={{ fontSize: 11.5, color: "#b13232", marginTop: 5 }}>Maior que o estoque atual ({materialSelecionado.quantidadeEstoque} {materialSelecionado.unidade}).</div>
               )}
             </Field>
+            {tipo === "entrada" && (
+              <Field label="Preço unitário pago (opcional)">
+                <input
+                  type="number" min="0" step="0.01" value={preco} onChange={e => setPreco(e.target.value)}
+                  placeholder={materialSelecionado?.preco != null ? `Atual: ${materialSelecionado.preco.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}` : "Ex.: 18.90"}
+                  style={inputStyle}
+                />
+                <div style={{ fontSize: 11, color: "#a3937a", marginTop: 5 }}>Se informado, atualiza o preço de referência deste material para as próximas compras e relatórios de custo.</div>
+              </Field>
+            )}
             <Field label="Motivo">
               <input value={motivo} onChange={e => setMotivo(e.target.value)} placeholder="Ex.: conferência de inventário, doação, perda" style={inputStyle} />
             </Field>
