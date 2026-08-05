@@ -741,6 +741,7 @@ export default function App() {
             movimentacoesMaterial={movimentacoesMaterial} movimentacoesEstoque={movimentacoesEstoque}
             materiais={materiais} solicitacoesCompra={solicitacoesCompra} cotacoesCompra={cotacoesCompra}
             ehAdministrador={ehAdministrador} ordensProducao={ordensProducao} consumosMaterial={consumosMaterial}
+            onImprimirGrade={setRelatorioGradeImpressao}
           />
         )}
         {tab === "cadastros" && perfilAtual.abas.includes("cadastros") && (
@@ -3178,7 +3179,11 @@ function ConsumoProdutos({ materiais, setMateriais, produtos, consumosMaterial, 
       )}
 
       {sub === "entrada" && (
-        <EntradaMateriais materiais={materiais} setMateriais={setMateriais} onSalvarMovimentacaoEstoque={onSalvarMovimentacaoEstoque} fornecedores={fornecedores} setFornecedores={setFornecedores} />
+        <EntradaMateriais
+          materiais={materiais} setMateriais={setMateriais} onSalvarMovimentacaoEstoque={onSalvarMovimentacaoEstoque}
+          fornecedores={fornecedores} setFornecedores={setFornecedores}
+          movimentacoesEstoque={movimentacoesEstoque} solicitacoesCompra={solicitacoesCompra}
+        />
       )}
 
       {sub === "movimentacoes" && (
@@ -3243,7 +3248,7 @@ function ConsumoProdutos({ materiais, setMateriais, produtos, consumosMaterial, 
 // fluxo de compras/produção — ex.: conferência de inventário, doação,
 // devolução, perda. Fica registrado no livro de movimentações com o
 // motivo informado.
-function EntradaMateriais({ materiais, setMateriais, onSalvarMovimentacaoEstoque, fornecedores, setFornecedores }) {
+function EntradaMateriais({ materiais, setMateriais, onSalvarMovimentacaoEstoque, fornecedores, setFornecedores, movimentacoesEstoque, solicitacoesCompra }) {
   const [materialId, setMaterialId] = useState("");
   const [tipo, setTipo] = useState("entrada");
   const [quantidade, setQuantidade] = useState("");
@@ -3268,7 +3273,43 @@ function EntradaMateriais({ materiais, setMateriais, onSalvarMovimentacaoEstoque
   const [novoFornecedorNome, setNovoFornecedorNome] = useState("");
   const [novoFornecedorContato, setNovoFornecedorContato] = useState("");
 
+  // Adicionado: pesquisa/filtro de materiais para achar rápido o que
+  // precisa de atenção antes de lançar uma entrada — por nome, por saldo
+  // abaixo do mínimo, por já ter solicitação de compra em aberto, ou por
+  // nunca ter tido uma compra registrada (sem histórico de preço).
+  const [buscaMaterial, setBuscaMaterial] = useState("");
+  const [filtroRapido, setFiltroRapido] = useState("todos");
+  const infoMateriais = useMemo(() => {
+    const map = new Map();
+    (materiais || []).forEach(m => {
+      const entradasComPreco = (movimentacoesEstoque || [])
+        .filter(mv => mv.materialId === m.id && mv.tipo === "entrada" && mv.precoUnitarioSnap != null)
+        .sort((a, b) => new Date(b.criadoEm) - new Date(a.criadoEm));
+      const pendentes = (solicitacoesCompra || []).filter(s => s.materialId === m.id && s.status !== "comprada" && s.status !== "cancelada");
+      map.set(m.id, {
+        ultimaCompra: entradasComPreco[0] || null,
+        pendentesCount: pendentes.length,
+        abaixoMinimo: m.estoqueMinimo != null && m.quantidadeEstoque <= m.estoqueMinimo,
+      });
+    });
+    return map;
+  }, [materiais, movimentacoesEstoque, solicitacoesCompra]);
+  const materiaisFiltrados = useMemo(() => {
+    const termo = buscaMaterial.trim().toLowerCase();
+    return [...materiais]
+      .filter(m => !termo || m.nome.toLowerCase().includes(termo))
+      .filter(m => {
+        const info = infoMateriais.get(m.id);
+        if (filtroRapido === "abaixo_minimo") return info?.abaixoMinimo;
+        if (filtroRapido === "compra_pendente") return info?.pendentesCount > 0;
+        if (filtroRapido === "sem_compra") return !info?.ultimaCompra;
+        return true;
+      })
+      .sort((a, b) => a.nome.localeCompare(b.nome));
+  }, [materiais, buscaMaterial, filtroRapido, infoMateriais]);
+
   const materialSelecionado = materiais.find(m => m.id === materialId);
+  const infoMaterialSelecionado = materialId ? infoMateriais.get(materialId) : null;
   const qtdNum = parseFloat(quantidade || "0");
   const precoNum = parseFloat(preco || "0");
   const podeLancar = materialId && qtdNum > 0 && (tipo === "entrada" || (materialSelecionado && materialSelecionado.quantidadeEstoque >= qtdNum));
@@ -3317,6 +3358,23 @@ function EntradaMateriais({ materiais, setMateriais, onSalvarMovimentacaoEstoque
 
   return (
     <div>
+      {materiais.length > 0 && (
+        <Card style={{ marginBottom: 16 }}>
+          <div style={{ fontSize: 15, fontWeight: 800, fontFamily: FONT_DISPLAY, marginBottom: 10, color: "#1c2b39" }}>Pesquisar material</div>
+          <Field label="Nome do material">
+            <input value={buscaMaterial} onChange={e => setBuscaMaterial(e.target.value)} placeholder="Digite para filtrar a lista abaixo…" style={inputStyle} />
+          </Field>
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+            <ToggleChip ativo={filtroRapido === "todos"} onClick={() => setFiltroRapido("todos")}>Todos</ToggleChip>
+            <ToggleChip ativo={filtroRapido === "abaixo_minimo"} colorAtivo="#b13232" onClick={() => setFiltroRapido("abaixo_minimo")}>Abaixo do mínimo</ToggleChip>
+            <ToggleChip ativo={filtroRapido === "compra_pendente"} colorAtivo="#b5820a" onClick={() => setFiltroRapido("compra_pendente")}>Compra pendente</ToggleChip>
+            <ToggleChip ativo={filtroRapido === "sem_compra"} onClick={() => setFiltroRapido("sem_compra")}>Sem compra registrada</ToggleChip>
+          </div>
+          <div style={{ fontSize: 11.5, color: "#a3937a", marginTop: 8 }}>
+            {materiaisFiltrados.length} de {materiais.length} material(is) — escolha um abaixo no campo "Material".
+          </div>
+        </Card>
+      )}
       <Card style={{ marginBottom: 16 }}>
         <div style={{ fontSize: 15, fontWeight: 800, fontFamily: FONT_DISPLAY, marginBottom: 12, color: "#1c2b39" }}>Entrada / saída manual de material</div>
         <div style={{ fontSize: 12.5, color: "#6b5d49", marginBottom: 12 }}>
@@ -3329,8 +3387,25 @@ function EntradaMateriais({ materiais, setMateriais, onSalvarMovimentacaoEstoque
             <Field label="Material">
               <Select value={materialId} onChange={e => selecionarMaterial(e.target.value)}>
                 <option value="">Selecione…</option>
-                {[...materiais].sort((a, b) => a.nome.localeCompare(b.nome)).map(m => <option key={m.id} value={m.id}>{m.nome} ({m.quantidadeEstoque} {m.unidade} em estoque)</option>)}
+                {materiaisFiltrados.map(m => <option key={m.id} value={m.id}>{m.nome} ({m.quantidadeEstoque} {m.unidade} em estoque)</option>)}
               </Select>
+              {materialId && infoMaterialSelecionado && (
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 8 }}>
+                  {infoMaterialSelecionado.abaixoMinimo && (
+                    <span style={{ fontSize: 10.5, fontWeight: 700, color: "#b13232", background: "#f8e6e6", padding: "3px 9px", borderRadius: 999 }}>Abaixo do mínimo</span>
+                  )}
+                  {infoMaterialSelecionado.pendentesCount > 0 && (
+                    <span style={{ fontSize: 10.5, fontWeight: 700, color: "#8a6510", background: "#fdf3e0", padding: "3px 9px", borderRadius: 999 }}>
+                      {infoMaterialSelecionado.pendentesCount} solicitação{infoMaterialSelecionado.pendentesCount !== 1 ? "ões" : ""} de compra em aberto
+                    </span>
+                  )}
+                  <span style={{ fontSize: 10.5, fontWeight: 700, color: "#6b5d49", background: "#f4efe2", padding: "3px 9px", borderRadius: 999 }}>
+                    {infoMaterialSelecionado.ultimaCompra
+                      ? `Última compra: ${infoMaterialSelecionado.ultimaCompra.precoUnitarioSnap.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })} em ${new Date(infoMaterialSelecionado.ultimaCompra.criadoEm).toLocaleDateString("pt-BR")}${infoMaterialSelecionado.ultimaCompra.fornecedorNomeSnap ? ` (${infoMaterialSelecionado.ultimaCompra.fornecedorNomeSnap})` : ""}`
+                      : "Sem compra registrada"}
+                  </span>
+                </div>
+              )}
               <button type="button" onClick={() => setNovoMaterialAberto(v => !v)} style={linkButtonStyle}>
                 {novoMaterialAberto ? "Cancelar" : "+ Cadastrar novo material"}
               </button>
@@ -3650,7 +3725,7 @@ function ComprasMateriais({ materiais, setMateriais, solicitacoesCompra, onSalva
 }
 
 // ---------- Relatórios ----------
-function Relatorios({ registros, produtos, etapas, colaboradores, setores, avaliacoes, onGerarRelatorio, onGerarRelatorioAbertos, movimentacoesMaterial, movimentacoesEstoque, materiais, solicitacoesCompra, cotacoesCompra, ehAdministrador, ordensProducao, consumosMaterial }) {
+function Relatorios({ registros, produtos, etapas, colaboradores, setores, avaliacoes, onGerarRelatorio, onGerarRelatorioAbertos, movimentacoesMaterial, movimentacoesEstoque, materiais, solicitacoesCompra, cotacoesCompra, ehAdministrador, ordensProducao, consumosMaterial, onImprimirGrade }) {
   // Corrigido: o padrão era "Diário" (só o dia de hoje), o que fazia os
   // relatórios parecerem quebrados/vazios quando a produção tinha sido
   // lançada em outro dia. O padrão agora é mensal, que é o recorte mais
@@ -3884,6 +3959,31 @@ function Relatorios({ registros, produtos, etapas, colaboradores, setores, avali
     })).sort((a, b) => b.deficit - a.deficit);
   }, [ordensProducao, consumosMaterial, materiais]);
   const materiaisComFalta = materiaisPendentes.filter(m => m.deficit > 0);
+
+  // Adicionado: relatório imprimível da lista de materiais pendentes —
+  // mesma tabela usada na tela, formatada para impressão/PDF, pra levar
+  // pro fornecedor ou pro setor de compras.
+  function imprimirMateriaisPendentes() {
+    onImprimirGrade({
+      titulo: "Materiais pendentes de OPs em aberto",
+      subtitulo: `${materiaisPendentes.length} material(is) · ${materiaisComFalta.length} com falta no estoque`,
+      geradoEm: new Date().toLocaleString("pt-BR"),
+      colunas: [
+        { key: "nome", label: "Material" },
+        { key: "necessario", label: "Necessário", align: "right" },
+        { key: "estoque", label: "Em estoque", align: "right" },
+        { key: "falta", label: "Falta", align: "right" },
+        { key: "ops", label: "OPs", align: "right" },
+      ],
+      linhas: materiaisPendentes.map(m => ({
+        nome: m.nome,
+        necessario: `${m.necessario} ${m.unidade}`,
+        estoque: `${m.estoque} ${m.unidade}`,
+        falta: m.deficit > 0 ? `${m.deficit} ${m.unidade}` : "—",
+        ops: m.opsCount,
+      })),
+    });
+  }
 
   // Adicionado: relatório específico de compras — todas as solicitações
   // com status, fornecedor vencedor (quando houver), valor negociado e
@@ -4400,8 +4500,15 @@ function Relatorios({ registros, produtos, etapas, colaboradores, setores, avali
             </div>
           </Card>
 
-          <div style={{ fontSize: 13, fontWeight: 700, color: "#6b5d49", margin: "4px 2px 8px" }}>
-            Materiais pendentes de OPs em aberto{materiaisComFalta.length > 0 && <span style={{ color: "#b13232" }}> · {materiaisComFalta.length} com falta no estoque</span>}
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", margin: "4px 2px 8px", gap: 8 }}>
+            <div style={{ fontSize: 13, fontWeight: 700, color: "#6b5d49" }}>
+              Materiais pendentes de OPs em aberto{materiaisComFalta.length > 0 && <span style={{ color: "#b13232" }}> · {materiaisComFalta.length} com falta no estoque</span>}
+            </div>
+            <button onClick={imprimirMateriaisPendentes} disabled={materiaisPendentes.length === 0} style={{
+              background: "transparent", border: "1px dashed " + (materiaisPendentes.length === 0 ? "#d9cfb7" : "#2f4a63"),
+              color: materiaisPendentes.length === 0 ? "#a3937a" : "#2f4a63", fontSize: 11.5, fontWeight: 700,
+              cursor: materiaisPendentes.length === 0 ? "not-allowed" : "pointer", padding: "4px 9px", borderRadius: "3px 9px 9px 3px", flexShrink: 0,
+            }}>Imprimir</button>
           </div>
           {materiaisPendentes.length === 0 ? (
             <div style={{ fontSize: 13.5, color: "#a3937a", padding: "8px 2px", marginBottom: 16 }}>Nenhuma OP em aberto com materiais vinculados no momento.</div>
@@ -5573,6 +5680,15 @@ function MateriaisCadastro({ materiais, setMateriais, consumosMaterial, setConsu
   const [ajusteValor, setAjusteValor] = useState("");
   const [ajusteTipo, setAjusteTipo] = useState("entrada");
   const nomeFornecedor = (id) => (fornecedores || []).find(f => f.id === id)?.nome || null;
+  // Adicionado: pesquisa por nome do material ou fornecedor — útil
+  // quando o cadastro cresce e fica difícil rolar a lista toda.
+  const [busca, setBusca] = useState("");
+  const materiaisFiltrados = useMemo(() => {
+    const termo = busca.trim().toLowerCase();
+    return [...materiais]
+      .filter(m => !termo || m.nome.toLowerCase().includes(termo) || (m.fornecedorNomeSnap || "").toLowerCase().includes(termo))
+      .sort((a, b) => a.nome.localeCompare(b.nome));
+  }, [materiais, busca]);
 
   async function adicionar() {
     if (!nome.trim()) return;
@@ -5666,8 +5782,18 @@ function MateriaisCadastro({ materiais, setMateriais, consumosMaterial, setConsu
         <PrimaryButton onClick={adicionar} disabled={!nome.trim()} style={{ width: "100%" }}><Plus size={16} /> Adicionar material</PrimaryButton>
       </Card>
 
+      {materiais.length > 0 && (
+        <Card style={{ marginBottom: 12, padding: 12 }}>
+          <Field label="Pesquisar material">
+            <input value={busca} onChange={e => setBusca(e.target.value)} placeholder="Nome do material ou fornecedor…" style={inputStyle} />
+          </Field>
+        </Card>
+      )}
+      {materiais.length > 0 && materiaisFiltrados.length === 0 && (
+        <div style={{ fontSize: 13.5, color: "#a3937a", padding: "8px 2px", marginBottom: 8 }}>Nenhum material encontrado para essa pesquisa.</div>
+      )}
       <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-        {[...materiais].sort((a, b) => a.nome.localeCompare(b.nome)).map(m => {
+        {materiaisFiltrados.map(m => {
           const editando = editandoId === m.id;
           const estoqueBaixo = m.estoqueMinimo != null && m.quantidadeEstoque <= m.estoqueMinimo;
           return (
