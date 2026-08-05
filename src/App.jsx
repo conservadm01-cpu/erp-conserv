@@ -2730,6 +2730,11 @@ function Avaliacao({ colaboradores, avaliacoes, onSalvarAvaliacao, onRemoverAval
   const [minutosAtraso, setMinutosAtraso] = useState("");
   const [comportamento, setComportamento] = useState("");
   const [descricao, setDescricao] = useState("");
+  // Adicionado: anexo de arquivo na avaliação (ex.: atestado médico,
+  // advertência assinada, foto de uma ocorrência) — mesma mecânica de
+  // anexo usada no chat e nos comentários de produção.
+  const [anexosAvaliacao, setAnexosAvaliacao] = useState([]);
+  const anexoAvaliacaoRef = useRef(null);
 
   const infoFalta = faltaInfo(tipoFalta);
   const qtdFaltaNum = parseFloat(qtdFalta || "0");
@@ -2738,6 +2743,23 @@ function Avaliacao({ colaboradores, avaliacoes, onSalvarAvaliacao, onRemoverAval
   const podeSalvar = colaboradorId && data && descricao.trim().length > 0
     && (!temFalta || qtdFaltaNum > 0)
     && (!temAtraso || minutosAtrasoNum > 0);
+
+  async function anexarNaAvaliacao(fileList) {
+    const arquivos = Array.from(fileList || []);
+    const novos = [];
+    for (const file of arquivos) {
+      if (file.size > 4.5 * 1024 * 1024) { alert(`"${file.name}" é maior que 4,5MB e não pode ser anexado.`); continue; }
+      const dataUrl = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+      });
+      novos.push({ id: uid(), nome: file.name, tipo: file.type, dataUrl });
+    }
+    if (novos.length) setAnexosAvaliacao(a => [...a, ...novos]);
+  }
+  function removerAnexoAvaliacao(id) { setAnexosAvaliacao(a => a.filter(x => x.id !== id)); }
 
   async function salvar() {
     if (!podeSalvar) return;
@@ -2749,10 +2771,11 @@ function Avaliacao({ colaboradores, avaliacoes, onSalvarAvaliacao, onRemoverAval
       pesoAtraso: temAtraso ? Math.max(1, Math.round(minutosAtraso / 15)) : 0,
       comportamento: comportamento || null,
       descricao: descricao.trim(),
+      anexos: anexosAvaliacao,
       criadoEm: new Date().toISOString(),
     };
     await onSalvarAvaliacao(registro);
-    setTemFalta(false); setQtdFalta(""); setTemAtraso(false); setMinutosAtraso(""); setComportamento(""); setDescricao("");
+    setTemFalta(false); setQtdFalta(""); setTemAtraso(false); setMinutosAtraso(""); setComportamento(""); setDescricao(""); setAnexosAvaliacao([]);
   }
   async function excluir(id) {
     if (!window.confirm("Excluir esta avaliação?")) return;
@@ -2817,6 +2840,31 @@ function Avaliacao({ colaboradores, avaliacoes, onSalvarAvaliacao, onRemoverAval
               <textarea value={descricao} onChange={e => setDescricao(e.target.value)} placeholder="Descreva o contexto da avaliação" rows={3} style={{ ...inputStyle, resize: "vertical", fontFamily: "inherit" }} />
             </Field>
 
+            <Field label="Anexo (opcional)">
+              {anexosAvaliacao.length > 0 && (
+                <div style={{ display: "flex", gap: 6, marginBottom: 8, flexWrap: "wrap" }}>
+                  {anexosAvaliacao.map(a => (
+                    <div key={a.id} style={{ position: "relative", border: "1px solid #e6ddc8", borderRadius: 6, overflow: "hidden", background: "#fff" }}>
+                      {a.tipo && a.tipo.startsWith("image/")
+                        ? <img src={a.dataUrl} alt={a.nome} style={{ width: 56, height: 56, objectFit: "cover", display: "block" }} />
+                        : <div style={{ width: 56, height: 56, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", color: "#a3937a", gap: 2 }}>
+                            <Paperclip size={15} />
+                            <span style={{ fontSize: 8, padding: "0 3px", textAlign: "center", overflow: "hidden", whiteSpace: "nowrap", textOverflow: "ellipsis", maxWidth: 52 }}>{a.nome}</span>
+                          </div>}
+                      <button onClick={() => removerAnexoAvaliacao(a.id)} style={{ position: "absolute", top: 2, right: 2, background: "rgba(255,255,255,0.92)", border: "none", borderRadius: 999, width: 17, height: 17, cursor: "pointer", color: "#b13232", display: "flex", alignItems: "center", justifyContent: "center" }}><X size={10} /></button>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <input ref={anexoAvaliacaoRef} type="file" multiple accept="image/*,video/*,.pdf,.doc,.docx,.xls,.xlsx" style={{ display: "none" }}
+                onChange={e => { anexarNaAvaliacao(e.target.files); e.target.value = ""; }} />
+              <button type="button" onClick={() => anexoAvaliacaoRef.current && anexoAvaliacaoRef.current.click()} style={{
+                fontSize: 12.5, border: "1px dashed #cdb98a", background: "#f4ecd8", borderRadius: 7, padding: "7px 11px",
+                cursor: "pointer", display: "flex", alignItems: "center", gap: 6, color: "#2f4a63", fontWeight: 700,
+              }}><Paperclip size={14} /> Anexar arquivo</button>
+              <div style={{ fontSize: 11.5, color: "#a3937a", marginTop: 5 }}>Ex.: atestado, advertência assinada, foto de uma ocorrência.</div>
+            </Field>
+
             <PrimaryButton onClick={salvar} disabled={!podeSalvar} style={{ width: "100%" }}><Plus size={16} /> Salvar avaliação</PrimaryButton>
           </>
         )}
@@ -2839,6 +2887,15 @@ function Avaliacao({ colaboradores, avaliacoes, onSalvarAvaliacao, onRemoverAval
                   )}
                 </div>
                 <div style={{ fontSize: 12, color: "#6b5d49", marginTop: 6 }}>{a.descricao}</div>
+                {(a.anexos || []).length > 0 && (
+                  <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap" }}>
+                    {a.anexos.map(anexo => (
+                      anexo.tipo && anexo.tipo.startsWith("image/")
+                        ? <a key={anexo.id} href={anexo.dataUrl} download={anexo.nome}><img src={anexo.dataUrl} alt={anexo.nome} style={{ width: 54, height: 54, objectFit: "cover", borderRadius: 6, border: "1px solid #e6ddc8", display: "block" }} /></a>
+                        : <a key={anexo.id} href={anexo.dataUrl} download={anexo.nome} style={{ fontSize: 11, color: "#2f4a63", border: "1px solid #e6ddc8", borderRadius: 6, padding: "4px 8px", textDecoration: "none", display: "inline-flex", alignItems: "center", gap: 4 }}><Paperclip size={11} /> {anexo.nome}</a>
+                    ))}
+                  </div>
+                )}
               </div>
               <IconButton onClick={() => excluir(a.id)} danger title="Excluir"><Trash2 size={15} /></IconButton>
             </div>
