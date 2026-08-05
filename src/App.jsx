@@ -2040,6 +2040,39 @@ function OrdensProducao({ ordensProducao, produtos, etapas, setores, vinculos, c
   const [quantidadeParaAdicionar, setQuantidadeParaAdicionar] = useState("");
   const [itensNovo, setItensNovo] = useState([]); // [{produtoId, quantidade}]
   const [expandidoId, setExpandidoId] = useState(null);
+  // Adicionado: o detalhe de uma OP em aberto (expandida) agora é
+  // dividido em 3 folhas — Atividades (cronograma dos departamentos),
+  // Materiais (o que precisa separar) e Arquivos (imagens/vídeos de
+  // referência) — em vez de mostrar tudo empilhado de uma vez.
+  const [abaDetalheOP, setAbaDetalheOP] = useState("atividades");
+  function alternarExpandidoOP(id) {
+    setExpandidoId(atual => (atual === id ? null : id));
+    setAbaDetalheOP("atividades");
+  }
+  // Adicionado: anexar arquivo numa OP já aberta (além do anexo feito na
+  // hora de criar) — usa um único input de arquivo compartilhado entre
+  // todas as OPs da lista, sabendo em qual OP anexar pelo id guardado
+  // em `anexandoOPId`.
+  const [anexandoOPId, setAnexandoOPId] = useState(null);
+  const anexoOPInputRef = useRef(null);
+  async function anexarArquivoOP(op, fileList) {
+    const arquivos = Array.from(fileList || []);
+    const novos = [];
+    for (const file of arquivos) {
+      if (file.size > 4.5 * 1024 * 1024) { alert(`"${file.name}" é maior que 4,5MB e não pode ser anexado.`); continue; }
+      const dataUrl = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+      });
+      novos.push({ id: uid(), nome: file.name, tipo: file.type, dataUrl });
+    }
+    if (novos.length) await onSalvarOrdem({ ...op, anexos: [...(op.anexos || []), ...novos] });
+  }
+  async function removerAnexoOP(op, anexoId) {
+    await onSalvarOrdem({ ...op, anexos: (op.anexos || []).filter(a => a.id !== anexoId) });
+  }
   const [iniciandoChave, setIniciandoChave] = useState(null);
   // Adicionado: imagem(ns) ou vídeo(s) de referência anexados antes de
   // abrir a OP (ex.: arte aprovada, foto de amostra, vídeo de instrução)
@@ -2460,6 +2493,15 @@ function OrdensProducao({ ordensProducao, produtos, etapas, setores, vinculos, c
         </Field>
       </Card>
 
+      <input
+        ref={anexoOPInputRef} type="file" multiple accept="image/*,video/*" style={{ display: "none" }}
+        onChange={e => {
+          const op = ordensProducao.find(o => o.id === anexandoOPId);
+          if (op) anexarArquivoOP(op, e.target.files);
+          e.target.value = "";
+        }}
+      />
+
       <div style={{ fontSize: 13, fontWeight: 700, color: "#6b5d49", margin: "4px 2px 8px" }}>Ordens em aberto</div>
       {abertas.length === 0 && <div style={{ fontSize: 13.5, color: "#a3937a", padding: "8px 2px", marginBottom: 16 }}>{buscaOP ? "Nenhuma ordem em aberto encontrada para essa pesquisa." : "Nenhuma ordem de produção em aberto."}</div>}
       <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 20 }}>
@@ -2472,7 +2514,7 @@ function OrdensProducao({ ordensProducao, produtos, etapas, setores, vinculos, c
           const materiaisOP = expandido ? materiaisDaOP(op) : [];
           return (
             <Card key={op.id} style={{ padding: 14 }}>
-              <div onClick={() => setExpandidoId(expandido ? null : op.id)} style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8, marginBottom: 8, cursor: "pointer" }}>
+              <div onClick={() => alternarExpandidoOP(op.id)} style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8, marginBottom: 8, cursor: "pointer" }}>
                 <div style={{ display: "flex", alignItems: "flex-start", gap: 6 }}>
                   {expandido ? <ChevronUp size={16} style={{ marginTop: 3, color: "#a3937a", flexShrink: 0 }} /> : <ChevronDown size={16} style={{ marginTop: 3, color: "#a3937a", flexShrink: 0 }} />}
                   <div>
@@ -2505,36 +2547,85 @@ function OrdensProducao({ ordensProducao, produtos, etapas, setores, vinculos, c
                 </span>
               </div>
 
-              {expandido && materiaisOP.length > 0 && (
-                <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px solid #efe8d8" }}>
-                  <div style={{ fontSize: 12.5, fontWeight: 700, color: "#1c2b39", marginBottom: 6 }}>Materiais necessários para esta OP</div>
-                  <div style={{ border: "1px solid #e6ddc8", borderRadius: 8, overflow: "hidden" }}>
-                    {materiaisOP.map((m, idx) => {
-                      const faltando = m.estoque != null && m.estoque < m.quantidade;
-                      return (
-                        <div key={m.id} style={{
-                          display: "flex", justifyContent: "space-between", alignItems: "center",
-                          padding: "6px 10px", fontSize: 12, color: "#2a2015",
-                          borderTop: idx > 0 ? "1px solid #f4efe2" : "none",
-                          background: faltando ? "#f8e6e6" : "transparent",
-                        }}>
-                          <span>{m.nome}</span>
-                          <span style={{ textAlign: "right" }}>
-                            <b>{m.quantidade} {m.unidade}</b>
-                            {m.estoque != null && (
-                              <span style={{ fontSize: 10.5, color: faltando ? "#b13232" : "#a3937a", marginLeft: 6 }}>
-                                {faltando ? `falta ${Math.round((m.quantidade - m.estoque) * 1000) / 1000} ${m.unidade}` : `estoque: ${m.estoque} ${m.unidade}`}
-                              </span>
-                            )}
-                          </span>
-                        </div>
-                      );
-                    })}
-                  </div>
+              {expandido && (
+                <div style={{ display: "flex", gap: 6, marginTop: 4, marginBottom: 4 }}>
+                  {[
+                    { key: "atividades", label: "Atividades" },
+                    { key: "materiais", label: `Materiais${materiaisOP.length ? ` (${materiaisOP.length})` : ""}` },
+                    { key: "arquivos", label: `Arquivos${(op.anexos || []).length ? ` (${op.anexos.length})` : ""}` },
+                  ].map(t => (
+                    <button key={t.key} onClick={(e) => { e.stopPropagation(); setAbaDetalheOP(t.key); }} style={{
+                      flex: 1, border: "1.5px solid " + (abaDetalheOP === t.key ? "#2f4a63" : "#d9cfb7"),
+                      background: abaDetalheOP === t.key ? "#2f4a63" : "#fff", color: abaDetalheOP === t.key ? "#fff" : "#6b5d49",
+                      borderRadius: 8, padding: "7px 4px", fontSize: 12, fontWeight: 700, cursor: "pointer",
+                    }}>{t.label}</button>
+                  ))}
                 </div>
               )}
 
-              {expandido && (
+              {expandido && abaDetalheOP === "materiais" && (
+                <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px solid #efe8d8" }}>
+                  {materiaisOP.length === 0 ? (
+                    <div style={{ fontSize: 12.5, color: "#a3937a" }}>Nenhum material vinculado aos produtos deste pedido.</div>
+                  ) : (
+                    <div style={{ border: "1px solid #e6ddc8", borderRadius: 8, overflow: "hidden" }}>
+                      {materiaisOP.map((m, idx) => {
+                        const faltando = m.estoque != null && m.estoque < m.quantidade;
+                        return (
+                          <div key={m.id} style={{
+                            display: "flex", justifyContent: "space-between", alignItems: "center",
+                            padding: "6px 10px", fontSize: 12, color: "#2a2015",
+                            borderTop: idx > 0 ? "1px solid #f4efe2" : "none",
+                            background: faltando ? "#f8e6e6" : "transparent",
+                          }}>
+                            <span>{m.nome}</span>
+                            <span style={{ textAlign: "right" }}>
+                              <b>{m.quantidade} {m.unidade}</b>
+                              {m.estoque != null && (
+                                <span style={{ fontSize: 10.5, color: faltando ? "#b13232" : "#a3937a", marginLeft: 6 }}>
+                                  {faltando ? `falta ${Math.round((m.quantidade - m.estoque) * 1000) / 1000} ${m.unidade}` : `estoque: ${m.estoque} ${m.unidade}`}
+                                </span>
+                              )}
+                            </span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {expandido && abaDetalheOP === "arquivos" && (
+                <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px solid #efe8d8" }}>
+                  {(op.anexos || []).length === 0 ? (
+                    <div style={{ fontSize: 12.5, color: "#a3937a", marginBottom: 10 }}>Nenhum arquivo anexado a este pedido ainda.</div>
+                  ) : (
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8, marginBottom: 10 }}>
+                      {op.anexos.map(a => (
+                        <div key={a.id} style={{ position: "relative", border: "1px solid #e6ddc8", borderRadius: 8, overflow: "hidden", background: "#fff" }}>
+                          {a.tipo && a.tipo.startsWith("image/") ? (
+                            <a href={a.dataUrl} download={a.nome}><img src={a.dataUrl} alt={a.nome} style={{ width: "100%", height: 80, objectFit: "cover", display: "block" }} /></a>
+                          ) : a.tipo && a.tipo.startsWith("video/") ? (
+                            <video src={a.dataUrl} controls style={{ width: "100%", height: 80, objectFit: "cover", display: "block", background: "#000" }} />
+                          ) : (
+                            <a href={a.dataUrl} download={a.nome} style={{ width: "100%", height: 80, display: "flex", alignItems: "center", justifyContent: "center", color: "#a3937a" }}><Paperclip size={22} /></a>
+                          )}
+                          <div style={{ fontSize: 9.5, color: "#6b5d49", padding: "3px 5px", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{a.nome}</div>
+                          <button onClick={(e) => { e.stopPropagation(); removerAnexoOP(op, a.id); }} style={{ position: "absolute", top: 3, right: 3, background: "rgba(255,255,255,0.9)", border: "none", borderRadius: 999, width: 20, height: 20, cursor: "pointer", color: "#b13232", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                            <X size={12} />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  <button type="button" onClick={(e) => { e.stopPropagation(); setAnexandoOPId(op.id); anexoOPInputRef.current && anexoOPInputRef.current.click(); }} style={{
+                    fontSize: 12.5, border: "1px dashed #cdb98a", background: "#f4ecd8", borderRadius: 7, padding: "7px 11px",
+                    cursor: "pointer", display: "flex", alignItems: "center", gap: 6, color: "#2f4a63", fontWeight: 700,
+                  }}><Paperclip size={14} /> Anexar imagem ou vídeo</button>
+                </div>
+              )}
+
+              {expandido && abaDetalheOP === "atividades" && (
               <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 10, paddingTop: 10, borderTop: "1px solid #efe8d8" }}>
                 {cronograma.map((passo, i) => {
                   const chave = `${op.id}:${i}`;
