@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef } from "react";
-import { Clock, Users, Package, BarChart3, Plus, Trash2, X, Play, Loader2, ClipboardList, Paperclip, Check, ChevronUp, ChevronDown, ListOrdered, Scissors, Printer, MessageCircle, Send, Pin } from "lucide-react";
+import { Clock, Users, Package, BarChart3, Plus, Trash2, X, Play, Loader2, ClipboardList, Paperclip, Check, ChevronUp, ChevronDown, ListOrdered, Scissors, Printer, MessageCircle, Send, Pin, Smartphone } from "lucide-react";
 
 // ---------- Identidade visual (tema de confecção) ----------
 // Fonte de destaque "Fraunces" (serifada, com entalhes que lembram costura)
@@ -838,6 +838,10 @@ function LoginGate({ colaboradores, onEntrar }) {
     window.__deferredInstallPrompt = null;
     setPodeInstalar(false);
   }
+  // Adicionado: no celular o atalho vai para a "tela inicial", não para
+  // uma "área de trabalho" — o rótulo e o ícone do botão se adaptam ao
+  // aparelho pra fazer sentido em cada um.
+  const noCelular = /android|iphone|ipad|ipod/i.test(navigator.userAgent || "");
   const instrucoesAtalho = (() => {
     const ua = navigator.userAgent || "";
     if (/iphone|ipad|ipod/i.test(ua)) return "No Safari, toque no ícone de compartilhar (□↑) e depois em \"Adicionar à Tela de Início\".";
@@ -886,7 +890,7 @@ function LoginGate({ colaboradores, onEntrar }) {
               background: "#f4ecd8", border: "1px dashed #cdb98a", borderRadius: 9, padding: "9px 12px",
               fontSize: 12.5, fontWeight: 700, color: "#6b5d49", cursor: "pointer",
             }}>
-              <Pin size={14} /> Fixar atalho na área de trabalho
+              {noCelular ? <Smartphone size={14} /> : <Pin size={14} />} {noCelular ? "Fixar atalho na tela inicial" : "Fixar atalho na área de trabalho"}
             </button>
             {mostrarInstrucoesAtalho && !podeInstalar && (
               <div style={{ fontSize: 11.5, color: "#a3937a", marginTop: 6, lineHeight: 1.4 }}>{instrucoesAtalho}</div>
