@@ -5093,6 +5093,14 @@ function RelatorioAbertosImpressao({ payload, onFechar }) {
 function RelatorioGradeImpressao({ payload, onFechar }) {
   useEffect(() => { document.title = payload.titulo; }, [payload]);
   function handleImprimir() { window.print(); }
+  // Adicionado: quando o payload tem materiais e/ou anexos além da
+  // tabela principal (caso da Ordem de Produção), o impresso sai em
+  // folhas separadas — uma folha por seção — em vez de tudo empilhado
+  // na mesma página. "Folha X de Y" ajuda a identificar cada uma depois
+  // de impressas e separadas.
+  const temMateriais = payload.materiais && payload.materiais.length > 0;
+  const temAnexos = payload.anexos && payload.anexos.length > 0;
+  const totalFolhas = 1 + (temMateriais ? 1 : 0) + (temAnexos ? 1 : 0);
 
   return (
     <div style={{ minHeight: "100vh", background: "#efe9db" }}>
@@ -5128,6 +5136,7 @@ function RelatorioGradeImpressao({ payload, onFechar }) {
             {payload.subtitulo && <div style={{ fontSize: 13, color: "#6b5d49" }}>{payload.subtitulo}</div>}
           </div>
           <div style={{ textAlign: "right", fontSize: 12, color: "#6b5d49" }}>
+            {totalFolhas > 1 && <div style={{ fontWeight: 700, color: "#2f4a63" }}>Folha 1 de {totalFolhas} · Atividades</div>}
             <div><b>Total:</b> {payload.linhas.length} linha{payload.linhas.length !== 1 ? "s" : ""}</div>
             <div>Emitido em {payload.geradoEm}</div>
           </div>
@@ -5157,8 +5166,19 @@ function RelatorioGradeImpressao({ payload, onFechar }) {
         )}
 
         {payload.materiais && payload.materiais.length > 0 && (
-          <div style={{ marginTop: 22 }}>
-            <div style={{ fontSize: 13.5, fontWeight: 700, color: "#1c2b39", marginBottom: 10, fontFamily: FONT_DISPLAY }}>Materiais necessários</div>
+          // Adicionado: começa numa folha nova ao imprimir — a OP agora
+          // sai impressa em folhas separadas (Atividades / Materiais /
+          // Arquivos), cada uma podendo ir pra uma pessoa diferente
+          // (produção, separação de materiais, referência visual).
+          <div style={{ marginTop: 22, pageBreakBefore: "always", breakBefore: "page" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+              <div>
+                <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 1.2, color: "#6b5d49", textTransform: "uppercase" }}>{payload.titulo}</div>
+                <div style={{ fontSize: 13.5, fontWeight: 700, color: "#1c2b39", marginTop: 2, fontFamily: FONT_DISPLAY }}>Materiais necessários</div>
+              </div>
+              <div style={{ fontSize: 12, fontWeight: 700, color: "#2f4a63" }}>Folha 2 de {totalFolhas}</div>
+            </div>
+            <div style={{ marginTop: 10 }} />
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
               <thead>
                 <tr style={{ background: "#f4efe2" }}>
@@ -5183,8 +5203,14 @@ function RelatorioGradeImpressao({ payload, onFechar }) {
         )}
 
         {payload.anexos && payload.anexos.length > 0 && (
-          <div style={{ marginTop: 22 }}>
-            <div style={{ fontSize: 13.5, fontWeight: 700, color: "#1c2b39", marginBottom: 10, fontFamily: FONT_DISPLAY }}>Anexos</div>
+          <div style={{ marginTop: 22, pageBreakBefore: "always", breakBefore: "page" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 10 }}>
+              <div>
+                <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 1.2, color: "#6b5d49", textTransform: "uppercase" }}>{payload.titulo}</div>
+                <div style={{ fontSize: 13.5, fontWeight: 700, color: "#1c2b39", marginTop: 2, fontFamily: FONT_DISPLAY }}>Arquivos anexados</div>
+              </div>
+              <div style={{ fontSize: 12, fontWeight: 700, color: "#2f4a63" }}>Folha {totalFolhas} de {totalFolhas}</div>
+            </div>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))", gap: 12 }}>
               {payload.anexos.map(a => (
                 <div key={a.id} style={{ border: "1px solid #e6ddc8", borderRadius: 8, overflow: "hidden", breakInside: "avoid" }}>
