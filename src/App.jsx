@@ -776,7 +776,7 @@ export default function App() {
         {[
           { key: "producao", label: "Produção", icon: Clock },
           { key: "avaliacao", label: "Avaliação", icon: Users },
-          { key: "consumo", label: "Consumo", icon: Package },
+          { key: "consumo", label: "Materiais", icon: Package },
           { key: "chat", label: "Chat", icon: MessageCircle },
           { key: "relatorios", label: "Relatórios", icon: BarChart3 },
           { key: "cadastros", label: "Cadastros", icon: ClipboardList },
@@ -1106,6 +1106,39 @@ function EmAberto({ abertos, produtos, etapas, setores, colaboradores, onSalvarR
   const temFiltroAtivo = filtroSetorId || filtroEtapaId || filtroColaboradorId;
   function limparFiltros() { setFiltroSetorId(""); setFiltroEtapaId(""); setFiltroColaboradorId(""); }
 
+  // Adicionado: agrupa os processos em aberto pela Ordem de Produção a
+  // que pertencem, com uma chave para minimizar/maximizar cada OP — útil
+  // quando uma ordem tem vários departamentos abertos ao mesmo tempo,
+  // pra recolher o que já foi conferido e focar só no que falta olhar.
+  const [opsColapsadas, setOpsColapsadas] = useState(() => new Set());
+  function alternarColapsoOP(id) {
+    setOpsColapsadas(atual => {
+      const novo = new Set(atual);
+      if (novo.has(id)) novo.delete(id); else novo.add(id);
+      return novo;
+    });
+  }
+  const gruposPorOP = useMemo(() => {
+    const mapa = new Map();
+    const semOP = [];
+    filtrados.forEach(r => {
+      if (!r.ordemProducaoId) { semOP.push(r); return; }
+      if (!mapa.has(r.ordemProducaoId)) {
+        const op = (ordensProducao || []).find(o => o.id === r.ordemProducaoId);
+        mapa.set(r.ordemProducaoId, {
+          ordemProducaoId: r.ordemProducaoId, numero: r.ordemProducaoNumero,
+          clienteNomeSnap: op?.clienteNomeSnap || null, itens: [],
+        });
+      }
+      mapa.get(r.ordemProducaoId).itens.push(r);
+    });
+    // filtrados já vem ordenado decrescente por hora — o primeiro item de
+    // cada grupo é o mais recente dela, então ordenar os grupos por esse
+    // item mantém a mesma convenção (mais recente primeiro).
+    const grupos = Array.from(mapa.values()).sort((a, b) => new Date(b.itens[0].inicio) - new Date(a.itens[0].inicio));
+    return { grupos, semOP };
+  }, [filtrados, ordensProducao]);
+
   async function cancelar(id) {
     if (!window.confirm("Cancelar este processo em aberto? Essa ação não pode ser desfeita.")) return;
     await onRemoverRegistro(id);
@@ -1133,6 +1166,155 @@ function EmAberto({ abertos, produtos, etapas, setores, colaboradores, onSalvarR
         inicio: new Date(r.inicio).toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }),
       })),
     });
+  }
+
+  // Adicionado: renderiza o card de um processo em aberto — extraído para
+  // função nomeada (em vez de inline no .map) porque agora é chamado
+  // tanto dentro de cada grupo por OP quanto para os itens sem OP.
+  function renderCardRegistro(r) {
+    const projecao = r.projecaoFimISO ? new Date(r.projecaoFimISO) : null;
+    const atrasado = projecao && new Date() > projecao;
+    const metaHora = r.tipoCalculoEtapa !== "lote" && r.tempoEstimadoBaseSeg ? Math.max(1, Math.floor(3600 / r.tempoEstimadoBaseSeg)) : null;
+    return (
+      <Card key={r.id} style={{ padding: 14, borderLeft: "4px solid #e0a72a" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8, marginBottom: 8 }}>
+          <div>
+            {r.ordemProducaoNumero != null && (
+              <div style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 10.5, fontWeight: 700, color: "#2f4a63", background: "#f4ecd8", padding: "2px 7px", borderRadius: 999, marginBottom: 4 }}>
+                <ListOrdered size={10} /> OP #{String(r.ordemProducaoNumero).padStart(3, "0")}
+              </div>
+            )}
+            <div style={{ fontWeight: 700, fontSize: 14, color: "#2a2015" }}>{nomeProduto(r)} · {nomeSetor(r)}</div>
+            <div style={{ fontSize: 12.5, color: "#6b5d49" }}>{nomeEtapa(r)} · {r.colaboradorIds.map(nomeColab).join(", ")}</div>
+            <div style={{ fontSize: 12, color: "#a3937a", marginTop: 3 }}>{r.quantidade} peças planejadas · início {new Date(r.inicio).toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}{r.equipamentoNomeSnap ? ` · ${r.equipamentoNomeSnap}` : ""}{metaHora ? ` · meta: ${metaHora} peças/h` : ""}</div>
+          </div>
+          <StatusDot cor="laranja" />
+        </div>
+        {projecao && (
+          <div style={{ fontSize: 12.5, color: atrasado ? "#b13232" : "#6b5d49", marginBottom: 10 }}>
+            Previsão de conclusão: <b>{projecao.toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}</b>{atrasado ? " — já passou do previsto" : ""}
+          </div>
+        )}
+        {(() => {
+          const mats = materiaisDoRegistro(r);
+          if (mats.length === 0) return null;
+          const separados = separadosDoRegistro(r);
+          const podeMarcar = !!r.ordemProducaoId && r.ordemEtapaIndex != null;
+          const totalSeparados = mats.filter(m => separados.includes(m.id)).length;
+          const tudoSeparado = totalSeparados === mats.length;
+          return (
+            <div style={{ marginBottom: 10, paddingTop: 8, borderTop: "1px dashed #d9cfb7" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 5 }}>
+                <span style={{ fontSize: 11, fontWeight: 700, color: "#6b5d49" }}>Materiais para {r.quantidade} peças</span>
+                {podeMarcar && (
+                  <span style={{
+                    fontSize: 10.5, fontWeight: 700, padding: "2px 8px 2px 7px", borderRadius: "3px 8px 8px 3px",
+                    color: tudoSeparado ? "#1a7a4c" : "#8a6510", background: tudoSeparado ? "#e6f4ec" : "#fdf3e0",
+                    border: `1px dashed ${tudoSeparado ? "#1a7a4c" : "#b5820a"}`,
+                  }}>{tudoSeparado ? "✓ tudo separado" : `${totalSeparados}/${mats.length} separados`}</span>
+                )}
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+                {mats.map(m => {
+                  const marcado = separados.includes(m.id);
+                  const faltaEstoque = m.estoque != null && m.estoque < m.quantidade;
+                  return (
+                    <label key={m.id} style={{
+                      display: "flex", alignItems: "center", gap: 8, cursor: podeMarcar ? "pointer" : "default",
+                      background: marcado ? "#e6f4ec" : faltaEstoque ? "#f8e6e6" : "#fff",
+                      border: `1px solid ${marcado ? "#bfe3cf" : faltaEstoque ? "#e8c4c4" : "#e6ddc8"}`,
+                      borderRadius: 7, padding: "6px 9px",
+                    }}>
+                      {podeMarcar && (
+                        <input type="checkbox" checked={marcado} onChange={() => alternarSeparado(r, m.id)} style={{ width: 16, height: 16, flexShrink: 0 }} />
+                      )}
+                      <span style={{ flex: 1, fontSize: 12, color: "#2a2015", textDecoration: marcado ? "line-through" : "none", opacity: marcado ? 0.65 : 1 }}>
+                        {m.nome}
+                        {faltaEstoque && !marcado && <span style={{ fontSize: 10.5, color: "#b13232", marginLeft: 6 }}>falta {Math.round((m.quantidade - m.estoque) * 1000) / 1000} {m.unidade}</span>}
+                      </span>
+                      <span style={{ fontSize: 12, fontWeight: 700, color: marcado ? "#1a7a4c" : "#2a2015" }}>{m.quantidade} {m.unidade}</span>
+                    </label>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })()}
+        <div style={{ display: "flex", gap: 8 }}>
+          <PrimaryButton onClick={() => setConcluindoId(concluindoId === r.id ? null : r.id)} style={{ flex: 1 }}>
+            <Check size={16} /> Concluir
+          </PrimaryButton>
+          <button onClick={() => abrirComentario(r.id)} title="Comentar / anexar" style={{
+            border: "1.5px solid #d9cfb7", background: comentandoId === r.id ? "#f4ecd8" : "#fff", borderRadius: 9,
+            padding: "0 12px", color: "#2f4a63", fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", gap: 5,
+          }}>
+            <MessageCircle size={15} />{(r.comentarios || []).length > 0 ? ` ${(r.comentarios || []).length}` : ""}
+          </button>
+          <IconButton onClick={() => cancelar(r.id)} danger title="Cancelar processo"><Trash2 size={16} /></IconButton>
+        </div>
+
+        {(r.comentarios || []).length > 0 && (
+          <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 6 }}>
+            {(r.comentarios || []).map(c => (
+              <div key={c.id} style={{ background: "#faf6ec", border: "1px solid #e6ddc8", borderRadius: 8, padding: "8px 10px" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
+                  <div style={{ flex: 1 }}>
+                    {c.texto && <div style={{ fontSize: 12.5, color: "#2a2015", whiteSpace: "pre-wrap" }}>{c.texto}</div>}
+                    <div style={{ fontSize: 10.5, color: "#a3937a", marginTop: 2 }}>
+                      {c.autor} · {new Date(c.criadoEm).toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}
+                    </div>
+                  </div>
+                  <IconButton onClick={() => removerComentario(r, c.id)} danger title="Excluir comentário"><X size={13} /></IconButton>
+                </div>
+                {(c.anexos || []).length > 0 && (
+                  <div style={{ display: "flex", gap: 6, marginTop: 6, flexWrap: "wrap" }}>
+                    {c.anexos.map(a => (
+                      a.tipo && a.tipo.startsWith("image/")
+                        ? <img key={a.id} src={a.dataUrl} alt={a.nome} style={{ width: 54, height: 54, objectFit: "cover", borderRadius: 6, border: "1px solid #e6ddc8" }} />
+                        : <a key={a.id} href={a.dataUrl} download={a.nome} style={{ fontSize: 11, color: "#2f4a63", border: "1px solid #e6ddc8", borderRadius: 6, padding: "4px 8px", textDecoration: "none", display: "inline-flex", alignItems: "center", gap: 4 }}><Paperclip size={11} /> {a.nome}</a>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+
+        {comentandoId === r.id && (
+          <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px solid #efe8d8" }}>
+            <Field label="Comentário / ocorrência">
+              <textarea value={textoComentario} onChange={e => setTextoComentario(e.target.value)} rows={2}
+                placeholder="Ex.: tecido do rolo 3 veio com falha, avisar o corte"
+                style={{ ...inputStyle, resize: "vertical", fontFamily: "inherit" }} />
+            </Field>
+            {anexosComentario.length > 0 && (
+              <div style={{ display: "flex", gap: 6, marginBottom: 8, flexWrap: "wrap" }}>
+                {anexosComentario.map(a => (
+                  <div key={a.id} style={{ position: "relative", border: "1px solid #e6ddc8", borderRadius: 6, overflow: "hidden" }}>
+                    {a.tipo && a.tipo.startsWith("image/")
+                      ? <img src={a.dataUrl} alt={a.nome} style={{ width: 54, height: 54, objectFit: "cover", display: "block" }} />
+                      : <div style={{ width: 54, height: 54, display: "flex", alignItems: "center", justifyContent: "center", color: "#a3937a" }}><Paperclip size={16} /></div>}
+                    <button onClick={() => setAnexosComentario(x => x.filter(y => y.id !== a.id))} style={{ position: "absolute", top: 2, right: 2, background: "rgba(255,255,255,0.9)", border: "none", borderRadius: 999, width: 17, height: 17, cursor: "pointer", color: "#b13232", display: "flex", alignItems: "center", justifyContent: "center" }}><X size={10} /></button>
+                  </div>
+                ))}
+              </div>
+            )}
+            <input ref={anexoComentarioRef} type="file" multiple accept="image/*,video/*,.pdf,.doc,.docx,.xls,.xlsx" style={{ display: "none" }}
+              onChange={e => { anexarNoComentario(e.target.files); e.target.value = ""; }} />
+            <div style={{ display: "flex", gap: 8 }}>
+              <button type="button" onClick={() => anexoComentarioRef.current && anexoComentarioRef.current.click()} style={{
+                fontSize: 12.5, border: "1px dashed #cdb98a", background: "#f4ecd8", borderRadius: 8, padding: "8px 11px",
+                cursor: "pointer", display: "flex", alignItems: "center", gap: 6, color: "#2f4a63", fontWeight: 700,
+              }}><Paperclip size={14} /> Anexar</button>
+              <PrimaryButton onClick={() => salvarComentario(r)} disabled={!textoComentario.trim() && anexosComentario.length === 0} style={{ flex: 1 }}>Salvar comentário</PrimaryButton>
+            </div>
+          </div>
+        )}
+        {concluindoId === r.id && (
+          <ConcluirForm registro={r} onSalvarRegistro={onSalvarRegistro} onFechar={() => setConcluindoId(null)} colaboradores={colaboradores} />
+        )}
+      </Card>
+    );
   }
 
   // Corrigido: os filtros de departamento/etapa/colaborador ficavam
@@ -1186,152 +1368,42 @@ function EmAberto({ abertos, produtos, etapas, setores, colaboradores, onSalvarR
           {abertos.length === 0 ? "Nenhum processo em aberto no momento." : "Nenhum processo em aberto corresponde a esse filtro."}
         </div>
       ) : (
-        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-          {filtrados.map(r => {
-            const projecao = r.projecaoFimISO ? new Date(r.projecaoFimISO) : null;
-            const atrasado = projecao && new Date() > projecao;
-            const metaHora = r.tipoCalculoEtapa !== "lote" && r.tempoEstimadoBaseSeg ? Math.max(1, Math.floor(3600 / r.tempoEstimadoBaseSeg)) : null;
+        <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+          {gruposPorOP.grupos.map(g => {
+            const colapsado = opsColapsadas.has(g.ordemProducaoId);
             return (
-              <Card key={r.id} style={{ padding: 14, borderLeft: "4px solid #e0a72a" }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8, marginBottom: 8 }}>
-                  <div>
-                    {r.ordemProducaoNumero != null && (
-                      <div style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 10.5, fontWeight: 700, color: "#2f4a63", background: "#f4ecd8", padding: "2px 7px", borderRadius: 999, marginBottom: 4 }}>
-                        <ListOrdered size={10} /> OP #{String(r.ordemProducaoNumero).padStart(3, "0")}
-                      </div>
-                    )}
-                    <div style={{ fontWeight: 700, fontSize: 14, color: "#2a2015" }}>{nomeProduto(r)} · {nomeSetor(r)}</div>
-                    <div style={{ fontSize: 12.5, color: "#6b5d49" }}>{nomeEtapa(r)} · {r.colaboradorIds.map(nomeColab).join(", ")}</div>
-                    <div style={{ fontSize: 12, color: "#a3937a", marginTop: 3 }}>{r.quantidade} peças planejadas · início {new Date(r.inicio).toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}{r.equipamentoNomeSnap ? ` · ${r.equipamentoNomeSnap}` : ""}{metaHora ? ` · meta: ${metaHora} peças/h` : ""}</div>
-                  </div>
-                  <StatusDot cor="laranja" />
-                </div>
-                {projecao && (
-                  <div style={{ fontSize: 12.5, color: atrasado ? "#b13232" : "#6b5d49", marginBottom: 10 }}>
-                    Previsão de conclusão: <b>{projecao.toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}</b>{atrasado ? " — já passou do previsto" : ""}
-                  </div>
-                )}
-                {(() => {
-                  const mats = materiaisDoRegistro(r);
-                  if (mats.length === 0) return null;
-                  const separados = separadosDoRegistro(r);
-                  const podeMarcar = !!r.ordemProducaoId && r.ordemEtapaIndex != null;
-                  const totalSeparados = mats.filter(m => separados.includes(m.id)).length;
-                  const tudoSeparado = totalSeparados === mats.length;
-                  return (
-                    <div style={{ marginBottom: 10, paddingTop: 8, borderTop: "1px dashed #d9cfb7" }}>
-                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 5 }}>
-                        <span style={{ fontSize: 11, fontWeight: 700, color: "#6b5d49" }}>Materiais para {r.quantidade} peças</span>
-                        {podeMarcar && (
-                          <span style={{
-                            fontSize: 10.5, fontWeight: 700, padding: "2px 8px 2px 7px", borderRadius: "3px 8px 8px 3px",
-                            color: tudoSeparado ? "#1a7a4c" : "#8a6510", background: tudoSeparado ? "#e6f4ec" : "#fdf3e0",
-                            border: `1px dashed ${tudoSeparado ? "#1a7a4c" : "#b5820a"}`,
-                          }}>{tudoSeparado ? "✓ tudo separado" : `${totalSeparados}/${mats.length} separados`}</span>
-                        )}
-                      </div>
-                      <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
-                        {mats.map(m => {
-                          const marcado = separados.includes(m.id);
-                          const faltaEstoque = m.estoque != null && m.estoque < m.quantidade;
-                          return (
-                            <label key={m.id} style={{
-                              display: "flex", alignItems: "center", gap: 8, cursor: podeMarcar ? "pointer" : "default",
-                              background: marcado ? "#e6f4ec" : faltaEstoque ? "#f8e6e6" : "#fff",
-                              border: `1px solid ${marcado ? "#bfe3cf" : faltaEstoque ? "#e8c4c4" : "#e6ddc8"}`,
-                              borderRadius: 7, padding: "6px 9px",
-                            }}>
-                              {podeMarcar && (
-                                <input type="checkbox" checked={marcado} onChange={() => alternarSeparado(r, m.id)} style={{ width: 16, height: 16, flexShrink: 0 }} />
-                              )}
-                              <span style={{ flex: 1, fontSize: 12, color: "#2a2015", textDecoration: marcado ? "line-through" : "none", opacity: marcado ? 0.65 : 1 }}>
-                                {m.nome}
-                                {faltaEstoque && !marcado && <span style={{ fontSize: 10.5, color: "#b13232", marginLeft: 6 }}>falta {Math.round((m.quantidade - m.estoque) * 1000) / 1000} {m.unidade}</span>}
-                              </span>
-                              <span style={{ fontSize: 12, fontWeight: 700, color: marcado ? "#1a7a4c" : "#2a2015" }}>{m.quantidade} {m.unidade}</span>
-                            </label>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  );
-                })()}
-                <div style={{ display: "flex", gap: 8 }}>
-                  <PrimaryButton onClick={() => setConcluindoId(concluindoId === r.id ? null : r.id)} style={{ flex: 1 }}>
-                    <Check size={16} /> Concluir
-                  </PrimaryButton>
-                  <button onClick={() => abrirComentario(r.id)} title="Comentar / anexar" style={{
-                    border: "1.5px solid #d9cfb7", background: comentandoId === r.id ? "#f4ecd8" : "#fff", borderRadius: 9,
-                    padding: "0 12px", color: "#2f4a63", fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", gap: 5,
-                  }}>
-                    <MessageCircle size={15} />{(r.comentarios || []).length > 0 ? ` ${(r.comentarios || []).length}` : ""}
-                  </button>
-                  <IconButton onClick={() => cancelar(r.id)} danger title="Cancelar processo"><Trash2 size={16} /></IconButton>
-                </div>
-
-                {(r.comentarios || []).length > 0 && (
-                  <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 6 }}>
-                    {(r.comentarios || []).map(c => (
-                      <div key={c.id} style={{ background: "#faf6ec", border: "1px solid #e6ddc8", borderRadius: 8, padding: "8px 10px" }}>
-                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
-                          <div style={{ flex: 1 }}>
-                            {c.texto && <div style={{ fontSize: 12.5, color: "#2a2015", whiteSpace: "pre-wrap" }}>{c.texto}</div>}
-                            <div style={{ fontSize: 10.5, color: "#a3937a", marginTop: 2 }}>
-                              {c.autor} · {new Date(c.criadoEm).toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}
-                            </div>
-                          </div>
-                          <IconButton onClick={() => removerComentario(r, c.id)} danger title="Excluir comentário"><X size={13} /></IconButton>
-                        </div>
-                        {(c.anexos || []).length > 0 && (
-                          <div style={{ display: "flex", gap: 6, marginTop: 6, flexWrap: "wrap" }}>
-                            {c.anexos.map(a => (
-                              a.tipo && a.tipo.startsWith("image/")
-                                ? <img key={a.id} src={a.dataUrl} alt={a.nome} style={{ width: 54, height: 54, objectFit: "cover", borderRadius: 6, border: "1px solid #e6ddc8" }} />
-                                : <a key={a.id} href={a.dataUrl} download={a.nome} style={{ fontSize: 11, color: "#2f4a63", border: "1px solid #e6ddc8", borderRadius: 6, padding: "4px 8px", textDecoration: "none", display: "inline-flex", alignItems: "center", gap: 4 }}><Paperclip size={11} /> {a.nome}</a>
-                            ))}
-                          </div>
-                        )}
-                      </div>
-                    ))}
+              <div key={g.ordemProducaoId}>
+                <button onClick={() => alternarColapsoOP(g.ordemProducaoId)} style={{
+                  width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8,
+                  background: "#f4ecd8", border: "1px solid #e6ddc8", borderRadius: 9, padding: "8px 12px",
+                  cursor: "pointer", marginBottom: colapsado ? 0 : 8,
+                }}>
+                  <span style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, fontWeight: 800, color: "#1c2b39" }}>
+                    {colapsado ? <ChevronDown size={15} /> : <ChevronUp size={15} />}
+                    OP #{String(g.numero).padStart(3, "0")} · {g.clienteNomeSnap || "Sem cliente"}
+                  </span>
+                  <span style={{ fontSize: 11, fontWeight: 700, color: "#6b5d49" }}>
+                    {g.itens.length} em aberto
+                  </span>
+                </button>
+                {!colapsado && (
+                  <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                    {g.itens.map(renderCardRegistro)}
                   </div>
                 )}
-
-                {comentandoId === r.id && (
-                  <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px solid #efe8d8" }}>
-                    <Field label="Comentário / ocorrência">
-                      <textarea value={textoComentario} onChange={e => setTextoComentario(e.target.value)} rows={2}
-                        placeholder="Ex.: tecido do rolo 3 veio com falha, avisar o corte"
-                        style={{ ...inputStyle, resize: "vertical", fontFamily: "inherit" }} />
-                    </Field>
-                    {anexosComentario.length > 0 && (
-                      <div style={{ display: "flex", gap: 6, marginBottom: 8, flexWrap: "wrap" }}>
-                        {anexosComentario.map(a => (
-                          <div key={a.id} style={{ position: "relative", border: "1px solid #e6ddc8", borderRadius: 6, overflow: "hidden" }}>
-                            {a.tipo && a.tipo.startsWith("image/")
-                              ? <img src={a.dataUrl} alt={a.nome} style={{ width: 54, height: 54, objectFit: "cover", display: "block" }} />
-                              : <div style={{ width: 54, height: 54, display: "flex", alignItems: "center", justifyContent: "center", color: "#a3937a" }}><Paperclip size={16} /></div>}
-                            <button onClick={() => setAnexosComentario(x => x.filter(y => y.id !== a.id))} style={{ position: "absolute", top: 2, right: 2, background: "rgba(255,255,255,0.9)", border: "none", borderRadius: 999, width: 17, height: 17, cursor: "pointer", color: "#b13232", display: "flex", alignItems: "center", justifyContent: "center" }}><X size={10} /></button>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                    <input ref={anexoComentarioRef} type="file" multiple accept="image/*,video/*,.pdf,.doc,.docx,.xls,.xlsx" style={{ display: "none" }}
-                      onChange={e => { anexarNoComentario(e.target.files); e.target.value = ""; }} />
-                    <div style={{ display: "flex", gap: 8 }}>
-                      <button type="button" onClick={() => anexoComentarioRef.current && anexoComentarioRef.current.click()} style={{
-                        fontSize: 12.5, border: "1px dashed #cdb98a", background: "#f4ecd8", borderRadius: 8, padding: "8px 11px",
-                        cursor: "pointer", display: "flex", alignItems: "center", gap: 6, color: "#2f4a63", fontWeight: 700,
-                      }}><Paperclip size={14} /> Anexar</button>
-                      <PrimaryButton onClick={() => salvarComentario(r)} disabled={!textoComentario.trim() && anexosComentario.length === 0} style={{ flex: 1 }}>Salvar comentário</PrimaryButton>
-                    </div>
-                  </div>
-                )}
-                {concluindoId === r.id && (
-                  <ConcluirForm registro={r} onSalvarRegistro={onSalvarRegistro} onFechar={() => setConcluindoId(null)} colaboradores={colaboradores} />
-                )}
-              </Card>
+              </div>
             );
           })}
+          {gruposPorOP.semOP.length > 0 && (
+            <div>
+              {gruposPorOP.grupos.length > 0 && (
+                <div style={{ fontSize: 12, fontWeight: 700, color: "#a3937a", margin: "0 2px 8px" }}>Sem ordem de produção vinculada</div>
+              )}
+              <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                {gruposPorOP.semOP.map(renderCardRegistro)}
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -2059,6 +2131,22 @@ function OrdensProducao({ ordensProducao, produtos, etapas, setores, vinculos, c
     }, 0);
   }, [itensNovo, vinculos, etapas]);
 
+  // Adicionado: tempo de produção já comprometido — soma o que falta
+  // (etapas ainda não concluídas) de TODAS as OPs em aberto no momento.
+  // Serve de referência de quanto a fábrica já tem na fila antes mesmo
+  // de somar o tempo deste novo pedido, pra dar uma previsão de entrega
+  // mais realista do que olhar só o tempo do pedido isoladamente.
+  const tempoJaComprometidoSeg = useMemo(() => {
+    return (ordensProducao || [])
+      .filter(o => o.status === "aberta")
+      .reduce((soma, o) => soma + (o.etapas || []).filter(p => !p.concluida).reduce((s, p) => s + (p.duracaoEstimadaSeg ?? duracaoEtapaOP(p, p.quantidade || 1)), 0), 0);
+  }, [ordensProducao]);
+  const tempoTotalComFilaSeg = tempoJaComprometidoSeg + tempoTotalPreview;
+  const previsaoEntregaComFila = tempoTotalPreview > 0 ? new Date(Date.now() + tempoTotalComFilaSeg * 1000) : null;
+  const previsaoDentroDoPrazo = previsaoEntregaComFila && dataEntregaNova
+    ? previsaoEntregaComFila <= new Date(dataEntregaNova + "T23:59:59")
+    : null;
+
   const podeAbrir = itensNovo.length > 0 && dataEntregaNova;
 
   async function abrirOP() {
@@ -2300,13 +2388,31 @@ function OrdensProducao({ ordensProducao, produtos, etapas, setores, vinculos, c
             {tempoTotalPreview > 0 && (
               <div style={{ background: "#f4ecd8", border: "1px solid #cfe3e0", borderRadius: 8, padding: "9px 12px", marginBottom: 14 }}>
                 <div style={{ fontSize: 12.5, color: "#1c2b39" }}>
-                  Tempo total de produção estimado: <b>{fmtSec(tempoTotalPreview)}</b> ({itensNovo.length} produto{itensNovo.length !== 1 ? "s" : ""})
+                  Tempo de produção deste pedido: <b>{fmtSec(tempoTotalPreview)}</b> ({itensNovo.length} produto{itensNovo.length !== 1 ? "s" : ""})
                 </div>
+                {tempoJaComprometidoSeg > 0 && (
+                  <div style={{ fontSize: 12.5, color: "#6b5d49", marginTop: 4 }}>
+                    + <b>{fmtSec(tempoJaComprometidoSeg)}</b> já comprometidos em outras OPs em aberto
+                  </div>
+                )}
+                {previsaoEntregaComFila && (
+                  <div style={{ fontSize: 12.5, color: "#1c2b39", marginTop: 4, paddingTop: 4, borderTop: "1px dashed #cdb98a" }}>
+                    Previsão de entrega considerando a fila atual: <b>{previsaoEntregaComFila.toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" })}</b>
+                  </div>
+                )}
               </div>
             )}
             <Field label="Data de entrega">
               <input type="date" value={dataEntregaNova} onChange={e => setDataEntregaNova(e.target.value)} style={inputStyle} />
               <div style={{ fontSize: 11.5, color: "#a3937a", marginTop: 5 }}>Prazo máximo — usada para classificar a OP como dentro ou fora do prazo.</div>
+              {previsaoDentroDoPrazo != null && (
+                <div style={{
+                  fontSize: 11.5, fontWeight: 700, marginTop: 6, display: "inline-block", padding: "3px 9px", borderRadius: 999,
+                  color: previsaoDentroDoPrazo ? "#1a7a4c" : "#b13232", background: previsaoDentroDoPrazo ? "#e6f4ec" : "#f8e6e6",
+                }}>
+                  {previsaoDentroDoPrazo ? "Prazo compatível com a fila atual" : "Fila atual pode atrasar esse prazo — considere uma data mais folgada"}
+                </div>
+              )}
             </Field>
 
             <Field label="Anexo de referência (imagem ou vídeo, opcional)">
