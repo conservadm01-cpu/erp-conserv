@@ -35,6 +35,20 @@ function IdentidadeVisualGlobal() {
 // ---------- Helpers ----------
 const uid = () => Math.random().toString(36).slice(2, 10);
 
+// Adicionado: ordena listas de registros dos relatórios do mais recente
+// para o mais antigo (hora decrescente); quando duas linhas têm a mesma
+// hora, desempata por etapa e depois por operador, para a ordem ficar
+// estável em vez de mudar a cada atualização da tela.
+function ordenarRegistrosRelatorio(regs, { hora, etapa, operador }) {
+  return [...regs].sort((a, b) => {
+    const diffHora = new Date(hora(b)) - new Date(hora(a));
+    if (diffHora !== 0) return diffHora;
+    const diffEtapa = (etapa(a) || "").localeCompare(etapa(b) || "");
+    if (diffEtapa !== 0) return diffEtapa;
+    return (operador(a) || "").localeCompare(operador(b) || "");
+  });
+}
+
 // Classificação: A = 95-100% (ou melhor que o previsto) | B = 80-94% | C = abaixo de 80%
 const CLASS_INFO = {
   A: { label: "A", desc: "95–100% da meta (ou melhor)", color: "#1a7a4c", bg: "#e6f4ec" },
@@ -720,7 +734,7 @@ export default function App() {
             avaliacoes={avaliacoes} onGerarRelatorio={setRelatorioImpressao} onGerarRelatorioAbertos={setRelatorioAbertosImpressao}
             movimentacoesMaterial={movimentacoesMaterial} movimentacoesEstoque={movimentacoesEstoque}
             materiais={materiais} solicitacoesCompra={solicitacoesCompra} cotacoesCompra={cotacoesCompra}
-            ehAdministrador={ehAdministrador}
+            ehAdministrador={ehAdministrador} ordensProducao={ordensProducao} consumosMaterial={consumosMaterial}
           />
         )}
         {tab === "cadastros" && perfilAtual.abas.includes("cadastros") && (
@@ -1029,10 +1043,13 @@ function EmAberto({ abertos, produtos, etapas, setores, colaboradores, onSalvarR
     return Array.from(map.entries()).sort((a, b) => a[1].localeCompare(b[1]));
   }, [abertos, colaboradores]);
 
-  const filtrados = abertos.filter(r =>
-    (!filtroSetorId || r.setorId === filtroSetorId)
-    && (!filtroEtapaId || r.etapaId === filtroEtapaId)
-    && (!filtroColaboradorId || (r.colaboradorIds || []).includes(filtroColaboradorId))
+  const filtrados = ordenarRegistrosRelatorio(
+    abertos.filter(r =>
+      (!filtroSetorId || r.setorId === filtroSetorId)
+      && (!filtroEtapaId || r.etapaId === filtroEtapaId)
+      && (!filtroColaboradorId || (r.colaboradorIds || []).includes(filtroColaboradorId))
+    ),
+    { hora: r => r.inicio, etapa: nomeEtapa, operador: r => (r.colaboradorIds || []).map(nomeColab).join(", ") }
   );
   const temFiltroAtivo = filtroSetorId || filtroEtapaId || filtroColaboradorId;
   function limparFiltros() { setFiltroSetorId(""); setFiltroEtapaId(""); setFiltroColaboradorId(""); }
@@ -3376,7 +3393,7 @@ function ComprasMateriais({ materiais, setMateriais, solicitacoesCompra, onSalva
 }
 
 // ---------- Relatórios ----------
-function Relatorios({ registros, produtos, etapas, colaboradores, setores, avaliacoes, onGerarRelatorio, onGerarRelatorioAbertos, movimentacoesMaterial, movimentacoesEstoque, materiais, solicitacoesCompra, cotacoesCompra, ehAdministrador }) {
+function Relatorios({ registros, produtos, etapas, colaboradores, setores, avaliacoes, onGerarRelatorio, onGerarRelatorioAbertos, movimentacoesMaterial, movimentacoesEstoque, materiais, solicitacoesCompra, cotacoesCompra, ehAdministrador, ordensProducao, consumosMaterial }) {
   // Corrigido: o padrão era "Diário" (só o dia de hoje), o que fazia os
   // relatórios parecerem quebrados/vazios quando a produção tinha sido
   // lançada em outro dia. O padrão agora é mensal, que é o recorte mais
@@ -3475,7 +3492,10 @@ function Relatorios({ registros, produtos, etapas, colaboradores, setores, avali
   // Por colaborador: histórico cronológico de produtos + destaque melhor/pior
   const historicoColaborador = useMemo(() => {
     if (!filtroColab) return null;
-    const regsColab = [...concluidosPeriodo].filter(r => equipeDe(r).includes(filtroColab)).sort((a, b) => new Date(a.fim) - new Date(b.fim));
+    const regsColab = ordenarRegistrosRelatorio(
+      concluidosPeriodo.filter(r => equipeDe(r).includes(filtroColab)),
+      { hora: r => r.fim, etapa: r => nomeEtapaL(r.etapaId, r), operador: r => equipeDe(r).map(nomeColab).join(", ") }
+    );
     const porProdutoMap = {};
     regsColab.forEach(r => {
       const chave = r.produtoId || `snap:${r.produtoNomeSnap || "—"}`;
@@ -3539,6 +3559,75 @@ function Relatorios({ registros, produtos, etapas, colaboradores, setores, avali
   const custoTotalGeral = Math.round((custoMaoDeObraTotal + custoMateriaisTotal) * 100) / 100;
   const fmtMoeda = (v) => (v || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 
+  // Adicionado: gasto por pedido (Ordem de Produção) — cruza a mão de
+  // obra de cada registro concluído com o consumo de material de cada
+  // baixa de estoque, ambos já vinculados à OP de origem, para saber o
+  // custo total (mão de obra + materiais) de cada pedido no período.
+  const nomeOP = (id) => (ordensProducao || []).find(o => o.id === id);
+  const custoPorOP = useMemo(() => {
+    const map = {};
+    const garantir = (opId, numero) => {
+      if (!map[opId]) {
+        const op = nomeOP(opId);
+        map[opId] = { opId, numero: numero ?? op?.numero, cliente: op?.clienteNomeSnap || "—", maoDeObra: 0, materiais: 0 };
+      }
+      return map[opId];
+    };
+    concluidosPeriodo.forEach(r => {
+      if (!r.ordemProducaoId) return;
+      const equipe = equipeDe(r);
+      if (equipe.length === 0) return;
+      const horasTotais = (r.tempoRealConsideradoSeg ?? r.tempoRealSeg ?? 0) / 3600;
+      const horasPorPessoa = horasTotais / equipe.length;
+      const custoRegistro = equipe.reduce((s, id) => {
+        const colab = colaboradores.find(c => c.id === id);
+        const valorHora = colab?.salarioMensal ? colab.salarioMensal / HORAS_MES_PADRAO : 0;
+        return s + horasPorPessoa * valorHora;
+      }, 0);
+      garantir(r.ordemProducaoId, r.ordemProducaoNumero).maoDeObra += custoRegistro;
+    });
+    (movimentacoesMaterial || []).forEach(mv => {
+      if (!mv.ordemProducaoId) return;
+      const d = new Date(mv.criadoEm);
+      if (d < start || d > end) return;
+      const custo = (mv.quantidadeConsumida || 0) * (mv.precoUnitarioSnap || 0);
+      garantir(mv.ordemProducaoId, mv.ordemProducaoNumero).materiais += custo;
+    });
+    return Object.values(map).map(v => ({
+      ...v,
+      maoDeObra: Math.round(v.maoDeObra * 100) / 100,
+      materiais: Math.round(v.materiais * 100) / 100,
+      total: Math.round((v.maoDeObra + v.materiais) * 100) / 100,
+    })).sort((a, b) => b.total - a.total);
+  }, [concluidosPeriodo, movimentacoesMaterial, colaboradores, ordensProducao, start, end]);
+
+  // Adicionado: consolida a necessidade de materiais de todas as OPs
+  // ainda em aberto (ficha de consumo de cada produto × quantidade na
+  // OP), comparando com o estoque atual — mostra o que falta comprar ou
+  // separar antes das ordens serem concluídas.
+  const materiaisPendentes = useMemo(() => {
+    const soma = {};
+    (ordensProducao || []).filter(op => op.status === "aberta").forEach(op => {
+      (op.itens || []).forEach(item => {
+        (consumosMaterial || []).filter(c => c.produtoId === item.produtoId).forEach(c => {
+          const material = (materiais || []).find(m => m.id === c.materialId);
+          if (!soma[c.materialId]) {
+            soma[c.materialId] = { materialId: c.materialId, nome: material?.nome || "—", unidade: material?.unidade || "", necessario: 0, estoque: material?.quantidadeEstoque ?? 0, ops: new Set() };
+          }
+          soma[c.materialId].necessario += (c.quantidadePorPeca || 0) * item.quantidade;
+          soma[c.materialId].ops.add(op.numero);
+        });
+      });
+    });
+    return Object.values(soma).map(m => ({
+      ...m,
+      necessario: Math.round(m.necessario * 1000) / 1000,
+      deficit: Math.round((m.necessario - m.estoque) * 1000) / 1000,
+      opsCount: m.ops.size,
+    })).sort((a, b) => b.deficit - a.deficit);
+  }, [ordensProducao, consumosMaterial, materiais]);
+  const materiaisComFalta = materiaisPendentes.filter(m => m.deficit > 0);
+
   // Adicionado: relatório específico de compras — todas as solicitações
   // com status, fornecedor vencedor (quando houver), valor negociado e
   // data de aprovação, mais os totais do período.
@@ -3596,7 +3685,12 @@ function Relatorios({ registros, produtos, etapas, colaboradores, setores, avali
         equipeDe(r).forEach(id => garantir(funcaoColab(id), funcaoColab(id)).itens.push(r));
       }
     });
-    return Object.values(map).sort((a, b) => b.itens.length - a.itens.length);
+    return Object.values(map)
+      .map(g => ({
+        ...g,
+        itens: ordenarRegistrosRelatorio(g.itens, { hora: r => r.inicio, etapa: r => nomeEtapaL(r.etapaId, r), operador: r => equipeDe(r).map(nomeColab).join(", ") }),
+      }))
+      .sort((a, b) => b.itens.length - a.itens.length);
   }, [abertosFiltrados, agrupamentoAbertos, colaboradores]);
 
   function montarRelatorioAbertosImpressao() {
@@ -3966,6 +4060,25 @@ function Relatorios({ registros, produtos, etapas, colaboradores, setores, avali
               ))}
             </div>
           )}
+
+          <div style={{ fontSize: 13, fontWeight: 700, color: "#6b5d49", margin: "4px 2px 8px" }}>Gasto por pedido (OP)</div>
+          {custoPorOP.length === 0 ? (
+            <div style={{ fontSize: 13.5, color: "#a3937a", padding: "8px 2px" }}>Nenhum gasto vinculado a pedidos neste período.</div>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              {custoPorOP.map(o => (
+                <Card key={o.opId} style={{ padding: 12 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <div>
+                      <div style={{ fontWeight: 700, fontSize: 14, color: "#2a2015" }}>OP #{String(o.numero ?? 0).padStart(3, "0")} · {o.cliente}</div>
+                      <div style={{ fontSize: 12, color: "#a3937a" }}>Mão de obra {fmtMoeda(o.maoDeObra)} · Materiais {fmtMoeda(o.materiais)}</div>
+                    </div>
+                    <div style={{ fontSize: 14, fontWeight: 800, color: "#1c2b39" }}>{fmtMoeda(o.total)}</div>
+                  </div>
+                </Card>
+              ))}
+            </div>
+          )}
         </>
       )}
       {aba === "compras" && ehAdministrador && (
@@ -4030,6 +4143,30 @@ function Relatorios({ registros, produtos, etapas, colaboradores, setores, avali
             </div>
           </Card>
 
+          <div style={{ fontSize: 13, fontWeight: 700, color: "#6b5d49", margin: "4px 2px 8px" }}>
+            Materiais pendentes de OPs em aberto{materiaisComFalta.length > 0 && <span style={{ color: "#b13232" }}> · {materiaisComFalta.length} com falta no estoque</span>}
+          </div>
+          {materiaisPendentes.length === 0 ? (
+            <div style={{ fontSize: 13.5, color: "#a3937a", padding: "8px 2px", marginBottom: 16 }}>Nenhuma OP em aberto com materiais vinculados no momento.</div>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 20 }}>
+              {materiaisPendentes.map(m => (
+                <Card key={m.materialId} style={{ padding: 12, borderLeft: m.deficit > 0 ? "4px solid #b13232" : "4px solid #2f4a63" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <div>
+                      <div style={{ fontWeight: 700, fontSize: 14, color: "#2a2015" }}>{m.nome}</div>
+                      <div style={{ fontSize: 12, color: "#a3937a" }}>necessário: {m.necessario} {m.unidade} · estoque: {m.estoque} {m.unidade} · {m.opsCount} OP{m.opsCount !== 1 ? "s" : ""}</div>
+                    </div>
+                    <div style={{ fontSize: 14, fontWeight: 800, color: m.deficit > 0 ? "#b13232" : "#1a7a4c" }}>
+                      {m.deficit > 0 ? `falta ${m.deficit} ${m.unidade}` : "ok"}
+                    </div>
+                  </div>
+                </Card>
+              ))}
+            </div>
+          )}
+
+          <div style={{ fontSize: 13, fontWeight: 700, color: "#6b5d49", margin: "4px 2px 8px" }}>Estoque e movimentação no período</div>
           {controleMateriais.length === 0 ? (
             <div style={{ fontSize: 13.5, color: "#a3937a", padding: "8px 2px" }}>Nenhum material cadastrado.</div>
           ) : (
