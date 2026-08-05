@@ -95,6 +95,27 @@ function duracaoEtapaOP(passo, quantidade) {
 const JORNADA_DIARIA_HORAS = 8;
 const JORNADA_MAXIMA_HORAS = 12;
 
+// Adicionado: jornada produtiva usada para projetar datas de entrega —
+// cada 9h de trabalho acumulado (por departamento) equivale a mais um
+// dia de calendário, em vez de tratar a produção como se rodasse 24h
+// por dia sem parar.
+const HORAS_PRODUTIVAS_DIA = 9;
+
+// Adicionado: projeta a data/hora em que um total de segundos de
+// trabalho fica pronto, considerando a jornada produtiva por dia a
+// partir de uma data de início — cada bloco cheio de 9h empurra a
+// previsão em mais um dia de calendário (mesmo horário), e o restante
+// (menos de 9h) soma direto em cima disso.
+function projetarDataUtil(segundosTrabalho, dataInicio) {
+  const segPorDia = HORAS_PRODUTIVAS_DIA * 3600;
+  const seg = Math.max(0, segundosTrabalho);
+  const dias = Math.floor(seg / segPorDia);
+  const restoSeg = seg % segPorDia;
+  const data = new Date(dataInicio);
+  data.setDate(data.getDate() + dias);
+  return new Date(data.getTime() + restoSeg * 1000);
+}
+
 // Adicionado: estima quantas horas um registro (aberto ou concluído)
 // ocupa do dia do colaborador — usa o tempo já apurado quando a etapa
 // foi concluída, ou a meta dimensionada (por peça ou por lote) enquanto
@@ -108,25 +129,46 @@ function duracaoRegistroSeg(r) {
 }
 
 // Adicionado: monta o cronograma planejado da OP (início/fim previstos de
-// cada etapa, em sequência, a partir da abertura, incluindo etapas de
-// todos os produtos da OP), usado para exibir o dimensionamento total
-// assim que a OP é criada.
+// cada etapa a partir da abertura, incluindo etapas de todos os produtos
+// da OP), usado para exibir o dimensionamento total assim que a OP é
+// criada. Cada departamento (setor) tem seu próprio cursor de tempo —
+// Corte e Silk, por exemplo, não disputam a mesma linha do tempo, já que
+// rodam com equipes diferentes em paralelo; só as etapas de um MESMO
+// departamento se encadeiam uma depois da outra. Dentro de cada
+// departamento, o tempo avança à razão de uma jornada produtiva de 9h
+// por dia (não 24h corridas).
 function cronogramaEstaticoOP(op) {
-  let cursor = new Date(op.criadaEm);
+  const cursoresPorSetor = new Map();
   return (op.etapas || []).map(passo => {
     const duracaoSeg = passo.duracaoEstimadaSeg ?? duracaoEtapaOP(passo, passo.quantidade || 1);
-    const inicioPlanejado = new Date(cursor);
-    const fimPlanejado = new Date(cursor.getTime() + duracaoSeg * 1000);
-    cursor = fimPlanejado;
+    const chaveSetor = passo.setorId || passo.setorNomeSnap || "—";
+    const inicioPlanejado = cursoresPorSetor.get(chaveSetor) || new Date(op.criadaEm);
+    const fimPlanejado = projetarDataUtil(duracaoSeg, inicioPlanejado);
+    cursoresPorSetor.set(chaveSetor, fimPlanejado);
     return { ...passo, duracaoEstimadaSeg: duracaoSeg, inicioPlanejado, fimPlanejado };
   });
 }
 
+// Adicionado: soma, por departamento (setor), o tempo estimado das
+// etapas ainda não concluídas de uma OP — base para projetar o prazo
+// considerando que cada departamento tem sua própria fila.
+function segundosRestantesPorSetor(etapas) {
+  const mapa = new Map();
+  (etapas || []).filter(p => !p.concluida).forEach(p => {
+    const chave = p.setorId || p.setorNomeSnap || "—";
+    const atual = mapa.get(chave) || 0;
+    mapa.set(chave, atual + (p.duracaoEstimadaSeg ?? duracaoEtapaOP(p, p.quantidade || 1)));
+  });
+  return mapa;
+}
+
 // Adicionado: classifica o andamento da OP frente à data de entrega —
-// para OPs em aberto, projeta a conclusão somando o tempo estimado das
-// etapas ainda não concluídas (em qualquer departamento, de qualquer
-// produto da OP) a partir de agora; para OPs concluídas, compara a data
-// real de conclusão com a data de entrega.
+// para OPs em aberto, projeta a conclusão por departamento (etapas
+// ainda não concluídas daquele setor, a 9h produtivas por dia a partir
+// de agora) e usa o departamento mais carregado (o gargalo) como
+// previsão da OP inteira — departamentos diferentes rodam em paralelo,
+// então a OP só termina quando o mais lento deles terminar; para OPs
+// concluídas, compara a data real de conclusão com a data de entrega.
 function avaliarPrazoOP(op) {
   if (!op.dataEntrega) return null;
   const entrega = new Date(op.dataEntrega + "T23:59:59");
@@ -137,8 +179,12 @@ function avaliarPrazoOP(op) {
       ? { label: "Entregue no prazo", color: "#1a7a4c", bg: "#e6f4ec" }
       : { label: "Entregue com atraso", color: "#b13232", bg: "#f8e6e6" };
   }
-  const restanteSeg = (op.etapas || []).filter(p => !p.concluida).reduce((s, p) => s + (p.duracaoEstimadaSeg ?? duracaoEtapaOP(p, p.quantidade || 1)), 0);
-  const previsao = new Date(Date.now() + restanteSeg * 1000);
+  const agora = new Date();
+  let previsao = agora;
+  segundosRestantesPorSetor(op.etapas).forEach(segundos => {
+    const fimSetor = projetarDataUtil(segundos, agora);
+    if (fimSetor > previsao) previsao = fimSetor;
+  });
   return previsao <= entrega
     ? { label: "Dentro do prazo", color: "#1a7a4c", bg: "#e6f4ec", previsao }
     : { label: "Fora do prazo", color: "#b13232", bg: "#f8e6e6", previsao };
@@ -2165,18 +2211,44 @@ function OrdensProducao({ ordensProducao, produtos, etapas, setores, vinculos, c
     }, 0);
   }, [itensNovo, vinculos, etapas]);
 
-  // Adicionado: tempo de produção já comprometido — soma o que falta
-  // (etapas ainda não concluídas) de TODAS as OPs em aberto no momento.
-  // Serve de referência de quanto a fábrica já tem na fila antes mesmo
-  // de somar o tempo deste novo pedido, pra dar uma previsão de entrega
-  // mais realista do que olhar só o tempo do pedido isoladamente.
-  const tempoJaComprometidoSeg = useMemo(() => {
-    return (ordensProducao || [])
-      .filter(o => o.status === "aberta")
-      .reduce((soma, o) => soma + (o.etapas || []).filter(p => !p.concluida).reduce((s, p) => s + (p.duracaoEstimadaSeg ?? duracaoEtapaOP(p, p.quantidade || 1)), 0), 0);
-  }, [ordensProducao]);
-  const tempoTotalComFilaSeg = tempoJaComprometidoSeg + tempoTotalPreview;
-  const previsaoEntregaComFila = tempoTotalPreview > 0 ? new Date(Date.now() + tempoTotalComFilaSeg * 1000) : null;
+  // Adicionado: tempo de produção já comprometido, separado por
+  // departamento (Corte, Silk, Preparação, Costura...). Cada departamento
+  // tem sua própria equipe — a fila da Silk não atrasa o Corte — então
+  // somar tudo junto superestimaria o prazo. Em vez disso: para cada
+  // departamento que este pedido novo vai usar, soma o que já está
+  // comprometido nas demais OPs em aberto + o que este pedido também
+  // vai exigir, e projeta a data considerando {HORAS_PRODUTIVAS_DIA}h de
+  // produção por dia. A entrega real do pedido é definida pelo
+  // departamento mais carregado (o gargalo).
+  const previsaoPorDepartamento = useMemo(() => {
+    const mapa = new Map(); // chave do setor -> { nome, comprometidoSeg, novoSeg }
+    function registrar(setorId, setorNome, campo, segundos) {
+      if (!segundos) return;
+      const chave = setorId || setorNome || "—";
+      if (!mapa.has(chave)) mapa.set(chave, { nome: setorNome || "—", comprometidoSeg: 0, novoSeg: 0 });
+      mapa.get(chave)[campo] += segundos;
+    }
+    (ordensProducao || []).filter(o => o.status === "aberta").forEach(o => {
+      (o.etapas || []).filter(p => !p.concluida).forEach(p => {
+        registrar(p.setorId, p.setorNomeSnap, "comprometidoSeg", p.duracaoEstimadaSeg ?? duracaoEtapaOP(p, p.quantidade || 1));
+      });
+    });
+    itensNovo.forEach(item => {
+      vinculos.filter(v => v.produtoId === item.produtoId).forEach(v => {
+        const etapa = etapas.find(e => e.id === v.etapaId);
+        const tipoCalculo = etapa?.tipoCalculo || "peca";
+        const setor = setores.find(s => s.id === etapa?.setorId);
+        const segundos = tipoCalculo === "lote" ? v.tempoEstimadoSeg : v.tempoEstimadoSeg * item.quantidade;
+        registrar(etapa?.setorId, setor?.nome, "novoSeg", segundos);
+      });
+    });
+    const agora = new Date();
+    return Array.from(mapa.values())
+      .filter(d => d.novoSeg > 0)
+      .map(d => ({ ...d, totalSeg: d.comprometidoSeg + d.novoSeg, previsao: projetarDataUtil(d.comprometidoSeg + d.novoSeg, agora) }))
+      .sort((a, b) => b.previsao - a.previsao);
+  }, [ordensProducao, itensNovo, vinculos, etapas, setores]);
+  const previsaoEntregaComFila = previsaoPorDepartamento[0]?.previsao || null;
   const previsaoDentroDoPrazo = previsaoEntregaComFila && dataEntregaNova
     ? previsaoEntregaComFila <= new Date(dataEntregaNova + "T23:59:59")
     : null;
@@ -2424,14 +2496,27 @@ function OrdensProducao({ ordensProducao, produtos, etapas, setores, vinculos, c
                 <div style={{ fontSize: 12.5, color: "#1c2b39" }}>
                   Tempo de produção deste pedido: <b>{fmtSec(tempoTotalPreview)}</b> ({itensNovo.length} produto{itensNovo.length !== 1 ? "s" : ""})
                 </div>
-                {tempoJaComprometidoSeg > 0 && (
-                  <div style={{ fontSize: 12.5, color: "#6b5d49", marginTop: 4 }}>
-                    + <b>{fmtSec(tempoJaComprometidoSeg)}</b> já comprometidos em outras OPs em aberto
+                {previsaoPorDepartamento.length > 0 && (
+                  <div style={{ marginTop: 8, paddingTop: 8, borderTop: "1px dashed #cdb98a" }}>
+                    <div style={{ fontSize: 11, fontWeight: 700, color: "#6b5d49", marginBottom: 4, textTransform: "uppercase", letterSpacing: 0.4 }}>
+                      Por departamento · {HORAS_PRODUTIVAS_DIA}h de produção por dia
+                    </div>
+                    <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                      {previsaoPorDepartamento.map(d => (
+                        <div key={d.nome} style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8, fontSize: 12, color: "#2a2015" }}>
+                          <span>
+                            {d.nome}
+                            {d.comprometidoSeg > 0 && <span style={{ color: "#a3937a" }}> ({fmtSec(d.comprometidoSeg)} já na fila + {fmtSec(d.novoSeg)} deste pedido)</span>}
+                          </span>
+                          <b style={{ whiteSpace: "nowrap" }}>{d.previsao.toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}</b>
+                        </div>
+                      ))}
+                    </div>
                   </div>
                 )}
                 {previsaoEntregaComFila && (
-                  <div style={{ fontSize: 12.5, color: "#1c2b39", marginTop: 4, paddingTop: 4, borderTop: "1px dashed #cdb98a" }}>
-                    Previsão de entrega considerando a fila atual: <b>{previsaoEntregaComFila.toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" })}</b>
+                  <div style={{ fontSize: 12.5, color: "#1c2b39", marginTop: 8, paddingTop: 8, borderTop: "1px dashed #cdb98a" }}>
+                    Previsão de entrega (departamento mais carregado): <b>{previsaoEntregaComFila.toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" })}</b>
                   </div>
                 )}
               </div>
