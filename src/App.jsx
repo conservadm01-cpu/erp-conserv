@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef } from "react";
-import { Clock, Users, Package, BarChart3, Plus, Trash2, X, Play, Loader2, ClipboardList, Paperclip, Check, ChevronUp, ChevronDown, ListOrdered, Scissors, Printer, MessageCircle, Send } from "lucide-react";
+import { Clock, Users, Package, BarChart3, Plus, Trash2, X, Play, Loader2, ClipboardList, Paperclip, Check, ChevronUp, ChevronDown, ListOrdered, Scissors, Printer, MessageCircle, Send, Pin } from "lucide-react";
 
 // ---------- Identidade visual (tema de confecção) ----------
 // Fonte de destaque "Fraunces" (serifada, com entalhes que lembram costura)
@@ -817,6 +817,33 @@ function LoginGate({ colaboradores, onEntrar }) {
   const [perfilLivre, setPerfilLivre] = useState("administrador");
   const [senhaDigitada, setSenhaDigitada] = useState("");
   const [erroSenha, setErroSenha] = useState(false);
+  // Adicionado: opção de fixar um atalho do sistema na área de trabalho
+  // (ou tela inicial, no celular) direto pela tela de login, antes de
+  // escolher usuário/senha. Quando o navegador suporta a instalação
+  // automática (Chrome/Edge/Android), um clique já resolve; nos demais
+  // (Safari/iOS, Firefox), mostramos o passo a passo manual.
+  const [podeInstalar, setPodeInstalar] = useState(!!window.__deferredInstallPrompt);
+  const [jaInstalado] = useState(() => window.matchMedia?.("(display-mode: standalone)").matches || window.navigator.standalone === true);
+  const [mostrarInstrucoesAtalho, setMostrarInstrucoesAtalho] = useState(false);
+  useEffect(() => {
+    function atualizar() { setPodeInstalar(!!window.__deferredInstallPrompt); }
+    window.addEventListener("pwa-install-available", atualizar);
+    return () => window.removeEventListener("pwa-install-available", atualizar);
+  }, []);
+  async function fixarAtalho() {
+    const evento = window.__deferredInstallPrompt;
+    if (!evento) { setMostrarInstrucoesAtalho(v => !v); return; }
+    evento.prompt();
+    await evento.userChoice;
+    window.__deferredInstallPrompt = null;
+    setPodeInstalar(false);
+  }
+  const instrucoesAtalho = (() => {
+    const ua = navigator.userAgent || "";
+    if (/iphone|ipad|ipod/i.test(ua)) return "No Safari, toque no ícone de compartilhar (□↑) e depois em \"Adicionar à Tela de Início\".";
+    if (/android/i.test(ua)) return "Toque no menu (⋮) do navegador e depois em \"Adicionar à tela inicial\" ou \"Instalar app\".";
+    return "Clique no ícone de instalação (⊕) na barra de endereço do navegador, ou abra o menu (⋮) → \"Instalar Controle de Produção\".";
+  })();
   const usandoNomeLivre = !colaboradorId;
   const colaboradorSelecionado = colaboradorId ? colaboradores.find(x => x.id === colaboradorId) : null;
   const precisaSenha = !!(colaboradorSelecionado && colaboradorSelecionado.senha);
@@ -851,6 +878,21 @@ function LoginGate({ colaboradores, onEntrar }) {
         </div>
         <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 1.2, color: "#6b5d49", textTransform: "uppercase" }}>Controle de Produção</div>
         <div style={{ fontSize: 19, fontWeight: 700, color: "#1c2b39", marginTop: 2, marginBottom: 16, fontFamily: FONT_DISPLAY }}>Quem está usando o sistema agora?</div>
+
+        {!jaInstalado && (
+          <div style={{ marginBottom: 16 }}>
+            <button type="button" onClick={fixarAtalho} style={{
+              width: "100%", display: "flex", alignItems: "center", justifyContent: "center", gap: 7,
+              background: "#f4ecd8", border: "1px dashed #cdb98a", borderRadius: 9, padding: "9px 12px",
+              fontSize: 12.5, fontWeight: 700, color: "#6b5d49", cursor: "pointer",
+            }}>
+              <Pin size={14} /> Fixar atalho na área de trabalho
+            </button>
+            {mostrarInstrucoesAtalho && !podeInstalar && (
+              <div style={{ fontSize: 11.5, color: "#a3937a", marginTop: 6, lineHeight: 1.4 }}>{instrucoesAtalho}</div>
+            )}
+          </div>
+        )}
 
         {colaboradores.length > 0 && (
           <Field label="Sou um colaborador cadastrado">

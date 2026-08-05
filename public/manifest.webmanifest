@@ -1,0 +1,16 @@
+{
+  "name": "Controle de Produção — Confecção",
+  "short_name": "Controle de Produção",
+  "description": "Sistema de produção, estoque e consumo de materiais da Conserv Confecções.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#1c2b39",
+  "theme_color": "#2f4a63",
+  "orientation": "any",
+  "icons": [
+    { "src": "/pwa-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/pwa-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/pwa-512-maskable.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
