@@ -375,6 +375,12 @@ const inputStyle = {
   width: "100%", boxSizing: "border-box", padding: "10px 12px", borderRadius: 8,
   border: "1.5px solid #d9cfb7", fontSize: 15, background: "#fff", color: "#2a2015", outline: "none",
 };
+// Adicionado: botão-link discreto para ações secundárias de "abrir formulário
+// inline" (ex.: cadastro rápido de material/fornecedor sem sair da tela).
+const linkButtonStyle = {
+  background: "none", border: "none", padding: "6px 0 0", margin: 0,
+  fontSize: 12.5, fontWeight: 700, color: "#2f4a63", cursor: "pointer", textDecoration: "underline",
+};
 function Select({ value, onChange, children, ...rest }) {
   return <select value={value} onChange={onChange} style={{ ...inputStyle, appearance: "auto" }} {...rest}>{children}</select>;
 }
@@ -725,7 +731,7 @@ export default function App() {
             movimentacoesEstoque={movimentacoesEstoque} onSalvarMovimentacaoEstoque={salvarMovimentacaoEstoque}
             solicitacoesCompra={solicitacoesCompra} onSalvarSolicitacaoCompra={salvarSolicitacaoCompra} onRemoverSolicitacaoCompra={removerSolicitacaoCompra}
             cotacoesCompra={cotacoesCompra} onSalvarCotacaoCompra={salvarCotacaoCompra} onRemoverCotacaoCompra={removerCotacaoCompra}
-            fornecedores={fornecedores} ehAdministrador={ehAdministrador}
+            fornecedores={fornecedores} setFornecedores={setFornecedores} ehAdministrador={ehAdministrador}
           />
         )}
         {tab === "relatorios" && perfilAtual.abas.includes("relatorios") && (
@@ -2898,7 +2904,7 @@ function ChatInterno({ usuarioAtual, ehAdministrador, colaboradores }) {
 // baixas automáticas geradas quando uma Ordem de Produção é concluída, e
 // agora também as solicitações de compra com a negociação (cotações de
 // fornecedores) de cada material.
-function ConsumoProdutos({ materiais, setMateriais, produtos, consumosMaterial, movimentacoesMaterial, movimentacoesEstoque, onSalvarMovimentacaoEstoque, solicitacoesCompra, onSalvarSolicitacaoCompra, onRemoverSolicitacaoCompra, cotacoesCompra, onSalvarCotacaoCompra, onRemoverCotacaoCompra, fornecedores, ehAdministrador }) {
+function ConsumoProdutos({ materiais, setMateriais, produtos, consumosMaterial, movimentacoesMaterial, movimentacoesEstoque, onSalvarMovimentacaoEstoque, solicitacoesCompra, onSalvarSolicitacaoCompra, onRemoverSolicitacaoCompra, cotacoesCompra, onSalvarCotacaoCompra, onRemoverCotacaoCompra, fornecedores, setFornecedores, ehAdministrador }) {
   const [sub, setSub] = useState("estoque");
   const [filtroMaterialId, setFiltroMaterialId] = useState("");
   const [materialPreSelecionado, setMaterialPreSelecionado] = useState("");
@@ -3020,7 +3026,7 @@ function ConsumoProdutos({ materiais, setMateriais, produtos, consumosMaterial, 
       )}
 
       {sub === "entrada" && (
-        <EntradaMateriais materiais={materiais} setMateriais={setMateriais} onSalvarMovimentacaoEstoque={onSalvarMovimentacaoEstoque} fornecedores={fornecedores} />
+        <EntradaMateriais materiais={materiais} setMateriais={setMateriais} onSalvarMovimentacaoEstoque={onSalvarMovimentacaoEstoque} fornecedores={fornecedores} setFornecedores={setFornecedores} />
       )}
 
       {sub === "movimentacoes" && (
@@ -3085,7 +3091,7 @@ function ConsumoProdutos({ materiais, setMateriais, produtos, consumosMaterial, 
 // fluxo de compras/produção — ex.: conferência de inventário, doação,
 // devolução, perda. Fica registrado no livro de movimentações com o
 // motivo informado.
-function EntradaMateriais({ materiais, setMateriais, onSalvarMovimentacaoEstoque, fornecedores }) {
+function EntradaMateriais({ materiais, setMateriais, onSalvarMovimentacaoEstoque, fornecedores, setFornecedores }) {
   const [materialId, setMaterialId] = useState("");
   const [tipo, setTipo] = useState("entrada");
   const [quantidade, setQuantidade] = useState("");
@@ -3100,6 +3106,15 @@ function EntradaMateriais({ materiais, setMateriais, onSalvarMovimentacaoEstoque
   // relatórios em dia mesmo em entradas lançadas manualmente.
   const [preco, setPreco] = useState("");
   const [confirmado, setConfirmado] = useState(false);
+  // Adicionado: cadastro rápido de material/fornecedor sem sair da tela
+  // de Entrada — grava nas mesmas listas usadas em Cadastros → Materiais
+  // e Cadastros → Fornecedores, então o que for criado aqui já aparece lá.
+  const [novoMaterialAberto, setNovoMaterialAberto] = useState(false);
+  const [novoMaterialNome, setNovoMaterialNome] = useState("");
+  const [novoMaterialUnidade, setNovoMaterialUnidade] = useState("m");
+  const [novoFornecedorAberto, setNovoFornecedorAberto] = useState(false);
+  const [novoFornecedorNome, setNovoFornecedorNome] = useState("");
+  const [novoFornecedorContato, setNovoFornecedorContato] = useState("");
 
   const materialSelecionado = materiais.find(m => m.id === materialId);
   const qtdNum = parseFloat(quantidade || "0");
@@ -3111,6 +3126,22 @@ function EntradaMateriais({ materiais, setMateriais, onSalvarMovimentacaoEstoque
     const m = materiais.find(mm => mm.id === id);
     setFornecedorId(m?.fornecedorId || "");
     setPreco("");
+  }
+
+  async function criarMaterial() {
+    if (!novoMaterialNome.trim()) return;
+    const novo = { id: uid(), nome: novoMaterialNome.trim(), unidade: novoMaterialUnidade, quantidadeEstoque: 0, estoqueMinimo: null, estoqueMaximo: null, preco: null, fornecedorId: null, fornecedorNomeSnap: null };
+    await setMateriais([...materiais, novo]);
+    selecionarMaterial(novo.id);
+    setNovoMaterialNome(""); setNovoMaterialUnidade("m"); setNovoMaterialAberto(false);
+  }
+
+  async function criarFornecedor() {
+    if (!novoFornecedorNome.trim()) return;
+    const novo = { id: uid(), nome: novoFornecedorNome.trim(), contato: novoFornecedorContato.trim(), categoria: "", observacao: "" };
+    await setFornecedores([...(fornecedores || []), novo]);
+    setFornecedorId(novo.id);
+    setNovoFornecedorNome(""); setNovoFornecedorContato(""); setNovoFornecedorAberto(false);
   }
 
   async function lancar() {
@@ -3148,6 +3179,20 @@ function EntradaMateriais({ materiais, setMateriais, onSalvarMovimentacaoEstoque
                 <option value="">Selecione…</option>
                 {[...materiais].sort((a, b) => a.nome.localeCompare(b.nome)).map(m => <option key={m.id} value={m.id}>{m.nome} ({m.quantidadeEstoque} {m.unidade} em estoque)</option>)}
               </Select>
+              <button type="button" onClick={() => setNovoMaterialAberto(v => !v)} style={linkButtonStyle}>
+                {novoMaterialAberto ? "Cancelar" : "+ Cadastrar novo material"}
+              </button>
+              {novoMaterialAberto && (
+                <div style={{ display: "flex", gap: 8, marginTop: 8, alignItems: "flex-end" }}>
+                  <div style={{ flex: 1 }}>
+                    <input value={novoMaterialNome} onChange={e => setNovoMaterialNome(e.target.value)} placeholder="Nome do novo material" style={inputStyle} onKeyDown={e => e.key === "Enter" && criarMaterial()} />
+                  </div>
+                  <Select value={novoMaterialUnidade} onChange={e => setNovoMaterialUnidade(e.target.value)} style={{ width: 90 }}>
+                    {UNIDADES_MATERIAL.map(u => <option key={u} value={u}>{u}</option>)}
+                  </Select>
+                  <PrimaryButton onClick={criarMaterial} disabled={!novoMaterialNome.trim()}><Plus size={16} /></PrimaryButton>
+                </div>
+              )}
             </Field>
             <Field label="Tipo">
               <div style={{ display: "flex", gap: 8 }}>
@@ -3161,6 +3206,20 @@ function EntradaMateriais({ materiais, setMateriais, onSalvarMovimentacaoEstoque
                   <option value="">Sem fornecedor definido</option>
                   {[...(fornecedores || [])].sort((a, b) => a.nome.localeCompare(b.nome)).map(f => <option key={f.id} value={f.id}>{f.nome}</option>)}
                 </Select>
+                <button type="button" onClick={() => setNovoFornecedorAberto(v => !v)} style={linkButtonStyle}>
+                  {novoFornecedorAberto ? "Cancelar" : "+ Cadastrar novo fornecedor"}
+                </button>
+                {novoFornecedorAberto && (
+                  <div style={{ display: "flex", gap: 8, marginTop: 8, alignItems: "flex-end" }}>
+                    <div style={{ flex: 1 }}>
+                      <input value={novoFornecedorNome} onChange={e => setNovoFornecedorNome(e.target.value)} placeholder="Nome do novo fornecedor" style={inputStyle} onKeyDown={e => e.key === "Enter" && criarFornecedor()} />
+                    </div>
+                    <div style={{ flex: 1 }}>
+                      <input value={novoFornecedorContato} onChange={e => setNovoFornecedorContato(e.target.value)} placeholder="Contato (opcional)" style={inputStyle} onKeyDown={e => e.key === "Enter" && criarFornecedor()} />
+                    </div>
+                    <PrimaryButton onClick={criarFornecedor} disabled={!novoFornecedorNome.trim()}><Plus size={16} /></PrimaryButton>
+                  </div>
+                )}
               </Field>
             )}
             <Field label="Quantidade">
