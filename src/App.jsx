@@ -2925,13 +2925,19 @@ function ConsumoProdutos({ materiais, setMateriais, produtos, consumosMaterial, 
       detalhe: `${mv.produtoNomeSnap || nomeProduto(mv.produtoId)} · ${mv.quantidadeProduzida} peças produzidas`,
       criadoEm: mv.criadoEm,
     }));
-    const entradas = (movimentacoesEstoque || []).map(mv => ({
-      id: `estoque:${mv.id}`, tipo: mv.tipo, materialId: mv.materialId,
-      materialNomeSnap: mv.materialNomeSnap, materialUnidadeSnap: mv.materialUnidadeSnap,
-      quantidade: mv.quantidade, saldoResultante: mv.saldoResultante, opNumero: null,
-      detalhe: mv.motivo || (mv.origem === "compra" ? `Compra aprovada · ${mv.fornecedorNomeSnap || "—"}` : "Ajuste manual"),
-      criadoEm: mv.criadoEm,
-    }));
+    const entradas = (movimentacoesEstoque || []).map(mv => {
+      const base = mv.motivo || (mv.origem === "compra" ? "Compra aprovada" : "Ajuste manual");
+      // Adicionado: mostra o fornecedor da entrada manual junto do
+      // motivo (a compra aprovada já mostrava o fornecedor da cotação).
+      const fornecedorTexto = mv.fornecedorNomeSnap ? ` · ${mv.fornecedorNomeSnap}` : (mv.origem === "compra" ? " · —" : "");
+      return {
+        id: `estoque:${mv.id}`, tipo: mv.tipo, materialId: mv.materialId,
+        materialNomeSnap: mv.materialNomeSnap, materialUnidadeSnap: mv.materialUnidadeSnap,
+        quantidade: mv.quantidade, saldoResultante: mv.saldoResultante, opNumero: null,
+        detalhe: `${base}${fornecedorTexto}`,
+        criadoEm: mv.criadoEm,
+      };
+    });
     return [...saidas, ...entradas]
       .filter(mv => !filtroMaterialId || mv.materialId === filtroMaterialId)
       .sort((a, b) => new Date(b.criadoEm) - new Date(a.criadoEm));
@@ -3014,7 +3020,7 @@ function ConsumoProdutos({ materiais, setMateriais, produtos, consumosMaterial, 
       )}
 
       {sub === "entrada" && (
-        <EntradaMateriais materiais={materiais} setMateriais={setMateriais} onSalvarMovimentacaoEstoque={onSalvarMovimentacaoEstoque} />
+        <EntradaMateriais materiais={materiais} setMateriais={setMateriais} onSalvarMovimentacaoEstoque={onSalvarMovimentacaoEstoque} fornecedores={fornecedores} />
       )}
 
       {sub === "movimentacoes" && (
@@ -3078,28 +3084,40 @@ function ConsumoProdutos({ materiais, setMateriais, produtos, consumosMaterial, 
 // fluxo de compras/produção — ex.: conferência de inventário, doação,
 // devolução, perda. Fica registrado no livro de movimentações com o
 // motivo informado.
-function EntradaMateriais({ materiais, setMateriais, onSalvarMovimentacaoEstoque }) {
+function EntradaMateriais({ materiais, setMateriais, onSalvarMovimentacaoEstoque, fornecedores }) {
   const [materialId, setMaterialId] = useState("");
   const [tipo, setTipo] = useState("entrada");
   const [quantidade, setQuantidade] = useState("");
   const [motivo, setMotivo] = useState("");
+  // Adicionado: fornecedor da entrada manual (ex.: compra avulsa, doação
+  // recebida) — pré-preenche com o fornecedor cadastrado no material,
+  // mas pode ser trocado para essa entrada específica.
+  const [fornecedorId, setFornecedorId] = useState("");
   const [confirmado, setConfirmado] = useState(false);
 
   const materialSelecionado = materiais.find(m => m.id === materialId);
   const qtdNum = parseFloat(quantidade || "0");
   const podeLancar = materialId && qtdNum > 0 && (tipo === "entrada" || (materialSelecionado && materialSelecionado.quantidadeEstoque >= qtdNum));
 
+  function selecionarMaterial(id) {
+    setMaterialId(id);
+    const m = materiais.find(mm => mm.id === id);
+    setFornecedorId(m?.fornecedorId || "");
+  }
+
   async function lancar() {
     if (!podeLancar) return;
     const delta = tipo === "entrada" ? qtdNum : -qtdNum;
     const novoEstoque = Math.round((materialSelecionado.quantidadeEstoque + delta) * 1000) / 1000;
     await setMateriais(materiais.map(m => m.id === materialId ? { ...m, quantidadeEstoque: novoEstoque } : m));
+    const fornecedorNomeSnap = tipo === "entrada" && fornecedorId ? (fornecedores || []).find(f => f.id === fornecedorId)?.nome || null : null;
     await onSalvarMovimentacaoEstoque({
       id: uid(), materialId, materialNomeSnap: materialSelecionado.nome, materialUnidadeSnap: materialSelecionado.unidade,
       tipo, origem: "manual", quantidade: qtdNum, motivo: motivo.trim() || (tipo === "entrada" ? "Entrada manual" : "Saída manual"),
+      fornecedorId: tipo === "entrada" ? (fornecedorId || null) : null, fornecedorNomeSnap,
       saldoResultante: novoEstoque, criadoEm: new Date().toISOString(),
     });
-    setMaterialId(""); setQuantidade(""); setMotivo(""); setTipo("entrada");
+    setMaterialId(""); setQuantidade(""); setMotivo(""); setTipo("entrada"); setFornecedorId("");
     setConfirmado(true);
     setTimeout(() => setConfirmado(false), 2500);
   }
@@ -3116,7 +3134,7 @@ function EntradaMateriais({ materiais, setMateriais, onSalvarMovimentacaoEstoque
         ) : (
           <>
             <Field label="Material">
-              <Select value={materialId} onChange={e => setMaterialId(e.target.value)}>
+              <Select value={materialId} onChange={e => selecionarMaterial(e.target.value)}>
                 <option value="">Selecione…</option>
                 {[...materiais].sort((a, b) => a.nome.localeCompare(b.nome)).map(m => <option key={m.id} value={m.id}>{m.nome} ({m.quantidadeEstoque} {m.unidade} em estoque)</option>)}
               </Select>
@@ -3127,6 +3145,14 @@ function EntradaMateriais({ materiais, setMateriais, onSalvarMovimentacaoEstoque
                 <ToggleChip ativo={tipo === "saida"} colorAtivo="#b13232" onClick={() => setTipo("saida")}>Saída</ToggleChip>
               </div>
             </Field>
+            {tipo === "entrada" && (
+              <Field label="Fornecedor (opcional)">
+                <Select value={fornecedorId} onChange={e => setFornecedorId(e.target.value)}>
+                  <option value="">Sem fornecedor definido</option>
+                  {[...(fornecedores || [])].sort((a, b) => a.nome.localeCompare(b.nome)).map(f => <option key={f.id} value={f.id}>{f.nome}</option>)}
+                </Select>
+              </Field>
+            )}
             <Field label="Quantidade">
               <input type="number" min="0" step="0.01" value={quantidade} onChange={e => setQuantidade(e.target.value)} placeholder={materialSelecionado ? `Em ${materialSelecionado.unidade}` : "Quantidade"} style={inputStyle} />
               {tipo === "saida" && materialSelecionado && qtdNum > materialSelecionado.quantidadeEstoque && (
