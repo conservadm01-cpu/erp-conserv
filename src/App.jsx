@@ -666,6 +666,18 @@ export default function App() {
     await removerRegistro(id);
   }
 
+  // Adicionado: ao excluir uma Ordem de Produção, os registros de
+  // lançamento vinculados a ela (as atividades já iniciadas/concluídas
+  // em cada departamento) ficariam órfãos apontando para uma OP que não
+  // existe mais — em vez disso, excluir a OP também excluir todos esses
+  // registros junto. Essa exclusão é restrita a administrador (gating
+  // feito na tela, em OrdensProducao.cancelarOP).
+  async function removerOrdemComRegistros(id) {
+    const registrosDaOP = registros.filter(r => r.ordemProducaoId === id);
+    await Promise.all(registrosDaOP.map(r => removerRegistro(r.id)));
+    await removerOrdemProducao(id);
+  }
+
   useEffect(() => {
     if (!allLoaded || seedChecked) return;
     setSeedChecked(true);
@@ -761,10 +773,10 @@ export default function App() {
             setores={setores} produtos={produtos} etapas={etapas} vinculos={vinculos}
             colaboradores={colaboradores} equipes={equipes} equipamentos={equipamentos}
             registros={registros} onSalvarRegistro={salvarRegistroComOrdem} onRemoverRegistro={removerRegistroComOrdem}
-            ordensProducao={ordensProducao} onSalvarOrdem={salvarOrdemProducao} onRemoverOrdem={removerOrdemProducao}
+            ordensProducao={ordensProducao} onSalvarOrdem={salvarOrdemProducao} onRemoverOrdem={removerOrdemComRegistros}
             clientes={clientes} onImprimirGrade={setRelatorioGradeImpressao} feriados={feriados}
             podeAutorizarCargaExtra={usuarioAtual.perfil === "administrador" || usuarioAtual.perfil === "gestor"}
-            consumosMaterial={consumosMaterial} materiais={materiais}
+            consumosMaterial={consumosMaterial} materiais={materiais} ehAdministrador={ehAdministrador}
           />
         )}
         {tab === "avaliacao" && perfilAtual.abas.includes("avaliacao") && (
@@ -985,7 +997,7 @@ function LoginGate({ colaboradores, onEntrar }) {
 
 
 // ---------- Produção (iniciar, acompanhar em aberto, concluir) ----------
-function Producao({ setores, produtos, etapas, vinculos, colaboradores, equipes, equipamentos, registros, onSalvarRegistro, onRemoverRegistro, ordensProducao, onSalvarOrdem, onRemoverOrdem, clientes, onImprimirGrade, podeAutorizarCargaExtra, feriados, consumosMaterial, materiais }) {
+function Producao({ setores, produtos, etapas, vinculos, colaboradores, equipes, equipamentos, registros, onSalvarRegistro, onRemoverRegistro, ordensProducao, onSalvarOrdem, onRemoverOrdem, clientes, onImprimirGrade, podeAutorizarCargaExtra, feriados, consumosMaterial, materiais, ehAdministrador }) {
   const [sub, setSub] = useState("ordens");
   const abertos = registros.filter(r => r.status === "aberto");
   const concluidos = registros.filter(r => r.status === "concluido");
@@ -1023,7 +1035,7 @@ function Producao({ setores, produtos, etapas, vinculos, colaboradores, equipes,
           ordensProducao={ordensProducao} produtos={produtos} etapas={etapas} setores={setores} vinculos={vinculos}
           colaboradores={colaboradores} equipes={equipes} equipamentos={equipamentos} registros={registros} onSalvarOrdem={onSalvarOrdem} onRemoverOrdem={onRemoverOrdem}
           onSalvarRegistro={onSalvarRegistro} onImprimirGrade={onImprimirGrade} podeAutorizarCargaExtra={podeAutorizarCargaExtra} feriados={feriados}
-          clientes={clientes} consumosMaterial={consumosMaterial} materiais={materiais}
+          clientes={clientes} consumosMaterial={consumosMaterial} materiais={materiais} ehAdministrador={ehAdministrador}
         />
       )}
     </div>
@@ -2079,7 +2091,7 @@ function IniciarEtapaOPForm({ passo, setorObj, quantidadeAlvo, colaboradores, eq
   );
 }
 
-function OrdensProducao({ ordensProducao, produtos, etapas, setores, vinculos, colaboradores, equipes, equipamentos, registros, onSalvarOrdem, onRemoverOrdem, onSalvarRegistro, clientes, onImprimirGrade, podeAutorizarCargaExtra, feriados, consumosMaterial, materiais }) {
+function OrdensProducao({ ordensProducao, produtos, etapas, setores, vinculos, colaboradores, equipes, equipamentos, registros, onSalvarOrdem, onRemoverOrdem, onSalvarRegistro, clientes, onImprimirGrade, podeAutorizarCargaExtra, feriados, consumosMaterial, materiais, ehAdministrador }) {
   const [clienteIdNovo, setClienteIdNovo] = useState("");
   const [dataEntregaNova, setDataEntregaNova] = useState("");
   const [produtoParaAdicionar, setProdutoParaAdicionar] = useState("");
@@ -2352,8 +2364,18 @@ function OrdensProducao({ ordensProducao, produtos, etapas, setores, vinculos, c
     await onSalvarOrdem({ ...op, etapas: etapasAtualizadas });
   }
 
+  // Adicionado: excluir uma OP é uma ação destrutiva — apaga também todos
+  // os registros de lançamento já feitos em cada departamento dela (ver
+  // removerOrdemComRegistros, em App). Por isso fica restrita a
+  // administrador; a guarda aqui é defensiva, já que o botão nem aparece
+  // pra quem não é administrador (ver renderização mais abaixo).
   async function cancelarOP(op) {
-    if (!window.confirm(`Cancelar a OP #${String(op.numero).padStart(3, "0")}? Essa ação não pode ser desfeita.`)) return;
+    if (!ehAdministrador) return;
+    const registrosDaOP = registros.filter(r => r.ordemProducaoId === op.id).length;
+    const aviso = registrosDaOP > 0
+      ? `Cancelar a OP #${String(op.numero).padStart(3, "0")}? Isso também vai excluir ${registrosDaOP} registro(s) de lançamento já feitos nela. Essa ação não pode ser desfeita.`
+      : `Cancelar a OP #${String(op.numero).padStart(3, "0")}? Essa ação não pode ser desfeita.`;
+    if (!window.confirm(aviso)) return;
     await onRemoverOrdem(op.id);
   }
 
@@ -2609,7 +2631,9 @@ function OrdensProducao({ ordensProducao, produtos, etapas, setores, vinculos, c
                 </div>
                 <div style={{ display: "flex", flexShrink: 0 }}>
                   <IconButton onClick={(e) => { e.stopPropagation(); imprimirGradeOP(op); }} title="Imprimir grade da OP"><Printer size={15} /></IconButton>
-                  <IconButton onClick={(e) => { e.stopPropagation(); cancelarOP(op); }} danger title="Cancelar OP"><Trash2 size={15} /></IconButton>
+                  {ehAdministrador && (
+                    <IconButton onClick={(e) => { e.stopPropagation(); cancelarOP(op); }} danger title="Cancelar OP (exclui também os registros de lançamento)"><Trash2 size={15} /></IconButton>
+                  )}
                 </div>
               </div>
 
