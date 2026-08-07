@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef } from "react";
-import { Clock, Users, Package, BarChart3, Plus, Trash2, X, Play, Loader2, ClipboardList, Paperclip, Check, ChevronUp, ChevronDown, ListOrdered, Scissors, Printer, MessageCircle, Send, Pin, Smartphone } from "lucide-react";
+import { Clock, Users, Package, BarChart3, Plus, Trash2, X, Play, Loader2, ClipboardList, Paperclip, Check, ChevronUp, ChevronDown, ListOrdered, Scissors, Printer, MessageCircle, Send, Pin, Smartphone, Palette } from "lucide-react";
 
 // ---------- Identidade visual (tema de confecção) ----------
 // Fonte de destaque "Fraunces" (serifada, com entalhes que lembram costura)
@@ -558,12 +558,16 @@ export default function App() {
   // Adicionado: Ordens de Produção (OP) — controle sequencial de um lote
   // desde a primeira etapa (normalmente Corte) até a última do produto.
   const { items: ordensProducao, loaded: ordensLoaded, salvar: salvarOrdemProducao, remover: removerOrdemProducao } = useRecordCollection("ordem_producao");
+  // Adicionado: fila de solicitações para o(a) arte-finalista e para
+  // o(a) modelista — pedidos que precisam ser resolvidos antes da
+  // produção de um produto começar.
+  const { items: solicitacoesArte, loaded: solicitacoesArteLoaded, salvar: salvarSolicitacaoArte, remover: removerSolicitacaoArte } = useRecordCollection("solicitacao_arte");
   const [usuarioAtual, setUsuarioAtual] = useState(null);
 
   const allLoaded = setoresLoaded && etapasLoaded && produtosLoaded && vinculosLoaded && colabLoaded
     && equipesLoaded && registrosLoaded && avaliacoesLoaded && anexosLoaded && acessosLoaded && ordensLoaded && clientesLoaded
     && materiaisLoaded && consumosMaterialLoaded && movimentacoesMaterialLoaded && solicitacoesCompraLoaded && cotacoesCompraLoaded
-    && fornecedoresLoaded && equipamentosLoaded && movimentacoesEstoqueLoaded && feriadosLoaded;
+    && fornecedoresLoaded && equipamentosLoaded && movimentacoesEstoqueLoaded && feriadosLoaded && solicitacoesArteLoaded;
   const [seedChecked, setSeedChecked] = useState(false);
 
   // Adicionado: os três perfis de acesso definem quais abas o usuário
@@ -574,8 +578,8 @@ export default function App() {
   // colaboradores). O chat interno fica liberado pros três perfis, já
   // que é um canal de conversa entre todo mundo que usa o sistema.
   const PERFIS_ACESSO = {
-    administrador: { label: "Administrador", abas: ["producao", "avaliacao", "consumo", "relatorios", "cadastros", "chat"] },
-    gestor: { label: "Gestor", abas: ["producao", "avaliacao", "consumo", "relatorios", "cadastros", "chat"] },
+    administrador: { label: "Administrador", abas: ["producao", "arte", "avaliacao", "consumo", "relatorios", "cadastros", "chat"] },
+    gestor: { label: "Gestor", abas: ["producao", "arte", "avaliacao", "consumo", "relatorios", "cadastros", "chat"] },
     colaborador: { label: "Colaborador", abas: ["producao", "chat"] },
   };
   const perfilAtual = PERFIS_ACESSO[usuarioAtual?.perfil] || PERFIS_ACESSO.colaborador;
@@ -788,6 +792,12 @@ export default function App() {
         {tab === "avaliacao" && perfilAtual.abas.includes("avaliacao") && (
           <Avaliacao colaboradores={colaboradores} avaliacoes={avaliacoes} onSalvarAvaliacao={salvarAvaliacao} onRemoverAvaliacao={removerAvaliacao} />
         )}
+        {tab === "arte" && perfilAtual.abas.includes("arte") && (
+          <ArteModelagem
+            solicitacoes={solicitacoesArte} onSalvarSolicitacao={salvarSolicitacaoArte} onRemoverSolicitacao={removerSolicitacaoArte}
+            produtos={produtos} setProdutos={setProdutos}
+          />
+        )}
         {tab === "consumo" && perfilAtual.abas.includes("consumo") && (
           <ConsumoProdutos
             materiais={materiais} setMateriais={setMateriais} produtos={produtos} consumosMaterial={consumosMaterial}
@@ -840,6 +850,7 @@ export default function App() {
       }}>
         {[
           { key: "producao", label: "Produção", icon: Clock },
+          { key: "arte", label: "Criação", icon: Palette },
           { key: "avaliacao", label: "Avaliação", icon: Users },
           { key: "consumo", label: "Materiais", icon: Package },
           { key: "chat", label: "Chat", icon: MessageCircle },
@@ -3166,6 +3177,314 @@ function Avaliacao({ colaboradores, avaliacoes, onSalvarAvaliacao, onRemoverAval
             </div>
           </Card>
         ))}
+      </div>
+    </div>
+  );
+}
+
+// ---------- Arte & Modelagem (solicitações para arte-finalista e modelista) ----------
+// Adicionado: fila de pedidos para o(a) arte-finalista (arte pronta pra
+// silk/DTF: pantones, tamanho, localização na peça) e para o(a)
+// modelista (molde: medidas, tamanhos e detalhes do projeto), antes da
+// produção de um produto começar. Cada solicitação entra numerada, na
+// ordem em que chega — igual à numeração das Ordens de Produção.
+const TIPOS_SOLICITACAO_ARTE = [
+  { key: "arte", label: "Arte finalista", color: "#8a5fb0", bg: "#efe7f7" },
+  { key: "modelagem", label: "Modelista", color: "#1d6fa5", bg: "#e7f1f8" },
+];
+const tipoSolicitacaoArteInfo = (key) => TIPOS_SOLICITACAO_ARTE.find(t => t.key === key) || TIPOS_SOLICITACAO_ARTE[0];
+
+function ArteModelagem({ solicitacoes, onSalvarSolicitacao, onRemoverSolicitacao, produtos, setProdutos }) {
+  const [tipo, setTipo] = useState("arte");
+  const [produtoId, setProdutoId] = useState("");
+  const [novoProdutoAberto, setNovoProdutoAberto] = useState(false);
+  const [novoProdutoNome, setNovoProdutoNome] = useState("");
+  // Arte finalista
+  const [observacaoCliente, setObservacaoCliente] = useState("");
+  const [tamanhoArte, setTamanhoArte] = useState("");
+  const [localizacaoArte, setLocalizacaoArte] = useState("");
+  const [pantones, setPantones] = useState([""]);
+  const [arquivosArte, setArquivosArte] = useState([]);
+  const arquivoArteRef = useRef(null);
+  // Modelista
+  const [medidas, setMedidas] = useState("");
+  const [detalhesProjeto, setDetalhesProjeto] = useState("");
+  const [arquivosModelagem, setArquivosModelagem] = useState([]);
+  const arquivoModelagemRef = useRef(null);
+
+  const [busca, setBusca] = useState("");
+  const [expandidoId, setExpandidoId] = useState(null);
+
+  function atualizarPantone(i, valor) { setPantones(cores => cores.map((c, idx) => idx === i ? valor : c)); }
+  function adicionarPantone() { setPantones(cores => [...cores, ""]); }
+  function removerPantone(i) { setPantones(cores => cores.filter((_, idx) => idx !== i)); }
+
+  async function criarProduto() {
+    if (!novoProdutoNome.trim()) return;
+    const p = { id: uid(), nome: novoProdutoNome.trim() };
+    await setProdutos([...produtos, p]);
+    setProdutoId(p.id);
+    setNovoProdutoNome(""); setNovoProdutoAberto(false);
+  }
+
+  async function lerArquivos(fileList) {
+    const arquivos = Array.from(fileList || []);
+    const novos = [];
+    for (const file of arquivos) {
+      if (file.size > 4.5 * 1024 * 1024) { alert(`"${file.name}" é maior que 4,5MB e não pode ser anexado.`); continue; }
+      const dataUrl = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+      });
+      novos.push({ id: uid(), nome: file.name, tipo: file.type, dataUrl });
+    }
+    return novos;
+  }
+  async function anexarArte(fileList) { const novos = await lerArquivos(fileList); if (novos.length) setArquivosArte(a => [...a, ...novos]); }
+  async function anexarModelagem(fileList) { const novos = await lerArquivos(fileList); if (novos.length) setArquivosModelagem(a => [...a, ...novos]); }
+  function removerArquivoArte(id) { setArquivosArte(a => a.filter(x => x.id !== id)); }
+  function removerArquivoModelagem(id) { setArquivosModelagem(a => a.filter(x => x.id !== id)); }
+
+  const podeCriar = !!produtoId;
+
+  async function criarSolicitacao() {
+    if (!podeCriar) return;
+    const produto = produtos.find(p => p.id === produtoId);
+    // Adicionado: numeração sequencial da fila, mesma lógica usada nas
+    // Ordens de Produção — sempre o maior número já usado + 1.
+    const numero = solicitacoes.reduce((max, s) => Math.max(max, s.numero || 0), 0) + 1;
+    const nova = {
+      id: uid(), numero, tipo,
+      produtoId, produtoNomeSnap: produto?.nome || "—",
+      status: "pendente",
+      ...(tipo === "arte" ? {
+        observacaoCliente: observacaoCliente.trim(),
+        tamanhoArte: tamanhoArte.trim(),
+        localizacaoArte: localizacaoArte.trim(),
+        pantones: pantones.map(c => c.trim()).filter(Boolean),
+        arquivos: arquivosArte,
+      } : {
+        medidas: medidas.trim(),
+        detalhesProjeto: detalhesProjeto.trim(),
+        arquivos: arquivosModelagem,
+      }),
+      criadaEm: new Date().toISOString(), concluidaEm: null,
+    };
+    await onSalvarSolicitacao(nova);
+    setProdutoId("");
+    setObservacaoCliente(""); setTamanhoArte(""); setLocalizacaoArte(""); setPantones([""]); setArquivosArte([]);
+    setMedidas(""); setDetalhesProjeto(""); setArquivosModelagem([]);
+  }
+
+  async function alternarConcluida(s) {
+    await onSalvarSolicitacao({
+      ...s,
+      status: s.status === "concluida" ? "pendente" : "concluida",
+      concluidaEm: s.status === "concluida" ? null : new Date().toISOString(),
+    });
+  }
+  async function excluir(id) {
+    if (!window.confirm("Excluir esta solicitação?")) return;
+    await onRemoverSolicitacao(id);
+  }
+
+  const filtradas = solicitacoes.filter(s => {
+    const termo = busca.trim().toLowerCase();
+    if (!termo) return true;
+    return (s.produtoNomeSnap || "").toLowerCase().includes(termo) || `#${String(s.numero).padStart(3, "0")}`.includes(termo);
+  });
+  const pendentes = [...filtradas.filter(s => s.status !== "concluida")].sort((a, b) => (a.numero || 0) - (b.numero || 0));
+  const concluidas = [...filtradas.filter(s => s.status === "concluida")].sort((a, b) => new Date(b.concluidaEm || 0) - new Date(a.concluidaEm || 0));
+
+  function renderGaleriaAnexo(arquivos, onRemover) {
+    if (arquivos.length === 0) return null;
+    return (
+      <div style={{ display: "flex", gap: 6, marginBottom: 8, flexWrap: "wrap" }}>
+        {arquivos.map(a => (
+          <div key={a.id} style={{ position: "relative", border: "1px solid #e6ddc8", borderRadius: 6, overflow: "hidden", background: "#fff" }}>
+            {a.tipo && a.tipo.startsWith("image/")
+              ? <img src={a.dataUrl} alt={a.nome} style={{ width: 56, height: 56, objectFit: "cover", display: "block" }} />
+              : <div style={{ width: 56, height: 56, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", color: "#a3937a", gap: 2 }}>
+                  <Paperclip size={15} />
+                  <span style={{ fontSize: 8, padding: "0 3px", textAlign: "center", overflow: "hidden", whiteSpace: "nowrap", textOverflow: "ellipsis", maxWidth: 52 }}>{a.nome}</span>
+                </div>}
+            <button onClick={() => onRemover(a.id)} style={{ position: "absolute", top: 2, right: 2, background: "rgba(255,255,255,0.92)", border: "none", borderRadius: 999, width: 17, height: 17, cursor: "pointer", color: "#b13232", display: "flex", alignItems: "center", justifyContent: "center" }}><X size={10} /></button>
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  function renderCardSolicitacao(s) {
+    const expandido = expandidoId === s.id;
+    const info = tipoSolicitacaoArteInfo(s.tipo);
+    return (
+      <Card key={s.id} style={{ padding: 14 }}>
+        <div onClick={() => setExpandidoId(expandido ? null : s.id)} style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8, cursor: "pointer" }}>
+          <div style={{ display: "flex", alignItems: "flex-start", gap: 6 }}>
+            {expandido ? <ChevronUp size={16} style={{ marginTop: 3, color: "#a3937a", flexShrink: 0 }} /> : <ChevronDown size={16} style={{ marginTop: 3, color: "#a3937a", flexShrink: 0 }} />}
+            <div>
+              <div style={{ display: "inline-flex", alignItems: "center", fontSize: 10.5, fontWeight: 700, color: info.color, background: info.bg, padding: "2px 7px", borderRadius: 999, marginBottom: 4 }}>
+                {info.label}
+              </div>
+              <div style={{ fontWeight: 800, fontSize: 14, color: "#1c2b39" }}>#{String(s.numero).padStart(3, "0")} · {s.produtoNomeSnap}</div>
+              <div style={{ fontSize: 12, color: "#a3937a" }}>
+                criada em {new Date(s.criadaEm).toLocaleDateString("pt-BR")}{(s.arquivos || []).length > 0 ? ` · 📎 ${s.arquivos.length}` : ""}
+              </div>
+            </div>
+          </div>
+          <StatusDot cor={s.status === "concluida" ? "verde" : "laranja"} />
+        </div>
+        {expandido && (
+          <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px solid #efe8d8" }}>
+            {s.tipo === "arte" ? (
+              <div style={{ display: "flex", flexDirection: "column", gap: 6, fontSize: 12.5, color: "#2a2015" }}>
+                {s.observacaoCliente && <div><b>Observação do cliente:</b> {s.observacaoCliente}</div>}
+                {s.tamanhoArte && <div><b>Tamanho da arte:</b> {s.tamanhoArte}</div>}
+                {s.localizacaoArte && <div><b>Localização:</b> {s.localizacaoArte}</div>}
+                {(s.pantones || []).length > 0 && <div><b>Pantones:</b> {s.pantones.join(", ")}</div>}
+              </div>
+            ) : (
+              <div style={{ display: "flex", flexDirection: "column", gap: 6, fontSize: 12.5, color: "#2a2015" }}>
+                {s.medidas && <div><b>Medidas e tamanhos:</b> <span style={{ whiteSpace: "pre-wrap" }}>{s.medidas}</span></div>}
+                {s.detalhesProjeto && <div><b>Detalhes do projeto:</b> <span style={{ whiteSpace: "pre-wrap" }}>{s.detalhesProjeto}</span></div>}
+              </div>
+            )}
+            {(s.arquivos || []).length > 0 && (
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8, marginTop: 10 }}>
+                {s.arquivos.map(a => (
+                  a.tipo && a.tipo.startsWith("image/")
+                    ? <a key={a.id} href={a.dataUrl} download={a.nome}><img src={a.dataUrl} alt={a.nome} style={{ width: "100%", height: 80, objectFit: "cover", borderRadius: 6, border: "1px solid #e6ddc8", display: "block" }} /></a>
+                    : <a key={a.id} href={a.dataUrl} download={a.nome} style={{ fontSize: 11, color: "#2f4a63", border: "1px solid #e6ddc8", borderRadius: 6, padding: "4px 8px", textDecoration: "none", display: "inline-flex", alignItems: "center", gap: 4 }}><Paperclip size={11} /> {a.nome}</a>
+                ))}
+              </div>
+            )}
+            <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+              <PrimaryButton onClick={() => alternarConcluida(s)} style={{ flex: 1 }}>
+                <Check size={16} /> {s.status === "concluida" ? "Reabrir" : "Marcar concluída"}
+              </PrimaryButton>
+              <IconButton onClick={() => excluir(s.id)} danger title="Excluir"><Trash2 size={16} /></IconButton>
+            </div>
+          </div>
+        )}
+      </Card>
+    );
+  }
+
+  return (
+    <div>
+      <Card style={{ marginBottom: 16 }}>
+        <div style={{ fontSize: 15, fontWeight: 800, fontFamily: FONT_DISPLAY, marginBottom: 6, color: "#1c2b39" }}>Nova solicitação</div>
+        <div style={{ fontSize: 12.5, color: "#6b5d49", marginBottom: 12 }}>
+          Fila de pedidos para o(a) arte-finalista ou modelista, antes da produção começar — cada solicitação entra numerada, na ordem em que chega.
+        </div>
+        <Field label="Tipo de solicitação">
+          <div style={{ display: "flex", gap: 8 }}>
+            {TIPOS_SOLICITACAO_ARTE.map(t => (
+              <ToggleChip key={t.key} ativo={tipo === t.key} colorAtivo={t.color} onClick={() => setTipo(t.key)}>{t.label}</ToggleChip>
+            ))}
+          </div>
+        </Field>
+
+        <Field label="Produto">
+          <Select value={produtoId} onChange={e => setProdutoId(e.target.value)}>
+            <option value="">Selecione…</option>
+            {[...produtos].sort((a, b) => a.nome.localeCompare(b.nome)).map(p => <option key={p.id} value={p.id}>{p.nome}</option>)}
+          </Select>
+          <button type="button" onClick={() => setNovoProdutoAberto(v => !v)} style={linkButtonStyle}>
+            {novoProdutoAberto ? "Cancelar" : "+ Cadastrar novo produto"}
+          </button>
+          {novoProdutoAberto && (
+            <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+              <input value={novoProdutoNome} onChange={e => setNovoProdutoNome(e.target.value)} placeholder="Nome do novo produto" style={{ ...inputStyle, flex: 1 }} onKeyDown={e => e.key === "Enter" && criarProduto()} />
+              <PrimaryButton onClick={criarProduto} disabled={!novoProdutoNome.trim()}><Plus size={16} /></PrimaryButton>
+            </div>
+          )}
+        </Field>
+
+        {tipo === "arte" ? (
+          <>
+            <Field label="Anexo da arte (opcional)">
+              {renderGaleriaAnexo(arquivosArte, removerArquivoArte)}
+              <input ref={arquivoArteRef} type="file" multiple accept="image/*,.pdf,.ai,.eps,.cdr" style={{ display: "none" }}
+                onChange={e => { anexarArte(e.target.files); e.target.value = ""; }} />
+              <button type="button" onClick={() => arquivoArteRef.current && arquivoArteRef.current.click()} style={{
+                fontSize: 12.5, border: "1px dashed #cdb98a", background: "#f4ecd8", borderRadius: 7, padding: "7px 11px",
+                cursor: "pointer", display: "flex", alignItems: "center", gap: 6, color: "#2f4a63", fontWeight: 700,
+              }}><Paperclip size={14} /> Anexar arquivo</button>
+            </Field>
+            <Field label="Observação do cliente">
+              <textarea value={observacaoCliente} onChange={e => setObservacaoCliente(e.target.value)} rows={3}
+                placeholder="O que o cliente pediu/especificou para essa arte"
+                style={{ ...inputStyle, resize: "vertical", fontFamily: "inherit" }} />
+            </Field>
+            <Field label="Tamanho da arte">
+              <input value={tamanhoArte} onChange={e => setTamanhoArte(e.target.value)} placeholder="Ex.: 20 x 15 cm" style={inputStyle} />
+            </Field>
+            <Field label="Localização da arte">
+              <input value={localizacaoArte} onChange={e => setLocalizacaoArte(e.target.value)} placeholder="Ex.: peito esquerdo, costas, manga" style={inputStyle} />
+            </Field>
+            <Field label="Pantones">
+              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                {pantones.map((cor, i) => (
+                  <div key={i} style={{ display: "flex", gap: 6 }}>
+                    <input value={cor} onChange={e => atualizarPantone(i, e.target.value)} placeholder={`Cor ${i + 1} — código Pantone`} style={{ ...inputStyle, flex: 1 }} />
+                    {pantones.length > 1 && <IconButton onClick={() => removerPantone(i)} danger title="Remover"><X size={16} /></IconButton>}
+                  </div>
+                ))}
+                <button type="button" onClick={adicionarPantone} style={{ alignSelf: "flex-start", fontSize: 12, border: "1px solid #d9cfb7", background: "#fff", borderRadius: 7, padding: "5px 9px", cursor: "pointer", display: "flex", alignItems: "center", gap: 4, color: "#6b5d49" }}>
+                  <Plus size={12} /> adicionar cor
+                </button>
+              </div>
+            </Field>
+          </>
+        ) : (
+          <>
+            <Field label="Anexo de arquivos (opcional)">
+              {renderGaleriaAnexo(arquivosModelagem, removerArquivoModelagem)}
+              <input ref={arquivoModelagemRef} type="file" multiple accept="image/*,.pdf,.dwg,.dxf" style={{ display: "none" }}
+                onChange={e => { anexarModelagem(e.target.files); e.target.value = ""; }} />
+              <button type="button" onClick={() => arquivoModelagemRef.current && arquivoModelagemRef.current.click()} style={{
+                fontSize: 12.5, border: "1px dashed #cdb98a", background: "#f4ecd8", borderRadius: 7, padding: "7px 11px",
+                cursor: "pointer", display: "flex", alignItems: "center", gap: 6, color: "#2f4a63", fontWeight: 700,
+              }}><Paperclip size={14} /> Anexar arquivo</button>
+            </Field>
+            <Field label="Medidas e tamanhos">
+              <textarea value={medidas} onChange={e => setMedidas(e.target.value)} rows={3}
+                placeholder={"Ex.: P — busto 90cm, cintura 70cm\nM — busto 96cm, cintura 76cm"}
+                style={{ ...inputStyle, resize: "vertical", fontFamily: "inherit" }} />
+            </Field>
+            <Field label="Detalhes do projeto">
+              <textarea value={detalhesProjeto} onChange={e => setDetalhesProjeto(e.target.value)} rows={3}
+                placeholder="Referências, caimento desejado, observações de modelagem"
+                style={{ ...inputStyle, resize: "vertical", fontFamily: "inherit" }} />
+            </Field>
+          </>
+        )}
+
+        <PrimaryButton onClick={criarSolicitacao} disabled={!podeCriar} style={{ width: "100%", marginTop: 4 }}>
+          <Plus size={16} /> Adicionar à fila
+        </PrimaryButton>
+      </Card>
+
+      <Card style={{ marginBottom: 16, padding: 12 }}>
+        <Field label="Pesquisar">
+          <input value={busca} onChange={e => setBusca(e.target.value)} placeholder="Nº da solicitação ou produto…" style={inputStyle} />
+        </Field>
+      </Card>
+
+      <div style={{ fontSize: 13, fontWeight: 700, color: "#6b5d49", margin: "4px 2px 8px" }}>Pendentes</div>
+      {pendentes.length === 0 && <div style={{ fontSize: 13.5, color: "#a3937a", padding: "8px 2px", marginBottom: 16 }}>{busca ? "Nenhuma solicitação pendente encontrada para essa pesquisa." : "Nenhuma solicitação pendente."}</div>}
+      <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 20 }}>
+        {pendentes.map(renderCardSolicitacao)}
+      </div>
+
+      <div style={{ fontSize: 13, fontWeight: 700, color: "#6b5d49", margin: "4px 2px 8px" }}>Concluídas</div>
+      {concluidas.length === 0 && <div style={{ fontSize: 13.5, color: "#a3937a", padding: "8px 2px" }}>{busca ? "Nenhuma solicitação concluída encontrada para essa pesquisa." : "Nenhuma solicitação concluída ainda."}</div>}
+      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+        {concluidas.map(renderCardSolicitacao)}
       </div>
     </div>
   );
