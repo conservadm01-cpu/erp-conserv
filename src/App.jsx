@@ -3194,6 +3194,257 @@ const TIPOS_SOLICITACAO_ARTE = [
 ];
 const tipoSolicitacaoArteInfo = (key) => TIPOS_SOLICITACAO_ARTE.find(t => t.key === key) || TIPOS_SOLICITACAO_ARTE[0];
 
+// ---------- Estúdio de mockup (posiciona a logo do cliente sobre a foto
+// do produto, com perspectiva) ----------
+// Adicionado: não é uma simulação 3D de verdade (isso exigiria modelo 3D
+// da peça, que o sistema não tem) — é um "warp" de perspectiva: a logo é
+// deformada para encaixar no quadrilátero que o solicitante desenha por
+// cima da foto, arrastando os 4 cantos. Como o canvas 2D só faz
+// transformações afins (sem perspectiva), a logo é desenhada em uma
+// malha de pequenos triângulos, cada um com sua própria transformação
+// afim — a técnica padrão para simular um warp de perspectiva sem WebGL.
+
+// Mapeia o quadrado unitário (0,0)-(1,0)-(1,1)-(0,1) para um
+// quadrilátero qualquer — fórmula clássica de "unit square to quad"
+// (Heckbert). Usada porque a origem (a logo) sempre parte de um
+// retângulo simples; só o destino (o que o usuário desenhou) é livre.
+function mapaQuadrilatero(quad) {
+  const [p0, p1, p2, p3] = quad;
+  const dx1 = p1.x - p2.x, dx2 = p3.x - p2.x, dx3 = p0.x - p1.x + p2.x - p3.x;
+  const dy1 = p1.y - p2.y, dy2 = p3.y - p2.y, dy3 = p0.y - p1.y + p2.y - p3.y;
+  let g = 0, h = 0;
+  if (Math.abs(dx3) > 1e-9 || Math.abs(dy3) > 1e-9) {
+    const den = dx1 * dy2 - dx2 * dy1;
+    if (Math.abs(den) > 1e-9) {
+      g = (dx3 * dy2 - dx2 * dy3) / den;
+      h = (dx1 * dy3 - dy1 * dx3) / den;
+    }
+  }
+  return {
+    a: p1.x - p0.x + g * p1.x, b: p3.x - p0.x + h * p3.x, c: p0.x,
+    d: p1.y - p0.y + g * p1.y, e: p3.y - p0.y + h * p3.y, f: p0.y,
+    g, h,
+  };
+}
+function aplicarMapaQuad(coef, u, v) {
+  const denom = coef.g * u + coef.h * v + 1;
+  return { x: (coef.a * u + coef.b * v + coef.c) / denom, y: (coef.d * u + coef.e * v + coef.f) / denom };
+}
+// Resolve o sistema 3x3 M·x = b por Cramer — usado para achar a
+// transformação afim que leva um triângulo de origem a um de destino.
+function resolverSistema3x3(M, b) {
+  const det3 = (m) => (
+    m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1]) -
+    m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0]) +
+    m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0])
+  );
+  const D = det3(M);
+  if (Math.abs(D) < 1e-9) return null;
+  const substituir = (col) => M.map((linha, i) => linha.map((v, j) => j === col ? b[i] : v));
+  return [det3(substituir(0)) / D, det3(substituir(1)) / D, det3(substituir(2)) / D];
+}
+function afimDeTriangulo(S0, S1, S2, D0, D1, D2) {
+  const M = [[S0.x, S0.y, 1], [S1.x, S1.y, 1], [S2.x, S2.y, 1]];
+  const solX = resolverSistema3x3(M, [D0.x, D1.x, D2.x]);
+  const solY = resolverSistema3x3(M, [D0.y, D1.y, D2.y]);
+  if (!solX || !solY) return null;
+  return [solX[0], solY[0], solX[1], solY[1], solX[2], solY[2]];
+}
+function desenharTrianguloWarp(ctx, img, S0, S1, S2, D0, D1, D2) {
+  const m = afimDeTriangulo(S0, S1, S2, D0, D1, D2);
+  if (!m) return;
+  ctx.save();
+  ctx.beginPath();
+  ctx.moveTo(D0.x, D0.y); ctx.lineTo(D1.x, D1.y); ctx.lineTo(D2.x, D2.y);
+  ctx.closePath();
+  ctx.clip();
+  ctx.transform(...m);
+  ctx.drawImage(img, 0, 0);
+  ctx.restore();
+}
+// Desenha a imagem `img` inteira deformada para caber no quadrilátero
+// `quad` (4 pontos, na ordem: topo-esq, topo-dir, baixo-dir, baixo-esq),
+// subdividindo em uma malha `grid` x `grid` de triângulos.
+function desenharLogoWarpeada(ctx, img, quad, grid) {
+  const coef = mapaQuadrilatero(quad);
+  const passo = 1 / grid;
+  for (let j = 0; j < grid; j++) {
+    for (let i = 0; i < grid; i++) {
+      const u0 = i * passo, u1 = (i + 1) * passo, v0 = j * passo, v1 = (j + 1) * passo;
+      const P00 = aplicarMapaQuad(coef, u0, v0), P10 = aplicarMapaQuad(coef, u1, v0);
+      const P11 = aplicarMapaQuad(coef, u1, v1), P01 = aplicarMapaQuad(coef, u0, v1);
+      const S00 = { x: u0 * img.width, y: v0 * img.height }, S10 = { x: u1 * img.width, y: v0 * img.height };
+      const S11 = { x: u1 * img.width, y: v1 * img.height }, S01 = { x: u0 * img.width, y: v1 * img.height };
+      desenharTrianguloWarp(ctx, img, S00, S10, S11, P00, P10, P11);
+      desenharTrianguloWarp(ctx, img, S00, S11, S01, P00, P11, P01);
+    }
+  }
+}
+
+const LARGURA_EDICAO_MOCKUP = 320;
+
+function EstudioMockup({ onSalvar }) {
+  const [imagemProduto, setImagemProduto] = useState(null);
+  const [logo, setLogo] = useState(null);
+  const [cantos, setCantos] = useState(null);
+  const [arrastando, setArrastando] = useState(null);
+  const [salvo, setSalvo] = useState(false);
+  const canvasRef = useRef(null);
+  const inputProdutoRef = useRef(null);
+  const inputLogoRef = useRef(null);
+
+  const alturaEdicao = imagemProduto ? Math.round(LARGURA_EDICAO_MOCKUP * imagemProduto.height / imagemProduto.width) : 0;
+
+  async function carregarImagem(file) {
+    const dataUrl = await new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+    const img = new Image();
+    await new Promise((resolve, reject) => { img.onload = resolve; img.onerror = reject; img.src = dataUrl; });
+    return { img, width: img.naturalWidth, height: img.naturalHeight };
+  }
+  async function onEscolherProduto(e) {
+    const file = e.target.files?.[0]; e.target.value = "";
+    if (!file) return;
+    if (file.size > 8 * 1024 * 1024) { alert("Imagem maior que 8MB — escolha uma foto menor."); return; }
+    setImagemProduto(await carregarImagem(file));
+    setCantos(null); setSalvo(false);
+  }
+  async function onEscolherLogo(e) {
+    const file = e.target.files?.[0]; e.target.value = "";
+    if (!file) return;
+    if (file.size > 8 * 1024 * 1024) { alert("Imagem maior que 8MB — escolha um arquivo menor."); return; }
+    setLogo(await carregarImagem(file));
+    setSalvo(false);
+  }
+
+  // Posição inicial da logo: um retângulo no centro da foto, que o
+  // solicitante ajusta arrastando os 4 cantos.
+  useEffect(() => {
+    if (imagemProduto && logo && !cantos && alturaEdicao > 0) {
+      const w = LARGURA_EDICAO_MOCKUP * 0.4, h = alturaEdicao * 0.4;
+      const cx = LARGURA_EDICAO_MOCKUP / 2, cy = alturaEdicao / 2;
+      setCantos([
+        { x: cx - w / 2, y: cy - h / 2 }, { x: cx + w / 2, y: cy - h / 2 },
+        { x: cx + w / 2, y: cy + h / 2 }, { x: cx - w / 2, y: cy + h / 2 },
+      ]);
+    }
+  }, [imagemProduto, logo, cantos, alturaEdicao]);
+
+  useEffect(() => {
+    if (!imagemProduto || !canvasRef.current || alturaEdicao === 0) return;
+    const canvas = canvasRef.current;
+    canvas.width = LARGURA_EDICAO_MOCKUP; canvas.height = alturaEdicao;
+    const ctx = canvas.getContext("2d");
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(imagemProduto.img, 0, 0, canvas.width, canvas.height);
+    if (logo && cantos) {
+      desenharLogoWarpeada(ctx, logo.img, cantos, 18);
+      ctx.beginPath();
+      ctx.moveTo(cantos[0].x, cantos[0].y);
+      cantos.slice(1).forEach(p => ctx.lineTo(p.x, p.y));
+      ctx.closePath();
+      ctx.strokeStyle = "rgba(47,74,99,0.55)";
+      ctx.lineWidth = 1;
+      ctx.stroke();
+      cantos.forEach(p => {
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, 7, 0, Math.PI * 2);
+        ctx.fillStyle = "#fff";
+        ctx.fill();
+        ctx.lineWidth = 2;
+        ctx.strokeStyle = "#2f4a63";
+        ctx.stroke();
+      });
+    }
+  }, [imagemProduto, logo, cantos, alturaEdicao]);
+
+  function posicaoDoEvento(e) {
+    const rect = canvasRef.current.getBoundingClientRect();
+    const ponto = e.touches && e.touches[0] ? e.touches[0] : e;
+    return {
+      x: (ponto.clientX - rect.left) * (canvasRef.current.width / rect.width),
+      y: (ponto.clientY - rect.top) * (canvasRef.current.height / rect.height),
+    };
+  }
+  function aoPressionar(e) {
+    if (!cantos) return;
+    const pos = posicaoDoEvento(e);
+    const idx = cantos.findIndex(p => Math.hypot(p.x - pos.x, p.y - pos.y) < 18);
+    if (idx >= 0) { setArrastando(idx); e.preventDefault(); }
+  }
+  function aoMover(e) {
+    if (arrastando == null) return;
+    e.preventDefault();
+    const pos = posicaoDoEvento(e);
+    setCantos(atual => atual.map((p, i) => i === arrastando
+      ? { x: Math.max(0, Math.min(LARGURA_EDICAO_MOCKUP, pos.x)), y: Math.max(0, Math.min(alturaEdicao, pos.y)) }
+      : p));
+  }
+  function aoSoltar() { setArrastando(null); }
+
+  function salvarComposicao() {
+    if (!imagemProduto || !logo || !cantos) return;
+    // Refaz o desenho na resolução real da foto (não na de exibição),
+    // pra sair com qualidade melhor no anexo salvo.
+    const escala = imagemProduto.width / LARGURA_EDICAO_MOCKUP;
+    const cantosReais = cantos.map(p => ({ x: p.x * escala, y: p.y * escala }));
+    const canvasFinal = document.createElement("canvas");
+    canvasFinal.width = imagemProduto.width; canvasFinal.height = imagemProduto.height;
+    const ctx = canvasFinal.getContext("2d");
+    ctx.drawImage(imagemProduto.img, 0, 0);
+    desenharLogoWarpeada(ctx, logo.img, cantosReais, 24);
+    onSalvar({ id: uid(), nome: `mockup-${Date.now()}.png`, tipo: "image/png", dataUrl: canvasFinal.toDataURL("image/png") });
+    setSalvo(true);
+    setTimeout(() => setSalvo(false), 2500);
+  }
+
+  const estiloBotaoUpload = {
+    fontSize: 12, border: "1px dashed #cdb98a", background: "#f4ecd8", borderRadius: 7, padding: "7px 11px",
+    cursor: "pointer", display: "flex", alignItems: "center", gap: 6, color: "#2f4a63", fontWeight: 700,
+  };
+
+  return (
+    <Card style={{ marginTop: 4, marginBottom: 14, background: "#faf6ec" }}>
+      <div style={{ fontSize: 13, fontWeight: 800, color: "#1c2b39", marginBottom: 4 }}>Estúdio de mockup (opcional)</div>
+      <div style={{ fontSize: 11.5, color: "#6b5d49", marginBottom: 10 }}>
+        Suba a foto do produto e a logo do cliente, depois arraste os 4 cantos da logo até encaixar na perspectiva do tecido na foto. Não é uma simulação 3D — é um posicionamento com perspectiva sobre a própria foto.
+      </div>
+      <div style={{ display: "flex", gap: 8, marginBottom: 10, flexWrap: "wrap" }}>
+        <input ref={inputProdutoRef} type="file" accept="image/*" style={{ display: "none" }} onChange={onEscolherProduto} />
+        <button type="button" onClick={() => inputProdutoRef.current && inputProdutoRef.current.click()} style={estiloBotaoUpload}>
+          <Paperclip size={13} /> {imagemProduto ? "Trocar foto do produto" : "Foto do produto"}
+        </button>
+        <input ref={inputLogoRef} type="file" accept="image/*" style={{ display: "none" }} onChange={onEscolherLogo} />
+        <button type="button" onClick={() => inputLogoRef.current && inputLogoRef.current.click()} disabled={!imagemProduto} style={{ ...estiloBotaoUpload, opacity: imagemProduto ? 1 : 0.5, cursor: imagemProduto ? "pointer" : "not-allowed" }}>
+          <Paperclip size={13} /> {logo ? "Trocar logo" : "Logo do cliente"}
+        </button>
+      </div>
+      {imagemProduto && (
+        <div style={{ display: "flex", justifyContent: "center", marginBottom: 10 }}>
+          <canvas
+            ref={canvasRef}
+            style={{ width: LARGURA_EDICAO_MOCKUP, height: alturaEdicao, borderRadius: 8, border: "1px solid #e6ddc8", touchAction: "none", cursor: arrastando != null ? "grabbing" : logo ? "grab" : "default" }}
+            onMouseDown={aoPressionar} onMouseMove={aoMover} onMouseUp={aoSoltar} onMouseLeave={aoSoltar}
+            onTouchStart={aoPressionar} onTouchMove={aoMover} onTouchEnd={aoSoltar}
+          />
+        </div>
+      )}
+      {imagemProduto && !logo && (
+        <div style={{ fontSize: 11.5, color: "#a3937a", textAlign: "center" }}>Suba a logo do cliente para posicionar sobre a foto.</div>
+      )}
+      {imagemProduto && logo && (
+        <PrimaryButton onClick={salvarComposicao} style={{ width: "100%" }}>
+          <Check size={16} /> {salvo ? "Salvo no anexo ✓" : "Salvar posicionamento no anexo"}
+        </PrimaryButton>
+      )}
+    </Card>
+  );
+}
+
 function ArteModelagem({ solicitacoes, onSalvarSolicitacao, onRemoverSolicitacao, produtos, setProdutos }) {
   const [tipo, setTipo] = useState("arte");
   const [produtoId, setProdutoId] = useState("");
@@ -3406,6 +3657,7 @@ function ArteModelagem({ solicitacoes, onSalvarSolicitacao, onRemoverSolicitacao
 
         {tipo === "arte" ? (
           <>
+            <EstudioMockup onSalvar={arquivo => setArquivosArte(a => [...a, arquivo])} />
             <Field label="Anexo da arte (opcional)">
               {renderGaleriaAnexo(arquivosArte, removerArquivoArte)}
               <input ref={arquivoArteRef} type="file" multiple accept="image/*,.pdf,.ai,.eps,.cdr" style={{ display: "none" }}
