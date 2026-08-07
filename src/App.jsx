@@ -7287,7 +7287,6 @@ function ProdutosCadastro({ produtos, setProdutos, etapas, vinculos, setVinculos
   // cadastro de "tipo de tecido" à parte.
   const [grupoMaterialId, setGrupoMaterialId] = useState("");
   const [materialTecidoId, setMaterialTecidoId] = useState("");
-  const [buscaTecido, setBuscaTecido] = useState("");
   const [tamanhoId, setTamanhoId] = useState("");
   const [novoGrupoAberto, setNovoGrupoAberto] = useState(false);
   const [novoGrupoNome, setNovoGrupoNome] = useState("");
@@ -7295,7 +7294,6 @@ function ProdutosCadastro({ produtos, setProdutos, etapas, vinculos, setVinculos
   const [novoTamanhoNome, setNovoTamanhoNome] = useState("");
   const [grupoMaterialIdEdicao, setGrupoMaterialIdEdicao] = useState("");
   const [materialTecidoIdEdicao, setMaterialTecidoIdEdicao] = useState("");
-  const [buscaTecidoEdicao, setBuscaTecidoEdicao] = useState("");
   const [tamanhoIdEdicao, setTamanhoIdEdicao] = useState("");
   const [novoGrupoAbertoEdicao, setNovoGrupoAbertoEdicao] = useState(false);
   const [novoGrupoNomeEdicao, setNovoGrupoNomeEdicao] = useState("");
@@ -7330,11 +7328,6 @@ function ProdutosCadastro({ produtos, setProdutos, etapas, vinculos, setVinculos
   const nomeMaterialTecido = (id) => materialTecido(id)?.nome || null;
   const codigoTipoDoMaterial = (id) => materialTecido(id)?.tipoMaterialCodigoSnap;
   const materiaisOrdenados = useMemo(() => [...materiais].sort((a, b) => a.nome.localeCompare(b.nome)), [materiais]);
-  const materiaisParaTecido = (termo) => {
-    const t = termo.trim().toLowerCase();
-    if (!t) return materiaisOrdenados;
-    return materiaisOrdenados.filter(m => m.nome.toLowerCase().includes(t) || (m.tipoMaterialNomeSnap || "").toLowerCase().includes(t));
-  };
 
   const podeCriarProduto = nome.trim().length > 0 && !!tamanhoId;
 
@@ -7486,11 +7479,10 @@ function ProdutosCadastro({ produtos, setProdutos, etapas, vinculos, setVinculos
               </div>
             )}
           </Field>
-          <Field label="Tecido (busca no cadastro de Materiais, opcional)">
-            <input value={buscaTecido} onChange={e => setBuscaTecido(e.target.value)} placeholder="Pesquisar material…" style={{ ...inputStyle, marginBottom: 6 }} />
+          <Field label="Tecido (cadastro de Materiais, opcional)">
             <Select value={materialTecidoId} onChange={e => setMaterialTecidoId(e.target.value)}>
               <option value="">Selecione…</option>
-              {materiaisParaTecido(buscaTecido).map(m => <option key={m.id} value={m.id}>{m.nome}{m.tipoMaterialNomeSnap ? ` (${m.tipoMaterialNomeSnap})` : ""}</option>)}
+              {materiaisOrdenados.map(m => <option key={m.id} value={m.id}>{m.nome}{m.tipoMaterialNomeSnap ? ` (${m.tipoMaterialNomeSnap})` : ""}</option>)}
             </Select>
           </Field>
           <Field label="Tamanho (obrigatório)">
@@ -7565,11 +7557,10 @@ function ProdutosCadastro({ produtos, setProdutos, etapas, vinculos, setVinculos
                             </div>
                           )}
                         </Field>
-                        <Field label="Tecido (busca no cadastro de Materiais, opcional)">
-                          <input value={buscaTecidoEdicao} onChange={e => setBuscaTecidoEdicao(e.target.value)} placeholder="Pesquisar material…" style={{ ...inputStyle, marginBottom: 6 }} />
+                        <Field label="Tecido (cadastro de Materiais, opcional)">
                           <Select value={materialTecidoIdEdicao} onChange={e => setMaterialTecidoIdEdicao(e.target.value)}>
                             <option value="">Selecione…</option>
-                            {materiaisParaTecido(buscaTecidoEdicao).map(m => <option key={m.id} value={m.id}>{m.nome}{m.tipoMaterialNomeSnap ? ` (${m.tipoMaterialNomeSnap})` : ""}</option>)}
+                            {materiaisOrdenados.map(m => <option key={m.id} value={m.id}>{m.nome}{m.tipoMaterialNomeSnap ? ` (${m.tipoMaterialNomeSnap})` : ""}</option>)}
                           </Select>
                         </Field>
                         <Field label="Tamanho (obrigatório)">
