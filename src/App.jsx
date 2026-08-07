@@ -6055,7 +6055,7 @@ function Cadastros({ produtos, setProdutos, etapas, setEtapas, vinculos, setVinc
           ehAdministrador={ehAdministrador}
         />
       )}
-      {sub === "materiais" && <MateriaisCadastro materiais={materiais} setMateriais={setMateriais} consumosMaterial={consumosMaterial} setConsumosMaterial={setConsumosMaterial} fornecedores={fornecedores} />}
+      {sub === "materiais" && <MateriaisCadastro materiais={materiais} setMateriais={setMateriais} consumosMaterial={consumosMaterial} setConsumosMaterial={setConsumosMaterial} fornecedores={fornecedores} gruposMaterial={gruposMaterial} setGruposMaterial={setGruposMaterial} />}
       {sub === "fornecedores" && <FornecedoresCadastro fornecedores={fornecedores} setFornecedores={setFornecedores} solicitacoesCompra={solicitacoesCompra} cotacoesCompra={cotacoesCompra} materiais={materiais} />}
       {sub === "equipamentos" && <EquipamentosCadastro equipamentos={equipamentos} setEquipamentos={setEquipamentos} setores={setores} />}
       {sub === "clientes" && <ClientesCadastro clientes={clientes} setClientes={setClientes} />}
@@ -6615,7 +6615,7 @@ function ColaboradoresCadastro({ colaboradores, setColaboradores, acessos, ehAdm
 // baixa automática.
 const UNIDADES_MATERIAL = ["m", "kg", "un", "rolo", "cone", "l", "pacote"];
 
-function MateriaisCadastro({ materiais, setMateriais, consumosMaterial, setConsumosMaterial, fornecedores }) {
+function MateriaisCadastro({ materiais, setMateriais, consumosMaterial, setConsumosMaterial, fornecedores, gruposMaterial, setGruposMaterial }) {
   const [nome, setNome] = useState("");
   const [unidade, setUnidade] = useState("m");
   const [quantidadeEstoque, setQuantidadeEstoque] = useState("");
@@ -6623,6 +6623,11 @@ function MateriaisCadastro({ materiais, setMateriais, consumosMaterial, setConsu
   const [estoqueMaximo, setEstoqueMaximo] = useState("");
   const [preco, setPreco] = useState("");
   const [fornecedorId, setFornecedorId] = useState("");
+  // Adicionado: grupo de materiais — mesmo cadastro compartilhado com
+  // Produtos (grupo_material), com opção de criar um novo ali mesmo.
+  const [grupoMaterialId, setGrupoMaterialId] = useState("");
+  const [novoGrupoAberto, setNovoGrupoAberto] = useState(false);
+  const [novoGrupoNome, setNovoGrupoNome] = useState("");
   const [editandoId, setEditandoId] = useState(null);
   const [nomeEdicao, setNomeEdicao] = useState("");
   const [unidadeEdicao, setUnidadeEdicao] = useState("m");
@@ -6630,17 +6635,29 @@ function MateriaisCadastro({ materiais, setMateriais, consumosMaterial, setConsu
   const [estoqueMaximoEdicao, setEstoqueMaximoEdicao] = useState("");
   const [precoEdicao, setPrecoEdicao] = useState("");
   const [fornecedorIdEdicao, setFornecedorIdEdicao] = useState("");
+  const [grupoMaterialIdEdicao, setGrupoMaterialIdEdicao] = useState("");
+  const [novoGrupoAbertoEdicao, setNovoGrupoAbertoEdicao] = useState(false);
+  const [novoGrupoNomeEdicao, setNovoGrupoNomeEdicao] = useState("");
   const [ajusteId, setAjusteId] = useState(null);
   const [ajusteValor, setAjusteValor] = useState("");
   const [ajusteTipo, setAjusteTipo] = useState("entrada");
   const nomeFornecedor = (id) => (fornecedores || []).find(f => f.id === id)?.nome || null;
-  // Adicionado: pesquisa por nome do material ou fornecedor — útil
+  const grupoMaterialPorId = (id) => gruposMaterial.find(g => g.id === id) || null;
+  async function criarGrupoMaterial(nomeBruto, aoCriar) {
+    const nomeCriado = nomeBruto.trim().toUpperCase();
+    if (!nomeCriado) return;
+    const codigo = gruposMaterial.reduce((max, g) => Math.max(max, g.codigo || 0), 0) + 1;
+    const novo = { id: uid(), codigo, nome: nomeCriado };
+    await setGruposMaterial([...gruposMaterial, novo]);
+    aoCriar(novo.id);
+  }
+  // Adicionado: pesquisa por nome do material, fornecedor ou grupo — útil
   // quando o cadastro cresce e fica difícil rolar a lista toda.
   const [busca, setBusca] = useState("");
   const materiaisFiltrados = useMemo(() => {
     const termo = busca.trim().toLowerCase();
     return [...materiais]
-      .filter(m => !termo || m.nome.toLowerCase().includes(termo) || (m.fornecedorNomeSnap || "").toLowerCase().includes(termo))
+      .filter(m => !termo || m.nome.toLowerCase().includes(termo) || (m.fornecedorNomeSnap || "").toLowerCase().includes(termo) || (m.grupoMaterialNomeSnap || "").toLowerCase().includes(termo))
       .sort((a, b) => a.nome.localeCompare(b.nome));
   }, [materiais, busca]);
 
@@ -6664,8 +6681,9 @@ function MateriaisCadastro({ materiais, setMateriais, consumosMaterial, setConsu
       // Fornecedores) — o nome fica salvo junto (snapshot) pra continuar
       // aparecendo mesmo se o fornecedor for renomeado ou excluído depois.
       fornecedorId: fornecedorId || null, fornecedorNomeSnap: fornecedorId ? nomeFornecedor(fornecedorId) : null,
+      grupoMaterialId: grupoMaterialId || null, grupoMaterialNomeSnap: grupoMaterialId ? grupoMaterialPorId(grupoMaterialId)?.nome || null : null,
     }]);
-    setNome(""); setQuantidadeEstoque(""); setEstoqueMinimo(""); setEstoqueMaximo(""); setPreco(""); setFornecedorId("");
+    setNome(""); setQuantidadeEstoque(""); setEstoqueMinimo(""); setEstoqueMaximo(""); setPreco(""); setFornecedorId(""); setGrupoMaterialId("");
   }
   async function excluir(id) {
     const consumosDoMaterial = consumosMaterial.filter(c => c.materialId === id);
@@ -6682,6 +6700,7 @@ function MateriaisCadastro({ materiais, setMateriais, consumosMaterial, setConsu
     setEstoqueMaximoEdicao(m.estoqueMaximo != null ? String(m.estoqueMaximo) : "");
     setPrecoEdicao(m.preco != null ? String(m.preco) : "");
     setFornecedorIdEdicao(m.fornecedorId || "");
+    setGrupoMaterialIdEdicao(m.grupoMaterialId || "");
   }
   async function salvarEdicao(id) {
     if (!nomeEdicao.trim()) return;
@@ -6691,6 +6710,7 @@ function MateriaisCadastro({ materiais, setMateriais, consumosMaterial, setConsu
       estoqueMaximo: estoqueMaximoEdicao ? Math.round(parseFloat(estoqueMaximoEdicao) * 1000) / 1000 : null,
       preco: precoEdicao ? Math.round(parseFloat(precoEdicao) * 100) / 100 : null,
       fornecedorId: fornecedorIdEdicao || null, fornecedorNomeSnap: fornecedorIdEdicao ? nomeFornecedor(fornecedorIdEdicao) : null,
+      grupoMaterialId: grupoMaterialIdEdicao || null, grupoMaterialNomeSnap: grupoMaterialIdEdicao ? grupoMaterialPorId(grupoMaterialIdEdicao)?.nome || null : null,
     } : m));
     setEditandoId(null);
   }
@@ -6738,6 +6758,19 @@ function MateriaisCadastro({ materiais, setMateriais, consumosMaterial, setConsu
             {[...(fornecedores || [])].sort((a, b) => a.nome.localeCompare(b.nome)).map(f => <option key={f.id} value={f.id}>{f.nome}</option>)}
           </Select>
         </Field>
+        <Field label="Grupo de materiais (opcional)">
+          <Select value={grupoMaterialId} onChange={e => setGrupoMaterialId(e.target.value)}>
+            <option value="">Selecione…</option>
+            {[...gruposMaterial].sort((a, b) => a.codigo - b.codigo).map(g => <option key={g.id} value={g.id}>{String(g.codigo).padStart(3, "0")} · {g.nome}</option>)}
+          </Select>
+          <button type="button" onClick={() => setNovoGrupoAberto(v => !v)} style={linkButtonStyle}>{novoGrupoAberto ? "Cancelar" : "+ Novo grupo"}</button>
+          {novoGrupoAberto && (
+            <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
+              <input value={novoGrupoNome} onChange={e => setNovoGrupoNome(e.target.value.toUpperCase())} placeholder="NOME DO GRUPO" style={{ ...inputStyle, flex: 1 }} onKeyDown={e => e.key === "Enter" && criarGrupoMaterial(novoGrupoNome, id => { setGrupoMaterialId(id); setNovoGrupoNome(""); setNovoGrupoAberto(false); })} />
+              <PrimaryButton onClick={() => criarGrupoMaterial(novoGrupoNome, id => { setGrupoMaterialId(id); setNovoGrupoNome(""); setNovoGrupoAberto(false); })} disabled={!novoGrupoNome.trim()}><Plus size={16} /></PrimaryButton>
+            </div>
+          )}
+        </Field>
         <PrimaryButton onClick={adicionar} disabled={!nome.trim()} style={{ width: "100%" }}><Plus size={16} /> Adicionar material</PrimaryButton>
       </Card>
 
@@ -6784,6 +6817,19 @@ function MateriaisCadastro({ materiais, setMateriais, consumosMaterial, setConsu
                       {[...(fornecedores || [])].sort((a, b) => a.nome.localeCompare(b.nome)).map(f => <option key={f.id} value={f.id}>{f.nome}</option>)}
                     </Select>
                   </Field>
+                  <Field label="Grupo de materiais (opcional)">
+                    <Select value={grupoMaterialIdEdicao} onChange={e => setGrupoMaterialIdEdicao(e.target.value)}>
+                      <option value="">Selecione…</option>
+                      {[...gruposMaterial].sort((a, b) => a.codigo - b.codigo).map(g => <option key={g.id} value={g.id}>{String(g.codigo).padStart(3, "0")} · {g.nome}</option>)}
+                    </Select>
+                    <button type="button" onClick={() => setNovoGrupoAbertoEdicao(v => !v)} style={linkButtonStyle}>{novoGrupoAbertoEdicao ? "Cancelar" : "+ Novo grupo"}</button>
+                    {novoGrupoAbertoEdicao && (
+                      <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
+                        <input value={novoGrupoNomeEdicao} onChange={e => setNovoGrupoNomeEdicao(e.target.value.toUpperCase())} placeholder="NOME DO GRUPO" style={{ ...inputStyle, flex: 1 }} />
+                        <PrimaryButton onClick={() => criarGrupoMaterial(novoGrupoNomeEdicao, id => { setGrupoMaterialIdEdicao(id); setNovoGrupoNomeEdicao(""); setNovoGrupoAbertoEdicao(false); })} disabled={!novoGrupoNomeEdicao.trim()}><Plus size={16} /></PrimaryButton>
+                      </div>
+                    )}
+                  </Field>
                   <div style={{ display: "flex", gap: 8 }}>
                     <PrimaryButton onClick={() => salvarEdicao(m.id)} disabled={!nomeEdicao.trim()} style={{ flex: 1 }}>Salvar</PrimaryButton>
                     <button onClick={() => setEditandoId(null)} style={{ border: "1.5px solid #d9cfb7", background: "#fff", borderRadius: 9, padding: "0 14px", color: "#6b5d49", fontWeight: 700, cursor: "pointer" }}>Cancelar</button>
@@ -6802,6 +6848,7 @@ function MateriaisCadastro({ materiais, setMateriais, consumosMaterial, setConsu
                         {m.estoqueMinimo != null || m.estoqueMaximo != null ? ` (min ${m.estoqueMinimo ?? "—"} / máx ${m.estoqueMaximo ?? "—"})` : ""}
                       </div>
                       {fmtPreco(m.preco) && <div style={{ fontSize: 11.5, color: "#a3937a" }}>{fmtPreco(m.preco)}/{m.unidade}</div>}
+                      {m.grupoMaterialNomeSnap && <div style={{ fontSize: 11.5, color: "#a3937a" }}>Grupo: {m.grupoMaterialNomeSnap}</div>}
                       {m.fornecedorNomeSnap && <div style={{ fontSize: 11.5, color: "#a3937a" }}>Fornecedor: {m.fornecedorNomeSnap}</div>}
                     </div>
                     <div style={{ display: "flex" }}>
