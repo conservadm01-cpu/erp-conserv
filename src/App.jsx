@@ -3287,7 +3287,12 @@ function EstudioMockup({ onSalvar }) {
   const [imagemProduto, setImagemProduto] = useState(null);
   const [logo, setLogo] = useState(null);
   const [cantos, setCantos] = useState(null);
-  const [arrastando, setArrastando] = useState(null);
+  // Adicionado: além de arrastar cada canto (ajusta a perspectiva), dá
+  // pra arrastar o corpo da logo pra mover tudo junto, e redimensionar
+  // com a roda do mouse (desktop) ou pinça de dois dedos (touch). Um só
+  // estado de "modo de arraste" cobre os três gestos.
+  const [modoArraste, setModoArraste] = useState(null);
+  const pointersRef = useRef(new Map());
   const [salvo, setSalvo] = useState(false);
   const canvasRef = useRef(null);
   const inputProdutoRef = useRef(null);
@@ -3362,29 +3367,100 @@ function EstudioMockup({ onSalvar }) {
     }
   }, [imagemProduto, logo, cantos, alturaEdicao]);
 
-  function posicaoDoEvento(e) {
+  function converterPonto(clientX, clientY) {
     const rect = canvasRef.current.getBoundingClientRect();
-    const ponto = e.touches && e.touches[0] ? e.touches[0] : e;
     return {
-      x: (ponto.clientX - rect.left) * (canvasRef.current.width / rect.width),
-      y: (ponto.clientY - rect.top) * (canvasRef.current.height / rect.height),
+      x: (clientX - rect.left) * (canvasRef.current.width / rect.width),
+      y: (clientY - rect.top) * (canvasRef.current.height / rect.height),
     };
   }
-  function aoPressionar(e) {
+  // Adicionado: teste "ponto dentro do polígono" (ray casting) — usado
+  // pra saber se o toque/clique caiu dentro do corpo da logo (mover) em
+  // vez de num canto (ajustar perspectiva) ou fora dela (nada).
+  function pontoDentroDoQuad(pos, quad) {
+    let dentro = false;
+    for (let i = 0, j = quad.length - 1; i < quad.length; j = i++) {
+      const xi = quad[i].x, yi = quad[i].y, xj = quad[j].x, yj = quad[j].y;
+      const intersecta = (yi > pos.y) !== (yj > pos.y) && pos.x < (xj - xi) * (pos.y - yi) / (yj - yi) + xi;
+      if (intersecta) dentro = !dentro;
+    }
+    return dentro;
+  }
+  function aplicarEscala(base, fator) {
+    const cx = base.reduce((s, p) => s + p.x, 0) / base.length;
+    const cy = base.reduce((s, p) => s + p.y, 0) / base.length;
+    return base.map(p => ({ x: cx + (p.x - cx) * fator, y: cy + (p.y - cy) * fator }));
+  }
+
+  // Adicionado: Pointer Events (em vez de mouse/touch separados) com
+  // captura no canvas — assim o arraste continua funcionando mesmo se o
+  // ponteiro sair da área do canvas no meio do gesto, tanto no mouse
+  // quanto no dedo. Rastrear os ponteiros ativos num Map também permite
+  // detectar o segundo dedo pra virar gesto de pinça (redimensionar).
+  function aoPressionarPonteiro(e) {
     if (!cantos) return;
-    const pos = posicaoDoEvento(e);
+    canvasRef.current.setPointerCapture(e.pointerId);
+    const pos = converterPonto(e.clientX, e.clientY);
+    pointersRef.current.set(e.pointerId, pos);
+
+    if (pointersRef.current.size === 2) {
+      const pontos = Array.from(pointersRef.current.values());
+      const dist = Math.hypot(pontos[1].x - pontos[0].x, pontos[1].y - pontos[0].y) || 1;
+      setModoArraste({ tipo: "pinca", distanciaInicial: dist, cantosIniciais: cantos });
+      return;
+    }
+    if (pointersRef.current.size > 2) return;
+
     const idx = cantos.findIndex(p => Math.hypot(p.x - pos.x, p.y - pos.y) < 18);
-    if (idx >= 0) { setArrastando(idx); e.preventDefault(); }
+    if (idx >= 0) {
+      setModoArraste({ tipo: "canto", indice: idx });
+    } else if (pontoDentroDoQuad(pos, cantos)) {
+      setModoArraste({ tipo: "mover", inicioPos: pos, cantosIniciais: cantos });
+    }
   }
-  function aoMover(e) {
-    if (arrastando == null) return;
-    e.preventDefault();
-    const pos = posicaoDoEvento(e);
-    setCantos(atual => atual.map((p, i) => i === arrastando
-      ? { x: Math.max(0, Math.min(LARGURA_EDICAO_MOCKUP, pos.x)), y: Math.max(0, Math.min(alturaEdicao, pos.y)) }
-      : p));
+  function aoMoverPonteiro(e) {
+    if (!pointersRef.current.has(e.pointerId)) return;
+    const pos = converterPonto(e.clientX, e.clientY);
+    pointersRef.current.set(e.pointerId, pos);
+    if (!modoArraste) return;
+
+    if (modoArraste.tipo === "pinca") {
+      const pontos = Array.from(pointersRef.current.values());
+      if (pontos.length < 2) return;
+      const dist = Math.hypot(pontos[1].x - pontos[0].x, pontos[1].y - pontos[0].y);
+      setCantos(aplicarEscala(modoArraste.cantosIniciais, dist / modoArraste.distanciaInicial));
+      return;
+    }
+    if (modoArraste.tipo === "canto") {
+      setCantos(atual => atual.map((p, i) => i === modoArraste.indice
+        ? { x: Math.max(0, Math.min(LARGURA_EDICAO_MOCKUP, pos.x)), y: Math.max(0, Math.min(alturaEdicao, pos.y)) }
+        : p));
+    } else if (modoArraste.tipo === "mover") {
+      const dx = pos.x - modoArraste.inicioPos.x, dy = pos.y - modoArraste.inicioPos.y;
+      setCantos(modoArraste.cantosIniciais.map(p => ({ x: p.x + dx, y: p.y + dy })));
+    }
   }
-  function aoSoltar() { setArrastando(null); }
+  function aoSoltarPonteiro(e) {
+    pointersRef.current.delete(e.pointerId);
+    if (pointersRef.current.size === 0 || (modoArraste?.tipo === "pinca" && pointersRef.current.size < 2)) {
+      setModoArraste(null);
+    }
+  }
+  // Adicionado: roda do mouse redimensiona a logo (mantendo o centro
+  // fixo) — listener nativo com { passive: false } porque o React
+  // trata onWheel como passivo por padrão, o que impediria o
+  // preventDefault (a página rolaria junto em vez de só a logo crescer).
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    function aoRolar(e) {
+      e.preventDefault();
+      const fator = e.deltaY < 0 ? 1.08 : 1 / 1.08;
+      setCantos(atual => atual ? aplicarEscala(atual, fator) : atual);
+    }
+    canvas.addEventListener("wheel", aoRolar, { passive: false });
+    return () => canvas.removeEventListener("wheel", aoRolar);
+  }, [imagemProduto]);
 
   function salvarComposicao() {
     if (!imagemProduto || !logo || !cantos) return;
@@ -3411,7 +3487,7 @@ function EstudioMockup({ onSalvar }) {
     <Card style={{ marginTop: 4, marginBottom: 14, background: "#faf6ec" }}>
       <div style={{ fontSize: 13, fontWeight: 800, color: "#1c2b39", marginBottom: 4 }}>Estúdio de mockup (opcional)</div>
       <div style={{ fontSize: 11.5, color: "#6b5d49", marginBottom: 10 }}>
-        Suba a foto do produto e a logo do cliente, depois arraste os 4 cantos da logo até encaixar na perspectiva do tecido na foto. Não é uma simulação 3D — é um posicionamento com perspectiva sobre a própria foto.
+        Suba a foto do produto e a logo do cliente. Arraste o <b>meio</b> da logo pra mover, os <b>cantos</b> pra ajustar a perspectiva, e use a <b>roda do mouse</b> (ou pinça de dois dedos no celular) pra redimensionar. Não é uma simulação 3D — é um posicionamento com perspectiva sobre a própria foto.
       </div>
       <div style={{ display: "flex", gap: 8, marginBottom: 10, flexWrap: "wrap" }}>
         <input ref={inputProdutoRef} type="file" accept="image/*" style={{ display: "none" }} onChange={onEscolherProduto} />
@@ -3427,9 +3503,8 @@ function EstudioMockup({ onSalvar }) {
         <div style={{ display: "flex", justifyContent: "center", marginBottom: 10 }}>
           <canvas
             ref={canvasRef}
-            style={{ width: LARGURA_EDICAO_MOCKUP, height: alturaEdicao, borderRadius: 8, border: "1px solid #e6ddc8", touchAction: "none", cursor: arrastando != null ? "grabbing" : logo ? "grab" : "default" }}
-            onMouseDown={aoPressionar} onMouseMove={aoMover} onMouseUp={aoSoltar} onMouseLeave={aoSoltar}
-            onTouchStart={aoPressionar} onTouchMove={aoMover} onTouchEnd={aoSoltar}
+            style={{ width: LARGURA_EDICAO_MOCKUP, height: alturaEdicao, borderRadius: 8, border: "1px solid #e6ddc8", touchAction: "none", cursor: modoArraste ? "grabbing" : logo ? "grab" : "default" }}
+            onPointerDown={aoPressionarPonteiro} onPointerMove={aoMoverPonteiro} onPointerUp={aoSoltarPonteiro} onPointerCancel={aoSoltarPonteiro}
           />
         </div>
       )}
