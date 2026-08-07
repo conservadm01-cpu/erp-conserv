@@ -94,6 +94,12 @@ function duracaoEtapaOP(passo, quantidade) {
 // autorizar a programação.
 const JORNADA_DIARIA_HORAS = 8;
 const JORNADA_MAXIMA_HORAS = 12;
+// Adicionado: base usada para converter salário mensal em valor-hora ao
+// estimar custo de mão de obra (jornada padrão CLT) — reaproveitada nos
+// relatórios de custo por período/OP e no custo estimado por peça do
+// cadastro de produtos.
+const HORAS_MES_PADRAO = 220;
+const fmtMoeda = (v) => (v || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 
 // Adicionado: jornada produtiva usada para projetar datas de entrega —
 // cada 9h de trabalho acumulado (por departamento) equivale a mais um
@@ -1028,7 +1034,7 @@ function Producao({ setores, produtos, etapas, vinculos, colaboradores, equipes,
         />
       )}
       {sub === "historico" && (
-        <HistoricoConcluidos concluidos={concluidos} produtos={produtos} etapas={etapas} setores={setores} colaboradores={colaboradores} onImprimirGrade={onImprimirGrade} />
+        <HistoricoConcluidos concluidos={concluidos} produtos={produtos} etapas={etapas} setores={setores} colaboradores={colaboradores} onImprimirGrade={onImprimirGrade} ordensProducao={ordensProducao} />
       )}
       {sub === "ordens" && (
         <OrdensProducao
@@ -1638,29 +1644,56 @@ function ConcluirForm({ registro, onSalvarRegistro, onFechar, colaboradores }) {
 }
 
 // ---------- Histórico de concluídos ----------
-function HistoricoConcluidos({ concluidos, produtos, etapas, setores, colaboradores, onImprimirGrade }) {
+function HistoricoConcluidos({ concluidos, produtos, etapas, setores, colaboradores, onImprimirGrade, ordensProducao }) {
   const nomeProduto = (r) => produtos.find(p => p.id === r.produtoId)?.nome || r.produtoNomeSnap || "—";
   const nomeEtapa = (r) => etapas.find(e => e.id === r.etapaId)?.nome || r.etapaNomeSnap || "—";
   const nomeSetor = (r) => setores.find(s => s.id === r.setorId)?.nome || r.setorNomeSnap || "—";
   const nomeColab = (id) => colaboradores.find(c => c.id === id)?.nome || "—";
+  // Adicionado: cliente não vem direto no registro — vem da Ordem de
+  // Produção a que ele pertence.
+  const clienteDoRegistro = (r) => (ordensProducao || []).find(o => o.id === r.ordemProducaoId)?.clienteNomeSnap || null;
   const ordenados = [...concluidos].sort((a, b) => new Date(b.fim) - new Date(a.fim));
 
-  // Adicionado: monta a grade (tabela) para impressão de todo o
-  // histórico de produção concluída (não só os 40 mais recentes
-  // mostrados na tela).
+  // Adicionado: pesquisa do histórico por cliente, por número da Ordem
+  // de Produção e por período (data de conclusão) — útil pra achar
+  // rápido a produção de um pedido/cliente específico sem rolar a lista
+  // inteira.
+  const [buscaCliente, setBuscaCliente] = useState("");
+  const [buscaOP, setBuscaOP] = useState("");
+  const [dataInicio, setDataInicio] = useState("");
+  const [dataFim, setDataFim] = useState("");
+  const temFiltroAtivo = buscaCliente || buscaOP || dataInicio || dataFim;
+  function limparFiltros() { setBuscaCliente(""); setBuscaOP(""); setDataInicio(""); setDataFim(""); }
+
+  const filtrados = ordenados.filter(r => {
+    if (buscaCliente && !(clienteDoRegistro(r) || "sem cliente").toLowerCase().includes(buscaCliente.trim().toLowerCase())) return false;
+    if (buscaOP) {
+      const termo = buscaOP.trim().toLowerCase().replace(/^#/, "");
+      const numeroTxt = r.ordemProducaoNumero != null ? String(r.ordemProducaoNumero) : "";
+      if (!numeroTxt.includes(termo)) return false;
+    }
+    if (dataInicio && new Date(r.fim) < new Date(dataInicio + "T00:00:00")) return false;
+    if (dataFim && new Date(r.fim) > new Date(dataFim + "T23:59:59")) return false;
+    return true;
+  });
+
+  // Adicionado: monta a grade (tabela) para impressão do histórico de
+  // produção concluída filtrado na tela (não só os 40 mais recentes
+  // mostrados abaixo).
   function imprimirGrade() {
     onImprimirGrade({
       titulo: "Histórico de produção",
-      subtitulo: `${ordenados.length} ${ordenados.length !== 1 ? "produções concluídas" : "produção concluída"}`,
+      subtitulo: `${filtrados.length} ${filtrados.length !== 1 ? "produções concluídas" : "produção concluída"}${temFiltroAtivo ? " · com filtro aplicado" : ""}`,
       geradoEm: new Date().toLocaleString("pt-BR"),
       colunas: [
-        { key: "op", label: "OP" }, { key: "produto", label: "Produto" }, { key: "etapa", label: "Etapa" },
+        { key: "op", label: "OP" }, { key: "cliente", label: "Cliente" }, { key: "produto", label: "Produto" }, { key: "etapa", label: "Etapa" },
         { key: "setor", label: "Departamento" }, { key: "colaboradores", label: "Colaborador(es)" },
         { key: "quantidade", label: "Qtd.", align: "right" }, { key: "eficiencia", label: "%", align: "right" },
         { key: "fim", label: "Concluído em", align: "right" },
       ],
-      linhas: ordenados.map(r => ({
+      linhas: filtrados.map(r => ({
         op: r.ordemProducaoNumero != null ? `#${String(r.ordemProducaoNumero).padStart(3, "0")}` : "—",
+        cliente: clienteDoRegistro(r) || "—",
         produto: nomeProduto(r), etapa: nomeEtapa(r), setor: nomeSetor(r),
         colaboradores: (r.colaboradorIds || []).map(nomeColab).join(", "),
         quantidade: r.quantidade, eficiencia: r.eficiencia != null ? `${Math.min(100, r.eficiencia)}%` : "—",
@@ -1675,13 +1708,45 @@ function HistoricoConcluidos({ concluidos, produtos, etapas, setores, colaborado
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+      <Card style={{ padding: 12 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: "#1c2b39" }}>Pesquisar</div>
+          {temFiltroAtivo && (
+            <button onClick={limparFiltros} style={{ background: "transparent", border: "none", color: "#2f4a63", fontSize: 12, fontWeight: 700, cursor: "pointer", padding: 0 }}>Limpar</button>
+          )}
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 8 }}>
+          <div>
+            <span style={{ display: "block", fontSize: 11.5, fontWeight: 600, color: "#6b5d49", marginBottom: 4 }}>Cliente</span>
+            <input value={buscaCliente} onChange={e => setBuscaCliente(e.target.value)} placeholder="Nome do cliente…" style={inputStyle} />
+          </div>
+          <div>
+            <span style={{ display: "block", fontSize: 11.5, fontWeight: 600, color: "#6b5d49", marginBottom: 4 }}>Ordem de Produção</span>
+            <input value={buscaOP} onChange={e => setBuscaOP(e.target.value)} placeholder="Nº da OP…" style={inputStyle} />
+          </div>
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+          <div>
+            <span style={{ display: "block", fontSize: 11.5, fontWeight: 600, color: "#6b5d49", marginBottom: 4 }}>Período — de</span>
+            <input type="date" value={dataInicio} onChange={e => setDataInicio(e.target.value)} style={inputStyle} />
+          </div>
+          <div>
+            <span style={{ display: "block", fontSize: 11.5, fontWeight: 600, color: "#6b5d49", marginBottom: 4 }}>até</span>
+            <input type="date" value={dataFim} onChange={e => setDataFim(e.target.value)} style={inputStyle} />
+          </div>
+        </div>
+      </Card>
       <div style={{ display: "flex", justifyContent: "flex-end" }}>
-        <button onClick={imprimirGrade} style={{
-          background: "transparent", border: "1px dashed #2f4a63", color: "#2f4a63", fontSize: 11.5, fontWeight: 700,
-          cursor: "pointer", padding: "4px 9px", borderRadius: "3px 9px 9px 3px",
+        <button onClick={imprimirGrade} disabled={filtrados.length === 0} style={{
+          background: "transparent", border: "1px dashed " + (filtrados.length === 0 ? "#d9cfb7" : "#2f4a63"),
+          color: filtrados.length === 0 ? "#a3937a" : "#2f4a63", fontSize: 11.5, fontWeight: 700,
+          cursor: filtrados.length === 0 ? "not-allowed" : "pointer", padding: "4px 9px", borderRadius: "3px 9px 9px 3px",
         }}>Imprimir</button>
       </div>
-      {ordenados.slice(0, 40).map(r => {
+      {filtrados.length === 0 && (
+        <div style={{ fontSize: 13.5, color: "#a3937a", padding: "8px 2px" }}>Nenhuma produção concluída encontrada para essa pesquisa.</div>
+      )}
+      {filtrados.slice(0, 40).map(r => {
         const cor = r.cor || (r.classificacao ? corDoRegistro(r.status, r.classificacao) : "laranja");
         return (
           <Card key={r.id} style={{ padding: 12, borderLeft: `4px solid ${COR_INFO[cor].dot}` }}>
@@ -4112,7 +4177,6 @@ function Relatorios({ registros, produtos, etapas, colaboradores, setores, avali
   // jornada CLT) e custo de materiais (a partir do preço unitário salvo
   // no momento de cada baixa de estoque), para dar uma visão de custo das
   // operações do período — visível só para o Administrador.
-  const HORAS_MES_PADRAO = 220;
   const custoMaoDeObraPorColaborador = useMemo(() => {
     const map = {};
     concluidosPeriodo.forEach(r => {
@@ -4146,7 +4210,6 @@ function Relatorios({ registros, produtos, etapas, colaboradores, setores, avali
   }, [movimentacoesMaterial, start, end]);
   const custoMateriaisTotal = Math.round(custoMateriaisPorMaterial.reduce((s, m) => s + m.custo, 0) * 100) / 100;
   const custoTotalGeral = Math.round((custoMaoDeObraTotal + custoMateriaisTotal) * 100) / 100;
-  const fmtMoeda = (v) => (v || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 
   // Adicionado: gasto por pedido (Ordem de Produção) — cruza a mão de
   // obra de cada registro concluído com o consumo de material de cada
@@ -5383,7 +5446,7 @@ function Cadastros({ produtos, setProdutos, etapas, setEtapas, vinculos, setVinc
       {sub === "departamentos" && <DepartamentosCadastro setores={setores} setSetores={setSetores} etapas={etapas} setEtapas={setEtapas} vinculos={vinculos} setVinculos={setVinculos} equipes={equipes} setEquipes={setEquipes} anexos={anexos} onSalvarAnexos={onSalvarAnexos} onRemoverAnexo={onRemoverAnexo} />}
       {sub === "colaboradores" && <ColaboradoresCadastro colaboradores={colaboradores} setColaboradores={setColaboradores} acessos={acessos} ehAdministrador={ehAdministrador} />}
       {sub === "equipes" && <EquipesCadastro equipes={equipes} setEquipes={setEquipes} setores={setores} colaboradores={colaboradores} />}
-      {sub === "produtos" && <ProdutosCadastro produtos={produtos} setProdutos={setProdutos} etapas={etapas} vinculos={vinculos} setVinculos={setVinculos} setores={setores} materiais={materiais} consumosMaterial={consumosMaterial} setConsumosMaterial={setConsumosMaterial} ehAdministrador={ehAdministrador} onCriarCamisetaTeste={criarCamisetaTeste} />}
+      {sub === "produtos" && <ProdutosCadastro produtos={produtos} setProdutos={setProdutos} etapas={etapas} vinculos={vinculos} setVinculos={setVinculos} setores={setores} materiais={materiais} consumosMaterial={consumosMaterial} setConsumosMaterial={setConsumosMaterial} colaboradores={colaboradores} ehAdministrador={ehAdministrador} onCriarCamisetaTeste={criarCamisetaTeste} />}
       {sub === "materiais" && <MateriaisCadastro materiais={materiais} setMateriais={setMateriais} consumosMaterial={consumosMaterial} setConsumosMaterial={setConsumosMaterial} fornecedores={fornecedores} />}
       {sub === "fornecedores" && <FornecedoresCadastro fornecedores={fornecedores} setFornecedores={setFornecedores} solicitacoesCompra={solicitacoesCompra} cotacoesCompra={cotacoesCompra} materiais={materiais} />}
       {sub === "equipamentos" && <EquipamentosCadastro equipamentos={equipamentos} setEquipamentos={setEquipamentos} setores={setores} />}
@@ -6513,7 +6576,7 @@ function FeriadosCadastro({ feriados, setFeriados }) {
   );
 }
 
-function ProdutosCadastro({ produtos, setProdutos, etapas, vinculos, setVinculos, setores, materiais, consumosMaterial, setConsumosMaterial, ehAdministrador, onCriarCamisetaTeste }) {
+function ProdutosCadastro({ produtos, setProdutos, etapas, vinculos, setVinculos, setores, materiais, consumosMaterial, setConsumosMaterial, colaboradores, ehAdministrador, onCriarCamisetaTeste }) {
   const [nome, setNome] = useState("");
   const [expandido, setExpandido] = useState(null);
   const [novaEtapaId, setNovaEtapaId] = useState("");
@@ -6622,6 +6685,26 @@ function ProdutosCadastro({ produtos, setProdutos, etapas, vinculos, setVinculos
   const nomeMaterial = (id) => materiais.find(m => m.id === id)?.nome || "—";
   const unidadeMaterial = (id) => materiais.find(m => m.id === id)?.unidade || "";
 
+  // Adicionado: custo estimado por peça, combinando mão de obra e
+  // material — dá uma referência de custo unitário direto no cadastro,
+  // sem precisar abrir uma OP ou orçamento pra ter uma ideia do custo.
+  // Mão de obra usa o salário médio dos colaboradores (convertido para
+  // valor-hora com a mesma base de 220h/mês do relatório de custos),
+  // já que o produto ainda não tem colaborador definido nessa etapa.
+  const colaboradoresComSalario = (colaboradores || []).filter(c => c.salarioMensal);
+  const valorHoraMedio = colaboradoresComSalario.length > 0
+    ? colaboradoresComSalario.reduce((s, c) => s + c.salarioMensal, 0) / colaboradoresComSalario.length / HORAS_MES_PADRAO
+    : 0;
+  function custoDoProduto(produtoId) {
+    const vinculosProduto = vinculos.filter(v => v.produtoId === produtoId);
+    const vinculosPeca = vinculosProduto.filter(v => (etapas.find(e => e.id === v.etapaId)?.tipoCalculo || "peca") !== "lote");
+    const vinculosLote = vinculosProduto.filter(v => (etapas.find(e => e.id === v.etapaId)?.tipoCalculo || "peca") === "lote");
+    const maoDeObra = vinculosPeca.reduce((s, v) => s + (v.tempoEstimadoSeg / 3600) * valorHoraMedio, 0);
+    const material = consumosMaterial.filter(c => c.produtoId === produtoId)
+      .reduce((s, c) => s + c.quantidadePorPeca * (materiais.find(m => m.id === c.materialId)?.preco || 0), 0);
+    return { maoDeObra, material, total: maoDeObra + material, vinculosLote };
+  }
+
   return (
     <div>
       {ehAdministrador && onCriarCamisetaTeste && (
@@ -6650,6 +6733,7 @@ function ProdutosCadastro({ produtos, setProdutos, etapas, vinculos, setVinculos
           const consumosProduto = consumosMaterial.filter(c => c.produtoId === p.id);
           const aberto = expandido === p.id;
           const editando = editandoId === p.id;
+          const custo = aberto ? custoDoProduto(p.id) : null;
           return (
             <Card key={p.id} style={{ padding: 0, overflow: "hidden" }}>
               <div style={{ padding: "12px 14px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
@@ -6752,6 +6836,34 @@ function ProdutosCadastro({ produtos, setProdutos, etapas, vinculos, setVinculos
                       </Select>
                       <input type="number" min="0" step="0.001" placeholder="qtd/peça" value={novaQtdMaterial} onChange={e => setNovaQtdMaterial(e.target.value)} style={{ ...inputStyle, width: 90 }} />
                       <PrimaryButton onClick={() => vincularMaterial(p.id)} disabled={!novoMaterialId || !(parseFloat(novaQtdMaterial || "0") > 0)}>Vincular</PrimaryButton>
+                    </div>
+                  )}
+
+                  {custo && (custo.maoDeObra > 0 || custo.material > 0) && (
+                    <div style={{ marginTop: 16, paddingTop: 12, borderTop: "1px solid #efe8d8" }}>
+                      <div style={{ fontSize: 12.5, fontWeight: 700, color: "#1c2b39", marginBottom: 8 }}>Custo estimado por peça</div>
+                      <div style={{ display: "flex", gap: 18, flexWrap: "wrap", background: "#fff", border: "1px solid #e6ddc8", borderRadius: 8, padding: "10px 14px" }}>
+                        <div>
+                          <div style={{ fontSize: 18, fontWeight: 800, color: "#2f4a63" }}>{fmtMoeda(custo.total)}</div>
+                          <div style={{ fontSize: 10.5, color: "#a3937a" }}>custo total</div>
+                        </div>
+                        <div>
+                          <div style={{ fontSize: 14, fontWeight: 700, color: "#6b5d49" }}>{fmtMoeda(custo.maoDeObra)}</div>
+                          <div style={{ fontSize: 10.5, color: "#a3937a" }}>mão de obra</div>
+                        </div>
+                        <div>
+                          <div style={{ fontSize: 14, fontWeight: 700, color: "#6b5d49" }}>{fmtMoeda(custo.material)}</div>
+                          <div style={{ fontSize: 10.5, color: "#a3937a" }}>material</div>
+                        </div>
+                      </div>
+                      {!valorHoraMedio && (
+                        <div style={{ fontSize: 11, color: "#a3937a", marginTop: 6 }}>Cadastre o salário mensal dos colaboradores em Cadastros → Colaboradores para estimar a mão de obra.</div>
+                      )}
+                      {custo.vinculosLote.length > 0 && (
+                        <div style={{ fontSize: 11, color: "#a3937a", marginTop: 6 }}>
+                          Não inclui {custo.vinculosLote.length} etapa{custo.vinculosLote.length !== 1 ? "s" : ""} por lote ({custo.vinculosLote.map(v => nomeEtapa(v.etapaId)).join(", ")}) — o tempo delas é fixo por lote, então o custo por peça depende do tamanho do lote de produção.
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
