@@ -6055,7 +6055,7 @@ function Cadastros({ produtos, setProdutos, etapas, setEtapas, vinculos, setVinc
           ehAdministrador={ehAdministrador}
         />
       )}
-      {sub === "materiais" && <MateriaisCadastro materiais={materiais} setMateriais={setMateriais} consumosMaterial={consumosMaterial} setConsumosMaterial={setConsumosMaterial} fornecedores={fornecedores} gruposMaterial={gruposMaterial} setGruposMaterial={setGruposMaterial} />}
+      {sub === "materiais" && <MateriaisCadastro materiais={materiais} setMateriais={setMateriais} consumosMaterial={consumosMaterial} setConsumosMaterial={setConsumosMaterial} fornecedores={fornecedores} setFornecedores={setFornecedores} gruposMaterial={gruposMaterial} setGruposMaterial={setGruposMaterial} />}
       {sub === "fornecedores" && <FornecedoresCadastro fornecedores={fornecedores} setFornecedores={setFornecedores} solicitacoesCompra={solicitacoesCompra} cotacoesCompra={cotacoesCompra} materiais={materiais} />}
       {sub === "equipamentos" && <EquipamentosCadastro equipamentos={equipamentos} setEquipamentos={setEquipamentos} setores={setores} />}
       {sub === "clientes" && <ClientesCadastro clientes={clientes} setClientes={setClientes} />}
@@ -6615,14 +6615,19 @@ function ColaboradoresCadastro({ colaboradores, setColaboradores, acessos, ehAdm
 // baixa automática.
 const UNIDADES_MATERIAL = ["m", "kg", "un", "rolo", "cone", "l", "pacote"];
 
-function MateriaisCadastro({ materiais, setMateriais, consumosMaterial, setConsumosMaterial, fornecedores, gruposMaterial, setGruposMaterial }) {
+function MateriaisCadastro({ materiais, setMateriais, consumosMaterial, setConsumosMaterial, fornecedores, setFornecedores, gruposMaterial, setGruposMaterial }) {
   const [nome, setNome] = useState("");
   const [unidade, setUnidade] = useState("m");
   const [quantidadeEstoque, setQuantidadeEstoque] = useState("");
   const [estoqueMinimo, setEstoqueMinimo] = useState("");
   const [estoqueMaximo, setEstoqueMaximo] = useState("");
   const [preco, setPreco] = useState("");
+  // Corrigido: fornecedor agora é o primeiro campo do cadastro (e
+  // obrigatório) — é o código de cadastro dele que compõe o código do
+  // material (fornecedor.sequência).
   const [fornecedorId, setFornecedorId] = useState("");
+  const [novoFornecedorAberto, setNovoFornecedorAberto] = useState(false);
+  const [novoFornecedorNome, setNovoFornecedorNome] = useState("");
   // Adicionado: grupo de materiais — mesmo cadastro compartilhado com
   // Produtos (grupo_material), com opção de criar um novo ali mesmo.
   const [grupoMaterialId, setGrupoMaterialId] = useState("");
@@ -6635,13 +6640,23 @@ function MateriaisCadastro({ materiais, setMateriais, consumosMaterial, setConsu
   const [estoqueMaximoEdicao, setEstoqueMaximoEdicao] = useState("");
   const [precoEdicao, setPrecoEdicao] = useState("");
   const [fornecedorIdEdicao, setFornecedorIdEdicao] = useState("");
+  const [novoFornecedorAbertoEdicao, setNovoFornecedorAbertoEdicao] = useState(false);
+  const [novoFornecedorNomeEdicao, setNovoFornecedorNomeEdicao] = useState("");
   const [grupoMaterialIdEdicao, setGrupoMaterialIdEdicao] = useState("");
   const [novoGrupoAbertoEdicao, setNovoGrupoAbertoEdicao] = useState(false);
   const [novoGrupoNomeEdicao, setNovoGrupoNomeEdicao] = useState("");
   const [ajusteId, setAjusteId] = useState(null);
   const [ajusteValor, setAjusteValor] = useState("");
   const [ajusteTipo, setAjusteTipo] = useState("entrada");
-  const nomeFornecedor = (id) => (fornecedores || []).find(f => f.id === id)?.nome || null;
+  const fornecedorPorId = (id) => (fornecedores || []).find(f => f.id === id) || null;
+  async function criarFornecedorRapido(nomeBruto, aoCriar) {
+    const nomeCriado = nomeBruto.trim();
+    if (!nomeCriado) return;
+    const codigo = (fornecedores || []).reduce((max, f) => Math.max(max, f.codigo || 0), 0) + 1;
+    const novo = { id: uid(), codigo, nome: nomeCriado, contato: "", categoria: "", observacao: "" };
+    await setFornecedores([...(fornecedores || []), novo]);
+    aoCriar(novo.id);
+  }
   const grupoMaterialPorId = (id) => gruposMaterial.find(g => g.id === id) || null;
   async function criarGrupoMaterial(nomeBruto, aoCriar) {
     const nomeCriado = nomeBruto.trim().toUpperCase();
@@ -6661,15 +6676,21 @@ function MateriaisCadastro({ materiais, setMateriais, consumosMaterial, setConsu
       .sort((a, b) => a.nome.localeCompare(b.nome));
   }, [materiais, busca]);
 
+  const podeAdicionarMaterial = nome.trim().length > 0 && !!fornecedorId;
+
   async function adicionar() {
-    if (!nome.trim()) return;
-    // Corrigido: cada material ganha seu próprio código numérico
-    // sequencial de cadastro (igual grupo/tamanho de produto) — é esse
-    // código que o cadastro de Produtos usa como referência do segmento
-    // "tipo" no código do produto, no lugar do antigo "Tipo de material".
-    const codigo = materiais.reduce((max, m) => Math.max(max, m.codigo || 0), 0) + 1;
+    if (!podeAdicionarMaterial) return;
+    // Corrigido: o código do material passa a ser fornecedor + sequência
+    // do cadastro (ex.: 003.014 = fornecedor 003, 14º material
+    // cadastrado). A sequência continua sendo guardada à parte
+    // (sequencia) — é ela que o cadastro de Produtos usa como
+    // referência do segmento "tipo" no código do produto.
+    const sequencia = materiais.reduce((max, m) => Math.max(max, m.sequencia || 0), 0) + 1;
+    const fornecedor = fornecedorPorId(fornecedorId);
+    const seg = (n) => String(n || 0).padStart(3, "0");
     await setMateriais([...materiais, {
-      id: uid(), codigo, nome: nome.trim(), unidade,
+      id: uid(), sequencia, codigo: `${seg(fornecedor?.codigo)}.${seg(sequencia)}`,
+      nome: nome.trim(), unidade,
       quantidadeEstoque: quantidadeEstoque ? Math.round(parseFloat(quantidadeEstoque) * 1000) / 1000 : 0,
       estoqueMinimo: estoqueMinimo ? Math.round(parseFloat(estoqueMinimo) * 1000) / 1000 : null,
       // Adicionado: estoque máximo (usado para sugerir a quantidade de
@@ -6680,7 +6701,7 @@ function MateriaisCadastro({ materiais, setMateriais, consumosMaterial, setConsu
       // Adicionado: fornecedor principal do material (do cadastro de
       // Fornecedores) — o nome fica salvo junto (snapshot) pra continuar
       // aparecendo mesmo se o fornecedor for renomeado ou excluído depois.
-      fornecedorId: fornecedorId || null, fornecedorNomeSnap: fornecedorId ? nomeFornecedor(fornecedorId) : null,
+      fornecedorId, fornecedorNomeSnap: fornecedor?.nome || null,
       grupoMaterialId: grupoMaterialId || null, grupoMaterialNomeSnap: grupoMaterialId ? grupoMaterialPorId(grupoMaterialId)?.nome || null : null,
     }]);
     setNome(""); setQuantidadeEstoque(""); setEstoqueMinimo(""); setEstoqueMaximo(""); setPreco(""); setFornecedorId(""); setGrupoMaterialId("");
@@ -6703,13 +6724,18 @@ function MateriaisCadastro({ materiais, setMateriais, consumosMaterial, setConsu
     setGrupoMaterialIdEdicao(m.grupoMaterialId || "");
   }
   async function salvarEdicao(id) {
-    if (!nomeEdicao.trim()) return;
+    if (!nomeEdicao.trim() || !fornecedorIdEdicao) return;
+    const fornecedor = fornecedorPorId(fornecedorIdEdicao);
+    const seg = (n) => String(n || 0).padStart(3, "0");
     await setMateriais(materiais.map(m => m.id === id ? {
       ...m, nome: nomeEdicao.trim(), unidade: unidadeEdicao,
       estoqueMinimo: estoqueMinimoEdicao ? Math.round(parseFloat(estoqueMinimoEdicao) * 1000) / 1000 : null,
       estoqueMaximo: estoqueMaximoEdicao ? Math.round(parseFloat(estoqueMaximoEdicao) * 1000) / 1000 : null,
       preco: precoEdicao ? Math.round(parseFloat(precoEdicao) * 100) / 100 : null,
-      fornecedorId: fornecedorIdEdicao || null, fornecedorNomeSnap: fornecedorIdEdicao ? nomeFornecedor(fornecedorIdEdicao) : null,
+      fornecedorId: fornecedorIdEdicao, fornecedorNomeSnap: fornecedor?.nome || null,
+      // Corrigido: se o fornecedor mudar na edição, o código é
+      // recalculado com o novo fornecedor, mantendo a mesma sequência.
+      codigo: `${seg(fornecedor?.codigo)}.${seg(m.sequencia)}`,
       grupoMaterialId: grupoMaterialIdEdicao || null, grupoMaterialNomeSnap: grupoMaterialIdEdicao ? grupoMaterialPorId(grupoMaterialIdEdicao)?.nome || null : null,
     } : m));
     setEditandoId(null);
@@ -6727,7 +6753,23 @@ function MateriaisCadastro({ materiais, setMateriais, consumosMaterial, setConsu
   return (
     <div>
       <Card style={{ marginBottom: 16 }}>
-        <div style={{ fontSize: 15, fontWeight: 800, fontFamily: FONT_DISPLAY, marginBottom: 12, color: "#1c2b39" }}>Novo material</div>
+        <div style={{ fontSize: 15, fontWeight: 800, fontFamily: FONT_DISPLAY, marginBottom: 4, color: "#1c2b39" }}>Novo material</div>
+        <div style={{ fontSize: 11.5, color: "#a3937a", marginBottom: 10 }}>
+          Código: <b style={{ color: "#6b5d49", fontFamily: "monospace" }}>{String(fornecedorPorId(fornecedorId)?.codigo || 0).padStart(3, "0")}.{String(materiais.reduce((max, m) => Math.max(max, m.sequencia || 0), 0) + 1).padStart(3, "0")}</b>
+        </div>
+        <Field label="Fornecedor (obrigatório)">
+          <Select value={fornecedorId} onChange={e => setFornecedorId(e.target.value)}>
+            <option value="">Selecione…</option>
+            {[...(fornecedores || [])].sort((a, b) => a.nome.localeCompare(b.nome)).map(f => <option key={f.id} value={f.id}>{f.codigo != null ? `${String(f.codigo).padStart(3, "0")} · ` : ""}{f.nome}</option>)}
+          </Select>
+          <button type="button" onClick={() => setNovoFornecedorAberto(v => !v)} style={linkButtonStyle}>{novoFornecedorAberto ? "Cancelar" : "+ Novo fornecedor"}</button>
+          {novoFornecedorAberto && (
+            <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
+              <input value={novoFornecedorNome} onChange={e => setNovoFornecedorNome(e.target.value)} placeholder="Nome do fornecedor" style={{ ...inputStyle, flex: 1 }} onKeyDown={e => e.key === "Enter" && criarFornecedorRapido(novoFornecedorNome, id => { setFornecedorId(id); setNovoFornecedorNome(""); setNovoFornecedorAberto(false); })} />
+              <PrimaryButton onClick={() => criarFornecedorRapido(novoFornecedorNome, id => { setFornecedorId(id); setNovoFornecedorNome(""); setNovoFornecedorAberto(false); })} disabled={!novoFornecedorNome.trim()}><Plus size={16} /></PrimaryButton>
+            </div>
+          )}
+        </Field>
         <Field label="Nome">
           <input value={nome} onChange={e => setNome(e.target.value)} placeholder="Ex.: Malha 100% algodão" style={inputStyle} onKeyDown={e => e.key === "Enter" && adicionar()} />
         </Field>
@@ -6752,12 +6794,6 @@ function MateriaisCadastro({ materiais, setMateriais, consumosMaterial, setConsu
             <input type="number" min="0" step="0.01" value={estoqueMaximo} onChange={e => setEstoqueMaximo(e.target.value)} placeholder="Ideal" style={inputStyle} />
           </Field>
         </div>
-        <Field label="Fornecedor (opcional)">
-          <Select value={fornecedorId} onChange={e => setFornecedorId(e.target.value)}>
-            <option value="">Sem fornecedor definido</option>
-            {[...(fornecedores || [])].sort((a, b) => a.nome.localeCompare(b.nome)).map(f => <option key={f.id} value={f.id}>{f.nome}</option>)}
-          </Select>
-        </Field>
         <Field label="Grupo de materiais (opcional)">
           <Select value={grupoMaterialId} onChange={e => setGrupoMaterialId(e.target.value)}>
             <option value="">Selecione…</option>
@@ -6771,7 +6807,8 @@ function MateriaisCadastro({ materiais, setMateriais, consumosMaterial, setConsu
             </div>
           )}
         </Field>
-        <PrimaryButton onClick={adicionar} disabled={!nome.trim()} style={{ width: "100%" }}><Plus size={16} /> Adicionar material</PrimaryButton>
+        <PrimaryButton onClick={adicionar} disabled={!podeAdicionarMaterial} style={{ width: "100%" }}><Plus size={16} /> Adicionar material</PrimaryButton>
+        {!fornecedorId && <div style={{ fontSize: 11, color: "#a3937a", marginTop: 6, textAlign: "center" }}>Selecione (ou cadastre) o fornecedor para poder adicionar.</div>}
       </Card>
 
       {materiais.length > 0 && (
@@ -6811,11 +6848,18 @@ function MateriaisCadastro({ materiais, setMateriais, consumosMaterial, setConsu
                       <input type="number" min="0" step="0.01" value={estoqueMaximoEdicao} onChange={e => setEstoqueMaximoEdicao(e.target.value)} style={inputStyle} />
                     </Field>
                   </div>
-                  <Field label="Fornecedor (opcional)">
+                  <Field label="Fornecedor (obrigatório)">
                     <Select value={fornecedorIdEdicao} onChange={e => setFornecedorIdEdicao(e.target.value)}>
-                      <option value="">Sem fornecedor definido</option>
-                      {[...(fornecedores || [])].sort((a, b) => a.nome.localeCompare(b.nome)).map(f => <option key={f.id} value={f.id}>{f.nome}</option>)}
+                      <option value="">Selecione…</option>
+                      {[...(fornecedores || [])].sort((a, b) => a.nome.localeCompare(b.nome)).map(f => <option key={f.id} value={f.id}>{f.codigo != null ? `${String(f.codigo).padStart(3, "0")} · ` : ""}{f.nome}</option>)}
                     </Select>
+                    <button type="button" onClick={() => setNovoFornecedorAbertoEdicao(v => !v)} style={linkButtonStyle}>{novoFornecedorAbertoEdicao ? "Cancelar" : "+ Novo fornecedor"}</button>
+                    {novoFornecedorAbertoEdicao && (
+                      <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
+                        <input value={novoFornecedorNomeEdicao} onChange={e => setNovoFornecedorNomeEdicao(e.target.value)} placeholder="Nome do fornecedor" style={{ ...inputStyle, flex: 1 }} />
+                        <PrimaryButton onClick={() => criarFornecedorRapido(novoFornecedorNomeEdicao, id => { setFornecedorIdEdicao(id); setNovoFornecedorNomeEdicao(""); setNovoFornecedorAbertoEdicao(false); })} disabled={!novoFornecedorNomeEdicao.trim()}><Plus size={16} /></PrimaryButton>
+                      </div>
+                    )}
                   </Field>
                   <Field label="Grupo de materiais (opcional)">
                     <Select value={grupoMaterialIdEdicao} onChange={e => setGrupoMaterialIdEdicao(e.target.value)}>
@@ -6831,7 +6875,7 @@ function MateriaisCadastro({ materiais, setMateriais, consumosMaterial, setConsu
                     )}
                   </Field>
                   <div style={{ display: "flex", gap: 8 }}>
-                    <PrimaryButton onClick={() => salvarEdicao(m.id)} disabled={!nomeEdicao.trim()} style={{ flex: 1 }}>Salvar</PrimaryButton>
+                    <PrimaryButton onClick={() => salvarEdicao(m.id)} disabled={!nomeEdicao.trim() || !fornecedorIdEdicao} style={{ flex: 1 }}>Salvar</PrimaryButton>
                     <button onClick={() => setEditandoId(null)} style={{ border: "1.5px solid #d9cfb7", background: "#fff", borderRadius: 9, padding: "0 14px", color: "#6b5d49", fontWeight: 700, cursor: "pointer" }}>Cancelar</button>
                   </div>
                 </div>
@@ -6840,7 +6884,7 @@ function MateriaisCadastro({ materiais, setMateriais, consumosMaterial, setConsu
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                     <div>
                       <div style={{ fontWeight: 700, fontSize: 14, color: "#2a2015" }}>
-                        {m.codigo != null && <span style={{ color: "#a3937a", fontWeight: 600, fontFamily: "monospace" }}>{String(m.codigo).padStart(3, "0")} · </span>}
+                        {m.codigo != null && <span style={{ color: "#a3937a", fontWeight: 600, fontFamily: "monospace" }}>{m.codigo} · </span>}
                         {m.nome}
                       </div>
                       <div style={{ fontSize: 12, color: estoqueBaixo ? "#b13232" : "#a3937a" }}>
@@ -6900,8 +6944,12 @@ function FornecedoresCadastro({ fornecedores, setFornecedores, solicitacoesCompr
 
   async function adicionar() {
     if (!nome.trim()) return;
+    // Adicionado: código numérico sequencial de cadastro — é esse código
+    // que compõe o código do material (fornecedor + sequência) em
+    // Cadastros → Materiais.
+    const codigo = (fornecedores || []).reduce((max, f) => Math.max(max, f.codigo || 0), 0) + 1;
     await setFornecedores([...(fornecedores || []), {
-      id: uid(), nome: nome.trim(), contato: contato.trim(), categoria: categoria.trim(), observacao: observacao.trim(),
+      id: uid(), codigo, nome: nome.trim(), contato: contato.trim(), categoria: categoria.trim(), observacao: observacao.trim(),
     }]);
     setNome(""); setContato(""); setCategoria(""); setObservacao("");
   }
@@ -6950,7 +6998,10 @@ function FornecedoresCadastro({ fornecedores, setFornecedores, solicitacoesCompr
             <Card key={f.id} style={{ padding: 0, overflow: "hidden" }}>
               <div style={{ padding: "11px 14px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                 <div onClick={() => !editando && setExpandidoId(aberto ? null : f.id)} style={{ cursor: "pointer", flex: 1 }}>
-                  <div style={{ fontWeight: 700, fontSize: 14, color: "#2a2015" }}>{f.nome}</div>
+                  <div style={{ fontWeight: 700, fontSize: 14, color: "#2a2015" }}>
+                    {f.codigo != null && <span style={{ color: "#a3937a", fontWeight: 600, fontFamily: "monospace" }}>{String(f.codigo).padStart(3, "0")} · </span>}
+                    {f.nome}
+                  </div>
                   <div style={{ fontSize: 12, color: "#a3937a" }}>
                     {f.categoria ? `${f.categoria} · ` : ""}{f.contato || "sem contato"} · {historico.length} compra{historico.length !== 1 ? "s" : ""}
                   </div>
@@ -7314,11 +7365,12 @@ function ProdutosCadastro({ produtos, setProdutos, etapas, vinculos, setVinculos
   const codigoGrupo = (id) => gruposMaterial.find(g => g.id === id)?.codigo;
   const codigoTamanho = (id) => tamanhos.find(t => t.id === id)?.codigo;
   // O "tipo" do produto vem do material escolhido como tecido: cada
-  // material tem seu próprio código de cadastro (sequencial, atribuído
-  // em Materiais), usado direto como o segmento "tipo" do código.
+  // material tem sua própria sequência de cadastro (o código visível do
+  // material em Materiais é fornecedor + essa sequência), usada direto
+  // como o segmento "tipo" do código do produto.
   const materialTecido = (id) => materiais.find(m => m.id === id) || null;
   const nomeMaterialTecido = (id) => materialTecido(id)?.nome || null;
-  const codigoTipoDoMaterial = (id) => materialTecido(id)?.codigo;
+  const codigoTipoDoMaterial = (id) => materialTecido(id)?.sequencia;
   const materiaisOrdenados = useMemo(() => [...materiais].sort((a, b) => a.nome.localeCompare(b.nome)), [materiais]);
 
   const podeCriarProduto = nome.trim().length > 0 && !!tamanhoId;
@@ -7474,7 +7526,7 @@ function ProdutosCadastro({ produtos, setProdutos, etapas, vinculos, setVinculos
           <Field label="Tecido (cadastro de Materiais, opcional)">
             <Select value={materialTecidoId} onChange={e => setMaterialTecidoId(e.target.value)}>
               <option value="">Selecione…</option>
-              {materiaisOrdenados.map(m => <option key={m.id} value={m.id}>{m.codigo != null ? `${String(m.codigo).padStart(3, "0")} · ` : ""}{m.nome}</option>)}
+              {materiaisOrdenados.map(m => <option key={m.id} value={m.id}>{m.codigo != null ? `${m.codigo} · ` : ""}{m.nome}</option>)}
             </Select>
           </Field>
           <Field label="Tamanho (obrigatório)">
@@ -7552,7 +7604,7 @@ function ProdutosCadastro({ produtos, setProdutos, etapas, vinculos, setVinculos
                         <Field label="Tecido (cadastro de Materiais, opcional)">
                           <Select value={materialTecidoIdEdicao} onChange={e => setMaterialTecidoIdEdicao(e.target.value)}>
                             <option value="">Selecione…</option>
-                            {materiaisOrdenados.map(m => <option key={m.id} value={m.id}>{m.codigo != null ? `${String(m.codigo).padStart(3, "0")} · ` : ""}{m.nome}</option>)}
+                            {materiaisOrdenados.map(m => <option key={m.id} value={m.id}>{m.codigo != null ? `${m.codigo} · ` : ""}{m.nome}</option>)}
                           </Select>
                         </Field>
                         <Field label="Tamanho (obrigatório)">
