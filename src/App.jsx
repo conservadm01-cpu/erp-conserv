@@ -521,13 +521,11 @@ export default function App() {
   // ordem em que é criado (ex.: "AVENTAL" = grupo 001), usado para
   // montar o código do produto (grupo.tipo.tamanho).
   //
-  // Corrigido: "tipo de material" deixou de ser escolhido direto no
-  // produto — agora é um campo do cadastro de Materiais (ex.: o material
-  // "Malha PV Premium" é do tipo "TECIDO"), e o produto busca o tecido
-  // direto na base de Materiais, herdando o código do tipo a partir do
-  // material escolhido. "Cor" foi removida do cadastro de produtos.
+  // Corrigido: o produto busca o tecido direto na base de Materiais, e o
+  // segmento "tipo" do código do produto é o próprio código de cadastro
+  // do material escolhido (cada material tem o seu, sequencial, igual
+  // grupo/tamanho). "Cor" e "Tipo de material" foram removidos.
   const [gruposMaterial, setGruposMaterial, gruposMaterialLoaded] = useRecordCollectionArray("grupo_material", null);
-  const [tiposMaterial, setTiposMaterial, tiposMaterialLoaded] = useRecordCollectionArray("tipo_material", null);
   const [tamanhos, setTamanhos, tamanhosLoaded] = useRecordCollectionArray("tamanho", null);
   const [vinculos, setVinculos, vinculosLoaded] = useRecordCollectionArray("vinculo", "vinculos_v2");
   const [colaboradores, setColaboradores, colabLoaded] = useRecordCollectionArray("colaborador", "colaboradores_v2");
@@ -646,7 +644,7 @@ export default function App() {
     && equipesLoaded && registrosLoaded && avaliacoesLoaded && anexosLoaded && acessosLoaded && ordensLoaded && clientesLoaded
     && materiaisLoaded && consumosMaterialLoaded && movimentacoesMaterialLoaded && solicitacoesCompraLoaded && cotacoesCompraLoaded
     && fornecedoresLoaded && equipamentosLoaded && movimentacoesEstoqueLoaded && feriadosLoaded && solicitacoesArteLoaded
-    && gruposMaterialLoaded && tiposMaterialLoaded && tamanhosLoaded;
+    && gruposMaterialLoaded && tamanhosLoaded;
   const [seedChecked, setSeedChecked] = useState(false);
 
   // Adicionado: os três perfis de acesso definem quais abas o usuário
@@ -938,7 +936,6 @@ export default function App() {
             solicitacoesCompra={solicitacoesCompra} cotacoesCompra={cotacoesCompra}
             feriados={feriados} setFeriados={setFeriados}
             gruposMaterial={gruposMaterial} setGruposMaterial={setGruposMaterial}
-            tiposMaterial={tiposMaterial} setTiposMaterial={setTiposMaterial}
             tamanhos={tamanhos} setTamanhos={setTamanhos}
             ehAdministrador={ehAdministrador}
           />
@@ -6022,7 +6019,7 @@ function RelatorioGradeImpressao({ payload, onFechar }) {
 }
 
 // ---------- Cadastros ----------
-function Cadastros({ produtos, setProdutos, etapas, setEtapas, vinculos, setVinculos, colaboradores, setColaboradores, setores, setSetores, equipes, setEquipes, anexos, onSalvarAnexos, onRemoverAnexo, acessos, clientes, setClientes, materiais, setMateriais, consumosMaterial, setConsumosMaterial, fornecedores, setFornecedores, equipamentos, setEquipamentos, solicitacoesCompra, cotacoesCompra, feriados, setFeriados, gruposMaterial, setGruposMaterial, tiposMaterial, setTiposMaterial, tamanhos, setTamanhos, ehAdministrador }) {
+function Cadastros({ produtos, setProdutos, etapas, setEtapas, vinculos, setVinculos, colaboradores, setColaboradores, setores, setSetores, equipes, setEquipes, anexos, onSalvarAnexos, onRemoverAnexo, acessos, clientes, setClientes, materiais, setMateriais, consumosMaterial, setConsumosMaterial, fornecedores, setFornecedores, equipamentos, setEquipamentos, solicitacoesCompra, cotacoesCompra, feriados, setFeriados, gruposMaterial, setGruposMaterial, tamanhos, setTamanhos, ehAdministrador }) {
   const [sub, setSub] = useState("departamentos");
 
   return (
@@ -6058,7 +6055,7 @@ function Cadastros({ produtos, setProdutos, etapas, setEtapas, vinculos, setVinc
           ehAdministrador={ehAdministrador}
         />
       )}
-      {sub === "materiais" && <MateriaisCadastro materiais={materiais} setMateriais={setMateriais} consumosMaterial={consumosMaterial} setConsumosMaterial={setConsumosMaterial} fornecedores={fornecedores} tiposMaterial={tiposMaterial} setTiposMaterial={setTiposMaterial} />}
+      {sub === "materiais" && <MateriaisCadastro materiais={materiais} setMateriais={setMateriais} consumosMaterial={consumosMaterial} setConsumosMaterial={setConsumosMaterial} fornecedores={fornecedores} />}
       {sub === "fornecedores" && <FornecedoresCadastro fornecedores={fornecedores} setFornecedores={setFornecedores} solicitacoesCompra={solicitacoesCompra} cotacoesCompra={cotacoesCompra} materiais={materiais} />}
       {sub === "equipamentos" && <EquipamentosCadastro equipamentos={equipamentos} setEquipamentos={setEquipamentos} setores={setores} />}
       {sub === "clientes" && <ClientesCadastro clientes={clientes} setClientes={setClientes} />}
@@ -6618,7 +6615,7 @@ function ColaboradoresCadastro({ colaboradores, setColaboradores, acessos, ehAdm
 // baixa automática.
 const UNIDADES_MATERIAL = ["m", "kg", "un", "rolo", "cone", "l", "pacote"];
 
-function MateriaisCadastro({ materiais, setMateriais, consumosMaterial, setConsumosMaterial, fornecedores, tiposMaterial, setTiposMaterial }) {
+function MateriaisCadastro({ materiais, setMateriais, consumosMaterial, setConsumosMaterial, fornecedores }) {
   const [nome, setNome] = useState("");
   const [unidade, setUnidade] = useState("m");
   const [quantidadeEstoque, setQuantidadeEstoque] = useState("");
@@ -6626,13 +6623,6 @@ function MateriaisCadastro({ materiais, setMateriais, consumosMaterial, setConsu
   const [estoqueMaximo, setEstoqueMaximo] = useState("");
   const [preco, setPreco] = useState("");
   const [fornecedorId, setFornecedorId] = useState("");
-  // Adicionado: tipo de material (ex.: TECIDO, AVIAMENTO, LINHA) — cadastro
-  // próprio com código numérico sequencial, com opção de criar um novo ali
-  // mesmo. É esse tipo que o cadastro de Produtos vai buscar depois, ao
-  // escolher o tecido de um produto direto na base de Materiais.
-  const [tipoMaterialId, setTipoMaterialId] = useState("");
-  const [novoTipoAberto, setNovoTipoAberto] = useState(false);
-  const [novoTipoNome, setNovoTipoNome] = useState("");
   const [editandoId, setEditandoId] = useState(null);
   const [nomeEdicao, setNomeEdicao] = useState("");
   const [unidadeEdicao, setUnidadeEdicao] = useState("m");
@@ -6640,36 +6630,29 @@ function MateriaisCadastro({ materiais, setMateriais, consumosMaterial, setConsu
   const [estoqueMaximoEdicao, setEstoqueMaximoEdicao] = useState("");
   const [precoEdicao, setPrecoEdicao] = useState("");
   const [fornecedorIdEdicao, setFornecedorIdEdicao] = useState("");
-  const [tipoMaterialIdEdicao, setTipoMaterialIdEdicao] = useState("");
-  const [novoTipoAbertoEdicao, setNovoTipoAbertoEdicao] = useState(false);
-  const [novoTipoNomeEdicao, setNovoTipoNomeEdicao] = useState("");
   const [ajusteId, setAjusteId] = useState(null);
   const [ajusteValor, setAjusteValor] = useState("");
   const [ajusteTipo, setAjusteTipo] = useState("entrada");
   const nomeFornecedor = (id) => (fornecedores || []).find(f => f.id === id)?.nome || null;
-  async function criarTipoMaterial(nomeBruto, aoCriar) {
-    const nomeCriado = nomeBruto.trim().toUpperCase();
-    if (!nomeCriado) return;
-    const codigo = tiposMaterial.reduce((max, t) => Math.max(max, t.codigo || 0), 0) + 1;
-    const novo = { id: uid(), codigo, nome: nomeCriado };
-    await setTiposMaterial([...tiposMaterial, novo]);
-    aoCriar(novo.id);
-  }
-  const tipoMaterialPorId = (id) => tiposMaterial.find(t => t.id === id) || null;
   // Adicionado: pesquisa por nome do material ou fornecedor — útil
   // quando o cadastro cresce e fica difícil rolar a lista toda.
   const [busca, setBusca] = useState("");
   const materiaisFiltrados = useMemo(() => {
     const termo = busca.trim().toLowerCase();
     return [...materiais]
-      .filter(m => !termo || m.nome.toLowerCase().includes(termo) || (m.fornecedorNomeSnap || "").toLowerCase().includes(termo) || (m.tipoMaterialNomeSnap || "").toLowerCase().includes(termo))
+      .filter(m => !termo || m.nome.toLowerCase().includes(termo) || (m.fornecedorNomeSnap || "").toLowerCase().includes(termo))
       .sort((a, b) => a.nome.localeCompare(b.nome));
   }, [materiais, busca]);
 
   async function adicionar() {
     if (!nome.trim()) return;
+    // Corrigido: cada material ganha seu próprio código numérico
+    // sequencial de cadastro (igual grupo/tamanho de produto) — é esse
+    // código que o cadastro de Produtos usa como referência do segmento
+    // "tipo" no código do produto, no lugar do antigo "Tipo de material".
+    const codigo = materiais.reduce((max, m) => Math.max(max, m.codigo || 0), 0) + 1;
     await setMateriais([...materiais, {
-      id: uid(), nome: nome.trim(), unidade,
+      id: uid(), codigo, nome: nome.trim(), unidade,
       quantidadeEstoque: quantidadeEstoque ? Math.round(parseFloat(quantidadeEstoque) * 1000) / 1000 : 0,
       estoqueMinimo: estoqueMinimo ? Math.round(parseFloat(estoqueMinimo) * 1000) / 1000 : null,
       // Adicionado: estoque máximo (usado para sugerir a quantidade de
@@ -6681,14 +6664,8 @@ function MateriaisCadastro({ materiais, setMateriais, consumosMaterial, setConsu
       // Fornecedores) — o nome fica salvo junto (snapshot) pra continuar
       // aparecendo mesmo se o fornecedor for renomeado ou excluído depois.
       fornecedorId: fornecedorId || null, fornecedorNomeSnap: fornecedorId ? nomeFornecedor(fornecedorId) : null,
-      // Adicionado: tipo de material (ex.: TECIDO) — o código e o nome
-      // ficam salvos junto (snapshot) pra o cadastro de Produtos poder
-      // montar o código do produto sem precisar do cadastro de tipos.
-      tipoMaterialId: tipoMaterialId || null,
-      tipoMaterialNomeSnap: tipoMaterialId ? tipoMaterialPorId(tipoMaterialId)?.nome || null : null,
-      tipoMaterialCodigoSnap: tipoMaterialId ? tipoMaterialPorId(tipoMaterialId)?.codigo ?? null : null,
     }]);
-    setNome(""); setQuantidadeEstoque(""); setEstoqueMinimo(""); setEstoqueMaximo(""); setPreco(""); setFornecedorId(""); setTipoMaterialId("");
+    setNome(""); setQuantidadeEstoque(""); setEstoqueMinimo(""); setEstoqueMaximo(""); setPreco(""); setFornecedorId("");
   }
   async function excluir(id) {
     const consumosDoMaterial = consumosMaterial.filter(c => c.materialId === id);
@@ -6705,7 +6682,6 @@ function MateriaisCadastro({ materiais, setMateriais, consumosMaterial, setConsu
     setEstoqueMaximoEdicao(m.estoqueMaximo != null ? String(m.estoqueMaximo) : "");
     setPrecoEdicao(m.preco != null ? String(m.preco) : "");
     setFornecedorIdEdicao(m.fornecedorId || "");
-    setTipoMaterialIdEdicao(m.tipoMaterialId || "");
   }
   async function salvarEdicao(id) {
     if (!nomeEdicao.trim()) return;
@@ -6714,9 +6690,6 @@ function MateriaisCadastro({ materiais, setMateriais, consumosMaterial, setConsu
       estoqueMinimo: estoqueMinimoEdicao ? Math.round(parseFloat(estoqueMinimoEdicao) * 1000) / 1000 : null,
       estoqueMaximo: estoqueMaximoEdicao ? Math.round(parseFloat(estoqueMaximoEdicao) * 1000) / 1000 : null,
       preco: precoEdicao ? Math.round(parseFloat(precoEdicao) * 100) / 100 : null,
-      tipoMaterialId: tipoMaterialIdEdicao || null,
-      tipoMaterialNomeSnap: tipoMaterialIdEdicao ? tipoMaterialPorId(tipoMaterialIdEdicao)?.nome || null : null,
-      tipoMaterialCodigoSnap: tipoMaterialIdEdicao ? tipoMaterialPorId(tipoMaterialIdEdicao)?.codigo ?? null : null,
       fornecedorId: fornecedorIdEdicao || null, fornecedorNomeSnap: fornecedorIdEdicao ? nomeFornecedor(fornecedorIdEdicao) : null,
     } : m));
     setEditandoId(null);
@@ -6748,19 +6721,6 @@ function MateriaisCadastro({ materiais, setMateriais, consumosMaterial, setConsu
             <input type="number" min="0" step="0.01" value={preco} onChange={e => setPreco(e.target.value)} placeholder="Ex.: 18.90" style={inputStyle} />
           </Field>
         </div>
-        <Field label="Tipo de material (opcional)">
-          <Select value={tipoMaterialId} onChange={e => setTipoMaterialId(e.target.value)}>
-            <option value="">Selecione…</option>
-            {[...tiposMaterial].sort((a, b) => a.codigo - b.codigo).map(t => <option key={t.id} value={t.id}>{String(t.codigo).padStart(3, "0")} · {t.nome}</option>)}
-          </Select>
-          <button type="button" onClick={() => setNovoTipoAberto(v => !v)} style={linkButtonStyle}>{novoTipoAberto ? "Cancelar" : "+ Novo tipo"}</button>
-          {novoTipoAberto && (
-            <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
-              <input value={novoTipoNome} onChange={e => setNovoTipoNome(e.target.value.toUpperCase())} placeholder="EX.: TECIDO" style={{ ...inputStyle, flex: 1 }} onKeyDown={e => e.key === "Enter" && criarTipoMaterial(novoTipoNome, id => { setTipoMaterialId(id); setNovoTipoNome(""); setNovoTipoAberto(false); })} />
-              <PrimaryButton onClick={() => criarTipoMaterial(novoTipoNome, id => { setTipoMaterialId(id); setNovoTipoNome(""); setNovoTipoAberto(false); })} disabled={!novoTipoNome.trim()}><Plus size={16} /></PrimaryButton>
-            </div>
-          )}
-        </Field>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
           <Field label="Estoque atual">
             <input type="number" min="0" step="0.01" value={quantidadeEstoque} onChange={e => setQuantidadeEstoque(e.target.value)} placeholder="0" style={inputStyle} />
@@ -6810,19 +6770,6 @@ function MateriaisCadastro({ materiais, setMateriais, consumosMaterial, setConsu
                       <input type="number" min="0" step="0.01" value={precoEdicao} onChange={e => setPrecoEdicao(e.target.value)} style={inputStyle} />
                     </Field>
                   </div>
-                  <Field label="Tipo de material (opcional)">
-                    <Select value={tipoMaterialIdEdicao} onChange={e => setTipoMaterialIdEdicao(e.target.value)}>
-                      <option value="">Selecione…</option>
-                      {[...tiposMaterial].sort((a, b) => a.codigo - b.codigo).map(t => <option key={t.id} value={t.id}>{String(t.codigo).padStart(3, "0")} · {t.nome}</option>)}
-                    </Select>
-                    <button type="button" onClick={() => setNovoTipoAbertoEdicao(v => !v)} style={linkButtonStyle}>{novoTipoAbertoEdicao ? "Cancelar" : "+ Novo tipo"}</button>
-                    {novoTipoAbertoEdicao && (
-                      <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
-                        <input value={novoTipoNomeEdicao} onChange={e => setNovoTipoNomeEdicao(e.target.value.toUpperCase())} placeholder="EX.: TECIDO" style={{ ...inputStyle, flex: 1 }} />
-                        <PrimaryButton onClick={() => criarTipoMaterial(novoTipoNomeEdicao, id => { setTipoMaterialIdEdicao(id); setNovoTipoNomeEdicao(""); setNovoTipoAbertoEdicao(false); })} disabled={!novoTipoNomeEdicao.trim()}><Plus size={16} /></PrimaryButton>
-                      </div>
-                    )}
-                  </Field>
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
                     <Field label="Mínimo (opcional)">
                       <input type="number" min="0" step="0.01" value={estoqueMinimoEdicao} onChange={e => setEstoqueMinimoEdicao(e.target.value)} style={inputStyle} />
@@ -6847,14 +6794,13 @@ function MateriaisCadastro({ materiais, setMateriais, consumosMaterial, setConsu
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                     <div>
                       <div style={{ fontWeight: 700, fontSize: 14, color: "#2a2015" }}>
-                        {m.tipoMaterialNomeSnap && <span style={{ color: "#a3937a", fontWeight: 600, fontFamily: "monospace" }}>{String(m.tipoMaterialCodigoSnap).padStart(3, "0")} · </span>}
+                        {m.codigo != null && <span style={{ color: "#a3937a", fontWeight: 600, fontFamily: "monospace" }}>{String(m.codigo).padStart(3, "0")} · </span>}
                         {m.nome}
                       </div>
                       <div style={{ fontSize: 12, color: estoqueBaixo ? "#b13232" : "#a3937a" }}>
                         {m.quantidadeEstoque} {m.unidade} em estoque{estoqueBaixo ? " · abaixo do mínimo" : ""}
                         {m.estoqueMinimo != null || m.estoqueMaximo != null ? ` (min ${m.estoqueMinimo ?? "—"} / máx ${m.estoqueMaximo ?? "—"})` : ""}
                       </div>
-                      {m.tipoMaterialNomeSnap && <div style={{ fontSize: 11.5, color: "#a3937a" }}>Tipo: {m.tipoMaterialNomeSnap}</div>}
                       {fmtPreco(m.preco) && <div style={{ fontSize: 11.5, color: "#a3937a" }}>{fmtPreco(m.preco)}/{m.unidade}</div>}
                       {m.fornecedorNomeSnap && <div style={{ fontSize: 11.5, color: "#a3937a" }}>Fornecedor: {m.fornecedorNomeSnap}</div>}
                     </div>
@@ -7257,9 +7203,8 @@ function FeriadosCadastro({ feriados, setFeriados }) {
 //
 // Corrigido: "cor" foi removida do cadastro de produtos. "Tipo de
 // tecido" deixou de ser um cadastro próprio escolhido direto no produto
-// — agora o produto busca o tecido na base de Materiais (que tem seu
-// próprio campo "Tipo de material"), herdando o código do tipo a partir
-// do material escolhido.
+// — agora o produto busca o tecido na base de Materiais, herdando o
+// segmento "tipo" do próprio código de cadastro do material escolhido.
 function montarCodigoProduto({ grupoCodigo, tipoCodigo, tamanhoCodigo }) {
   const seg = (n) => String(n || 0).padStart(3, "0");
   return `${seg(grupoCodigo)}.${seg(tipoCodigo)}.${seg(tamanhoCodigo)}`;
@@ -7322,11 +7267,11 @@ function ProdutosCadastro({ produtos, setProdutos, etapas, vinculos, setVinculos
   const codigoGrupo = (id) => gruposMaterial.find(g => g.id === id)?.codigo;
   const codigoTamanho = (id) => tamanhos.find(t => t.id === id)?.codigo;
   // O "tipo" do produto vem do material escolhido como tecido: cada
-  // material tem seu próprio "Tipo de material" (cadastrado em
-  // Materiais), com nome e código já salvos nele (snapshot).
+  // material tem seu próprio código de cadastro (sequencial, atribuído
+  // em Materiais), usado direto como o segmento "tipo" do código.
   const materialTecido = (id) => materiais.find(m => m.id === id) || null;
   const nomeMaterialTecido = (id) => materialTecido(id)?.nome || null;
-  const codigoTipoDoMaterial = (id) => materialTecido(id)?.tipoMaterialCodigoSnap;
+  const codigoTipoDoMaterial = (id) => materialTecido(id)?.codigo;
   const materiaisOrdenados = useMemo(() => [...materiais].sort((a, b) => a.nome.localeCompare(b.nome)), [materiais]);
 
   const podeCriarProduto = nome.trim().length > 0 && !!tamanhoId;
@@ -7482,7 +7427,7 @@ function ProdutosCadastro({ produtos, setProdutos, etapas, vinculos, setVinculos
           <Field label="Tecido (cadastro de Materiais, opcional)">
             <Select value={materialTecidoId} onChange={e => setMaterialTecidoId(e.target.value)}>
               <option value="">Selecione…</option>
-              {materiaisOrdenados.map(m => <option key={m.id} value={m.id}>{m.nome}{m.tipoMaterialNomeSnap ? ` (${m.tipoMaterialNomeSnap})` : ""}</option>)}
+              {materiaisOrdenados.map(m => <option key={m.id} value={m.id}>{m.codigo != null ? `${String(m.codigo).padStart(3, "0")} · ` : ""}{m.nome}</option>)}
             </Select>
           </Field>
           <Field label="Tamanho (obrigatório)">
@@ -7560,7 +7505,7 @@ function ProdutosCadastro({ produtos, setProdutos, etapas, vinculos, setVinculos
                         <Field label="Tecido (cadastro de Materiais, opcional)">
                           <Select value={materialTecidoIdEdicao} onChange={e => setMaterialTecidoIdEdicao(e.target.value)}>
                             <option value="">Selecione…</option>
-                            {materiaisOrdenados.map(m => <option key={m.id} value={m.id}>{m.nome}{m.tipoMaterialNomeSnap ? ` (${m.tipoMaterialNomeSnap})` : ""}</option>)}
+                            {materiaisOrdenados.map(m => <option key={m.id} value={m.id}>{m.codigo != null ? `${String(m.codigo).padStart(3, "0")} · ` : ""}{m.nome}</option>)}
                           </Select>
                         </Field>
                         <Field label="Tamanho (obrigatório)">
