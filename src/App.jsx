@@ -3309,7 +3309,7 @@ function EstudioMockup({ onSalvar }) {
     });
     const img = new Image();
     await new Promise((resolve, reject) => { img.onload = resolve; img.onerror = reject; img.src = dataUrl; });
-    return { img, width: img.naturalWidth, height: img.naturalHeight };
+    return { img, width: img.naturalWidth, height: img.naturalHeight, tipo: file.type || "image/png" };
   }
   async function onEscolherProduto(e) {
     const file = e.target.files?.[0]; e.target.value = "";
@@ -3473,7 +3473,18 @@ function EstudioMockup({ onSalvar }) {
     const ctx = canvasFinal.getContext("2d");
     ctx.drawImage(imagemProduto.img, 0, 0);
     desenharLogoWarpeada(ctx, logo.img, cantosReais, 24);
-    onSalvar({ id: uid(), nome: `mockup-${Date.now()}.png`, tipo: "image/png", dataUrl: canvasFinal.toDataURL("image/png") });
+    // Adicionado: mantém o formato original da foto do produto (JPEG
+    // continua JPEG, WEBP continua WEBP) em vez de sempre forçar PNG —
+    // só cai pra PNG quando o formato original não é um dos que o
+    // canvas consegue exportar.
+    const formatosExportaveis = ["image/jpeg", "image/webp", "image/png"];
+    const mimeFinal = formatosExportaveis.includes(imagemProduto.tipo) ? imagemProduto.tipo : "image/png";
+    const extensao = mimeFinal === "image/jpeg" ? "jpg" : mimeFinal === "image/webp" ? "webp" : "png";
+    const qualidade = mimeFinal === "image/png" ? undefined : 0.95;
+    onSalvar({
+      id: uid(), nome: `mockup-${Date.now()}.${extensao}`, tipo: mimeFinal,
+      dataUrl: canvasFinal.toDataURL(mimeFinal, qualidade),
+    });
     setSalvo(true);
     setTimeout(() => setSalvo(false), 2500);
   }
