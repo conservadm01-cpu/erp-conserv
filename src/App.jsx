@@ -516,7 +516,7 @@ export default function App() {
   const [setores, setSetores, setoresLoaded] = useRecordCollectionArray("setor", "setores_v2");
   const [etapas, setEtapas, etapasLoaded] = useRecordCollectionArray("etapa", "etapas_v2");
   const [produtos, setProdutos, produtosLoaded] = useRecordCollectionArray("produto", "produtos_v2");
-  // Adicionado: grupo de materiais e tamanho são cadastros próprios do
+  // Adicionado: grupo de produto e tamanho são cadastros próprios do
   // produto — cada um com um código numérico sequencial atribuído na
   // ordem em que é criado (ex.: "AVENTAL" = grupo 001), usado para
   // montar o código do produto (grupo.tipo.tamanho).
@@ -525,6 +525,12 @@ export default function App() {
   // segmento "tipo" do código do produto é o próprio código de cadastro
   // do material escolhido (cada material tem o seu, sequencial, igual
   // grupo/tamanho). "Cor" e "Tipo de material" foram removidos.
+  //
+  // Corrigido: grupo de produto (categoria do produto, ex.: AVENTAL) e
+  // grupo de materiais (categoria do material, ex.: TECIDO) eram o mesmo
+  // cadastro compartilhado — agora são dois cadastros independentes,
+  // cada um com sua própria sequência numérica.
+  const [gruposProduto, setGruposProduto, gruposProdutoLoaded] = useRecordCollectionArray("grupo_produto", null);
   const [gruposMaterial, setGruposMaterial, gruposMaterialLoaded] = useRecordCollectionArray("grupo_material", null);
   const [tamanhos, setTamanhos, tamanhosLoaded] = useRecordCollectionArray("tamanho", null);
   const [vinculos, setVinculos, vinculosLoaded] = useRecordCollectionArray("vinculo", "vinculos_v2");
@@ -644,7 +650,7 @@ export default function App() {
     && equipesLoaded && registrosLoaded && avaliacoesLoaded && anexosLoaded && acessosLoaded && ordensLoaded && clientesLoaded
     && materiaisLoaded && consumosMaterialLoaded && movimentacoesMaterialLoaded && solicitacoesCompraLoaded && cotacoesCompraLoaded
     && fornecedoresLoaded && equipamentosLoaded && movimentacoesEstoqueLoaded && feriadosLoaded && solicitacoesArteLoaded
-    && gruposMaterialLoaded && tamanhosLoaded;
+    && gruposProdutoLoaded && gruposMaterialLoaded && tamanhosLoaded;
   const [seedChecked, setSeedChecked] = useState(false);
 
   // Adicionado: os três perfis de acesso definem quais abas o usuário
@@ -935,6 +941,7 @@ export default function App() {
             equipamentos={equipamentos} setEquipamentos={setEquipamentos}
             solicitacoesCompra={solicitacoesCompra} cotacoesCompra={cotacoesCompra}
             feriados={feriados} setFeriados={setFeriados}
+            gruposProduto={gruposProduto} setGruposProduto={setGruposProduto}
             gruposMaterial={gruposMaterial} setGruposMaterial={setGruposMaterial}
             tamanhos={tamanhos} setTamanhos={setTamanhos}
             ehAdministrador={ehAdministrador}
@@ -6019,7 +6026,7 @@ function RelatorioGradeImpressao({ payload, onFechar }) {
 }
 
 // ---------- Cadastros ----------
-function Cadastros({ produtos, setProdutos, etapas, setEtapas, vinculos, setVinculos, colaboradores, setColaboradores, setores, setSetores, equipes, setEquipes, anexos, onSalvarAnexos, onRemoverAnexo, acessos, clientes, setClientes, materiais, setMateriais, consumosMaterial, setConsumosMaterial, fornecedores, setFornecedores, equipamentos, setEquipamentos, solicitacoesCompra, cotacoesCompra, feriados, setFeriados, gruposMaterial, setGruposMaterial, tamanhos, setTamanhos, ehAdministrador }) {
+function Cadastros({ produtos, setProdutos, etapas, setEtapas, vinculos, setVinculos, colaboradores, setColaboradores, setores, setSetores, equipes, setEquipes, anexos, onSalvarAnexos, onRemoverAnexo, acessos, clientes, setClientes, materiais, setMateriais, consumosMaterial, setConsumosMaterial, fornecedores, setFornecedores, equipamentos, setEquipamentos, solicitacoesCompra, cotacoesCompra, feriados, setFeriados, gruposProduto, setGruposProduto, gruposMaterial, setGruposMaterial, tamanhos, setTamanhos, ehAdministrador }) {
   const [sub, setSub] = useState("departamentos");
 
   return (
@@ -6050,7 +6057,7 @@ function Cadastros({ produtos, setProdutos, etapas, setEtapas, vinculos, setVinc
         <ProdutosCadastro
           produtos={produtos} setProdutos={setProdutos} etapas={etapas} vinculos={vinculos} setVinculos={setVinculos} setores={setores}
           materiais={materiais} consumosMaterial={consumosMaterial} setConsumosMaterial={setConsumosMaterial} colaboradores={colaboradores}
-          gruposMaterial={gruposMaterial} setGruposMaterial={setGruposMaterial}
+          gruposProduto={gruposProduto} setGruposProduto={setGruposProduto}
           tamanhos={tamanhos} setTamanhos={setTamanhos}
           ehAdministrador={ehAdministrador}
         />
@@ -7381,7 +7388,7 @@ function descricaoCodigoProduto({ grupoNome, tipoNome, tamanhoNome }) {
   return [grupoNome, tipoNome, tamanhoNome].filter(Boolean).join(" ") || "—";
 }
 
-function ProdutosCadastro({ produtos, setProdutos, etapas, vinculos, setVinculos, setores, materiais, consumosMaterial, setConsumosMaterial, colaboradores, gruposMaterial, setGruposMaterial, tamanhos, setTamanhos, ehAdministrador }) {
+function ProdutosCadastro({ produtos, setProdutos, etapas, vinculos, setVinculos, setores, materiais, consumosMaterial, setConsumosMaterial, colaboradores, gruposProduto, setGruposProduto, tamanhos, setTamanhos, ehAdministrador }) {
   const [nome, setNome] = useState("");
   const [expandido, setExpandido] = useState(null);
   const [novaEtapaId, setNovaEtapaId] = useState("");
@@ -7398,14 +7405,14 @@ function ProdutosCadastro({ produtos, setProdutos, etapas, vinculos, setVinculos
   // Corrigido: o tecido do produto agora é um material de verdade,
   // buscado na base de Materiais (materialTecidoId), em vez de um
   // cadastro de "tipo de tecido" à parte.
-  const [grupoMaterialId, setGrupoMaterialId] = useState("");
+  const [grupoProdutoId, setGrupoProdutoId] = useState("");
   const [materialTecidoId, setMaterialTecidoId] = useState("");
   const [tamanhoId, setTamanhoId] = useState("");
   const [novoGrupoAberto, setNovoGrupoAberto] = useState(false);
   const [novoGrupoNome, setNovoGrupoNome] = useState("");
   const [novoTamanhoAberto, setNovoTamanhoAberto] = useState(false);
   const [novoTamanhoNome, setNovoTamanhoNome] = useState("");
-  const [grupoMaterialIdEdicao, setGrupoMaterialIdEdicao] = useState("");
+  const [grupoProdutoIdEdicao, setGrupoProdutoIdEdicao] = useState("");
   const [materialTecidoIdEdicao, setMaterialTecidoIdEdicao] = useState("");
   const [tamanhoIdEdicao, setTamanhoIdEdicao] = useState("");
   const [novoGrupoAbertoEdicao, setNovoGrupoAbertoEdicao] = useState(false);
@@ -7417,9 +7424,9 @@ function ProdutosCadastro({ produtos, setProdutos, etapas, vinculos, setVinculos
   async function criarGrupo(nomeBruto, aoCriar) {
     const nomeCriado = nomeBruto.trim().toUpperCase();
     if (!nomeCriado) return;
-    const codigo = gruposMaterial.reduce((max, g) => Math.max(max, g.codigo || 0), 0) + 1;
+    const codigo = gruposProduto.reduce((max, g) => Math.max(max, g.codigo || 0), 0) + 1;
     const novo = { id: uid(), codigo, nome: nomeCriado };
-    await setGruposMaterial([...gruposMaterial, novo]);
+    await setGruposProduto([...gruposProduto, novo]);
     aoCriar(novo.id);
   }
   async function criarTamanho(nomeBruto, aoCriar) {
@@ -7430,9 +7437,9 @@ function ProdutosCadastro({ produtos, setProdutos, etapas, vinculos, setVinculos
     await setTamanhos([...tamanhos, novo]);
     aoCriar(novo.id);
   }
-  const nomeGrupo = (id) => gruposMaterial.find(g => g.id === id)?.nome || null;
+  const nomeGrupo = (id) => gruposProduto.find(g => g.id === id)?.nome || null;
   const nomeTamanho = (id) => tamanhos.find(t => t.id === id)?.nome || null;
-  const codigoGrupo = (id) => gruposMaterial.find(g => g.id === id)?.codigo;
+  const codigoGrupo = (id) => gruposProduto.find(g => g.id === id)?.codigo;
   const codigoTamanho = (id) => tamanhos.find(t => t.id === id)?.codigo;
   // O "tipo" do produto vem do material escolhido como tecido: cada
   // material tem sua própria sequência de cadastro (o código visível do
@@ -7454,13 +7461,13 @@ function ProdutosCadastro({ produtos, setProdutos, etapas, vinculos, setVinculos
     const p = {
       id: uid(), sequencia,
       nome: nome.trim().toUpperCase(),
-      grupoMaterialId: grupoMaterialId || null, grupoMaterialNomeSnap: nomeGrupo(grupoMaterialId),
+      grupoProdutoId: grupoProdutoId || null, grupoProdutoNomeSnap: nomeGrupo(grupoProdutoId),
       materialTecidoId: materialTecidoId || null, materialTecidoNomeSnap: nomeMaterialTecido(materialTecidoId),
       tamanhoId, tamanhoNomeSnap: nomeTamanho(tamanhoId),
-      codigo: montarCodigoProduto({ grupoCodigo: codigoGrupo(grupoMaterialId), tipoCodigo: codigoTipoDoMaterial(materialTecidoId), tamanhoCodigo: codigoTamanho(tamanhoId) }),
+      codigo: montarCodigoProduto({ grupoCodigo: codigoGrupo(grupoProdutoId), tipoCodigo: codigoTipoDoMaterial(materialTecidoId), tamanhoCodigo: codigoTamanho(tamanhoId) }),
     };
     await setProdutos([...produtos, p]);
-    setNome(""); setGrupoMaterialId(""); setMaterialTecidoId(""); setTamanhoId("");
+    setNome(""); setGrupoProdutoId(""); setMaterialTecidoId(""); setTamanhoId("");
     setExpandido(p.id);
   }
   async function excluirProduto(id) {
@@ -7471,7 +7478,7 @@ function ProdutosCadastro({ produtos, setProdutos, etapas, vinculos, setVinculos
   }
   function iniciarEdicaoProduto(p) {
     setEditandoId(p.id); setNomeEdicao(p.nome);
-    setGrupoMaterialIdEdicao(p.grupoMaterialId || ""); setMaterialTecidoIdEdicao(p.materialTecidoId || ""); setTamanhoIdEdicao(p.tamanhoId || "");
+    setGrupoProdutoIdEdicao(p.grupoProdutoId || ""); setMaterialTecidoIdEdicao(p.materialTecidoId || ""); setTamanhoIdEdicao(p.tamanhoId || "");
   }
   async function salvarEdicaoProduto(id) {
     // Corrigido: agora é possível renomear um produto sem excluir e
@@ -7480,10 +7487,10 @@ function ProdutosCadastro({ produtos, setProdutos, etapas, vinculos, setVinculos
     if (!nomeEdicao.trim() || !tamanhoIdEdicao) return;
     await setProdutos(produtos.map(p => p.id === id ? {
       ...p, nome: nomeEdicao.trim().toUpperCase(),
-      grupoMaterialId: grupoMaterialIdEdicao || null, grupoMaterialNomeSnap: nomeGrupo(grupoMaterialIdEdicao),
+      grupoProdutoId: grupoProdutoIdEdicao || null, grupoProdutoNomeSnap: nomeGrupo(grupoProdutoIdEdicao),
       materialTecidoId: materialTecidoIdEdicao || null, materialTecidoNomeSnap: nomeMaterialTecido(materialTecidoIdEdicao),
       tamanhoId: tamanhoIdEdicao, tamanhoNomeSnap: nomeTamanho(tamanhoIdEdicao),
-      codigo: montarCodigoProduto({ grupoCodigo: codigoGrupo(grupoMaterialIdEdicao), tipoCodigo: codigoTipoDoMaterial(materialTecidoIdEdicao), tamanhoCodigo: codigoTamanho(tamanhoIdEdicao) }),
+      codigo: montarCodigoProduto({ grupoCodigo: codigoGrupo(grupoProdutoIdEdicao), tipoCodigo: codigoTipoDoMaterial(materialTecidoIdEdicao), tamanhoCodigo: codigoTamanho(tamanhoIdEdicao) }),
     } : p));
     setEditandoId(null);
   }
@@ -7574,22 +7581,22 @@ function ProdutosCadastro({ produtos, setProdutos, etapas, vinculos, setVinculos
       <Card style={{ marginBottom: 16 }}>
         <div style={{ fontSize: 15, fontWeight: 800, fontFamily: FONT_DISPLAY, marginBottom: 4, color: "#1c2b39" }}>Novo produto</div>
         <div style={{ fontSize: 11.5, color: "#a3937a", marginBottom: 10 }}>
-          Código: <b style={{ color: "#6b5d49", fontFamily: "monospace" }}>{montarCodigoProduto({ grupoCodigo: codigoGrupo(grupoMaterialId), tipoCodigo: codigoTipoDoMaterial(materialTecidoId), tamanhoCodigo: codigoTamanho(tamanhoId) })}</b> — {descricaoCodigoProduto({ grupoNome: nomeGrupo(grupoMaterialId), tipoNome: nomeMaterialTecido(materialTecidoId), tamanhoNome: nomeTamanho(tamanhoId) })}
+          Código: <b style={{ color: "#6b5d49", fontFamily: "monospace" }}>{montarCodigoProduto({ grupoCodigo: codigoGrupo(grupoProdutoId), tipoCodigo: codigoTipoDoMaterial(materialTecidoId), tamanhoCodigo: codigoTamanho(tamanhoId) })}</b> — {descricaoCodigoProduto({ grupoNome: nomeGrupo(grupoProdutoId), tipoNome: nomeMaterialTecido(materialTecidoId), tamanhoNome: nomeTamanho(tamanhoId) })}
         </div>
         <Field label="Nome">
           <input value={nome} onChange={e => setNome(e.target.value.toUpperCase())} placeholder="EX.: CAMISETA BÁSICA" style={inputStyle} onKeyDown={e => e.key === "Enter" && adicionarProduto()} />
         </Field>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
-          <Field label="Grupo de materiais (opcional)">
-            <Select value={grupoMaterialId} onChange={e => setGrupoMaterialId(e.target.value)}>
+          <Field label="Grupo de produto (opcional)">
+            <Select value={grupoProdutoId} onChange={e => setGrupoProdutoId(e.target.value)}>
               <option value="">Selecione…</option>
-              {[...gruposMaterial].sort((a, b) => a.codigo - b.codigo).map(g => <option key={g.id} value={g.id}>{String(g.codigo).padStart(3, "0")} · {g.nome}</option>)}
+              {[...gruposProduto].sort((a, b) => a.codigo - b.codigo).map(g => <option key={g.id} value={g.id}>{String(g.codigo).padStart(3, "0")} · {g.nome}</option>)}
             </Select>
             <button type="button" onClick={() => setNovoGrupoAberto(v => !v)} style={linkButtonStyle}>{novoGrupoAberto ? "Cancelar" : "+ Novo grupo"}</button>
             {novoGrupoAberto && (
               <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
-                <input value={novoGrupoNome} onChange={e => setNovoGrupoNome(e.target.value.toUpperCase())} placeholder="NOME DO GRUPO" style={{ ...inputStyle, flex: 1 }} onKeyDown={e => e.key === "Enter" && criarGrupo(novoGrupoNome, id => { setGrupoMaterialId(id); setNovoGrupoNome(""); setNovoGrupoAberto(false); })} />
-                <PrimaryButton onClick={() => criarGrupo(novoGrupoNome, id => { setGrupoMaterialId(id); setNovoGrupoNome(""); setNovoGrupoAberto(false); })} disabled={!novoGrupoNome.trim()}><Plus size={16} /></PrimaryButton>
+                <input value={novoGrupoNome} onChange={e => setNovoGrupoNome(e.target.value.toUpperCase())} placeholder="NOME DO GRUPO" style={{ ...inputStyle, flex: 1 }} onKeyDown={e => e.key === "Enter" && criarGrupo(novoGrupoNome, id => { setGrupoProdutoId(id); setNovoGrupoNome(""); setNovoGrupoAberto(false); })} />
+                <PrimaryButton onClick={() => criarGrupo(novoGrupoNome, id => { setGrupoProdutoId(id); setNovoGrupoNome(""); setNovoGrupoAberto(false); })} disabled={!novoGrupoNome.trim()}><Plus size={16} /></PrimaryButton>
               </div>
             )}
           </Field>
@@ -7627,7 +7634,7 @@ function ProdutosCadastro({ produtos, setProdutos, etapas, vinculos, setVinculos
         {produtos.filter(p => {
           const termo = buscaProduto.trim().toUpperCase();
           if (!termo) return true;
-          return [p.codigo, p.nome, p.grupoMaterialNomeSnap, p.materialTecidoNomeSnap, p.tamanhoNomeSnap].filter(Boolean).some(v => v.toUpperCase().includes(termo));
+          return [p.codigo, p.nome, p.grupoProdutoNomeSnap, p.materialTecidoNomeSnap, p.tamanhoNomeSnap].filter(Boolean).some(v => v.toUpperCase().includes(termo));
         }).map(p => {
           const vinculosProduto = vinculos.filter(v => v.produtoId === p.id);
           const consumosProduto = consumosMaterial.filter(c => c.produtoId === p.id);
@@ -7643,7 +7650,7 @@ function ProdutosCadastro({ produtos, setProdutos, etapas, vinculos, setVinculos
                     {p.nome}
                   </div>
                   <div style={{ fontSize: 12, color: "#a3937a" }}>
-                    {descricaoCodigoProduto({ grupoNome: p.grupoMaterialNomeSnap, tipoNome: p.materialTecidoNomeSnap, tamanhoNome: p.tamanhoNomeSnap })}
+                    {descricaoCodigoProduto({ grupoNome: p.grupoProdutoNomeSnap, tipoNome: p.materialTecidoNomeSnap, tamanhoNome: p.tamanhoNomeSnap })}
                     {" · "}{vinculosProduto.length} etapa{vinculosProduto.length !== 1 ? "s" : ""} vinculada{vinculosProduto.length !== 1 ? "s" : ""} · {consumosProduto.length} material{consumosProduto.length !== 1 ? "is" : ""}
                   </div>
                 </div>
@@ -7658,16 +7665,16 @@ function ProdutosCadastro({ produtos, setProdutos, etapas, vinculos, setVinculos
                         <input value={nomeEdicao} onChange={e => setNomeEdicao(e.target.value.toUpperCase())} style={inputStyle} />
                       </Field>
                       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
-                        <Field label="Grupo de materiais (opcional)">
-                          <Select value={grupoMaterialIdEdicao} onChange={e => setGrupoMaterialIdEdicao(e.target.value)}>
+                        <Field label="Grupo de produto (opcional)">
+                          <Select value={grupoProdutoIdEdicao} onChange={e => setGrupoProdutoIdEdicao(e.target.value)}>
                             <option value="">Selecione…</option>
-                            {[...gruposMaterial].sort((a, b) => a.codigo - b.codigo).map(g => <option key={g.id} value={g.id}>{String(g.codigo).padStart(3, "0")} · {g.nome}</option>)}
+                            {[...gruposProduto].sort((a, b) => a.codigo - b.codigo).map(g => <option key={g.id} value={g.id}>{String(g.codigo).padStart(3, "0")} · {g.nome}</option>)}
                           </Select>
                           <button type="button" onClick={() => setNovoGrupoAbertoEdicao(v => !v)} style={linkButtonStyle}>{novoGrupoAbertoEdicao ? "Cancelar" : "+ Novo grupo"}</button>
                           {novoGrupoAbertoEdicao && (
                             <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
                               <input value={novoGrupoNomeEdicao} onChange={e => setNovoGrupoNomeEdicao(e.target.value.toUpperCase())} placeholder="NOME DO GRUPO" style={{ ...inputStyle, flex: 1 }} />
-                              <PrimaryButton onClick={() => criarGrupo(novoGrupoNomeEdicao, id => { setGrupoMaterialIdEdicao(id); setNovoGrupoNomeEdicao(""); setNovoGrupoAbertoEdicao(false); })} disabled={!novoGrupoNomeEdicao.trim()}><Plus size={16} /></PrimaryButton>
+                              <PrimaryButton onClick={() => criarGrupo(novoGrupoNomeEdicao, id => { setGrupoProdutoIdEdicao(id); setNovoGrupoNomeEdicao(""); setNovoGrupoAbertoEdicao(false); })} disabled={!novoGrupoNomeEdicao.trim()}><Plus size={16} /></PrimaryButton>
                             </div>
                           )}
                         </Field>
@@ -7692,7 +7699,7 @@ function ProdutosCadastro({ produtos, setProdutos, etapas, vinculos, setVinculos
                         </Field>
                       </div>
                       <div style={{ fontSize: 11, color: "#a3937a", marginBottom: 10 }}>
-                        Novo código: <b style={{ color: "#6b5d49", fontFamily: "monospace" }}>{montarCodigoProduto({ grupoCodigo: codigoGrupo(grupoMaterialIdEdicao), tipoCodigo: codigoTipoDoMaterial(materialTecidoIdEdicao), tamanhoCodigo: codigoTamanho(tamanhoIdEdicao) })}</b> — {descricaoCodigoProduto({ grupoNome: nomeGrupo(grupoMaterialIdEdicao), tipoNome: nomeMaterialTecido(materialTecidoIdEdicao), tamanhoNome: nomeTamanho(tamanhoIdEdicao) })}
+                        Novo código: <b style={{ color: "#6b5d49", fontFamily: "monospace" }}>{montarCodigoProduto({ grupoCodigo: codigoGrupo(grupoProdutoIdEdicao), tipoCodigo: codigoTipoDoMaterial(materialTecidoIdEdicao), tamanhoCodigo: codigoTamanho(tamanhoIdEdicao) })}</b> — {descricaoCodigoProduto({ grupoNome: nomeGrupo(grupoProdutoIdEdicao), tipoNome: nomeMaterialTecido(materialTecidoIdEdicao), tamanhoNome: nomeTamanho(tamanhoIdEdicao) })}
                       </div>
                       <div style={{ display: "flex", gap: 8 }}>
                         <PrimaryButton onClick={() => salvarEdicaoProduto(p.id)} disabled={!nomeEdicao.trim() || !tamanhoIdEdicao} style={{ flex: 1 }}>Salvar</PrimaryButton>
