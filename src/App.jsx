@@ -5298,17 +5298,27 @@ function RelatorioGradeImpressao({ payload, onFechar }) {
               </div>
               <div style={{ fontSize: 12, fontWeight: 700, color: "#2f4a63" }}>Folha {totalFolhas} de {totalFolhas}</div>
             </div>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))", gap: 12 }}>
-              {payload.anexos.map(a => (
-                <div key={a.id} style={{ border: "1px solid #e6ddc8", borderRadius: 8, overflow: "hidden", breakInside: "avoid" }}>
+            {/* Adicionado: 2 colunas com imagem grande (cada uma ocupando
+                metade da folha em paisagem) em vez de uma grade de
+                miniaturas — referência visual de verdade pra quem corta/
+                estampa a peça, não só um lembrete de que existe um anexo.
+                A cada 2 arquivos força quebra de folha, pra manter
+                sempre 2 por página. */}
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
+              {payload.anexos.map((a, i) => (
+                <div key={a.id} style={{
+                  border: "1px solid #e6ddc8", borderRadius: 8, overflow: "hidden", breakInside: "avoid",
+                  pageBreakAfter: i % 2 === 1 && i !== payload.anexos.length - 1 ? "always" : "auto",
+                  breakAfter: i % 2 === 1 && i !== payload.anexos.length - 1 ? "page" : "auto",
+                }}>
                   {a.tipo && a.tipo.startsWith("image/") ? (
-                    <img src={a.dataUrl} alt={a.nome} style={{ width: "100%", height: 130, objectFit: "cover", display: "block" }} />
+                    <img src={a.dataUrl} alt={a.nome} style={{ width: "100%", height: "46vh", objectFit: "contain", display: "block", background: "#f4efe2" }} />
                   ) : a.tipo && a.tipo.startsWith("video/") ? (
-                    <video src={a.dataUrl} controls style={{ width: "100%", height: 130, objectFit: "cover", display: "block", background: "#000" }} className="no-print-video" />
+                    <video src={a.dataUrl} controls style={{ width: "100%", height: "46vh", objectFit: "contain", display: "block", background: "#000" }} className="no-print-video" />
                   ) : (
-                    <div style={{ width: "100%", height: 130, display: "flex", alignItems: "center", justifyContent: "center", color: "#a3937a" }}>Arquivo</div>
+                    <div style={{ width: "100%", height: "46vh", display: "flex", alignItems: "center", justifyContent: "center", color: "#a3937a" }}>Arquivo</div>
                   )}
-                  <div style={{ fontSize: 11, color: "#6b5d49", padding: "5px 8px", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{a.nome}</div>
+                  <div style={{ fontSize: 12, color: "#6b5d49", padding: "6px 9px", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{a.nome}</div>
                 </div>
               ))}
             </div>
@@ -5327,100 +5337,6 @@ function RelatorioGradeImpressao({ payload, onFechar }) {
 // ---------- Cadastros ----------
 function Cadastros({ produtos, setProdutos, etapas, setEtapas, vinculos, setVinculos, colaboradores, setColaboradores, setores, setSetores, equipes, setEquipes, anexos, onSalvarAnexos, onRemoverAnexo, acessos, clientes, setClientes, materiais, setMateriais, consumosMaterial, setConsumosMaterial, fornecedores, setFornecedores, equipamentos, setEquipamentos, solicitacoesCompra, cotacoesCompra, feriados, setFeriados, ehAdministrador }) {
   const [sub, setSub] = useState("departamentos");
-
-  // Adicionado: cria de uma vez uma camiseta básica completa para testes —
-  // usa os tempos reais de referência do próprio processo (Corte 80s,
-  // Gravação 55s, Preparação 35s, Costura 210s, Revisão/Embalagem 75s =
-  // 455s por peça). Reaproveita departamentos e materiais que já existem
-  // pelo nome, então rodar de novo não duplica nada.
-  async function criarCamisetaTeste() {
-    const NOME_PRODUTO = "Camiseta básica (teste)";
-    const jaExiste = produtos.find(p => p.nome === NOME_PRODUTO);
-    if (jaExiste) return { produtoId: jaExiste.id, jaExistia: true };
-
-    // 1) Departamentos — reaproveita os existentes, cria só o que faltar.
-    const DEPTOS = [
-      { nome: "Corte", tipo: "corte" },
-      { nome: "Silk", tipo: "silk" },
-      { nome: "Preparação", tipo: "padrao" },
-      { nome: "Costura", tipo: "padrao" },
-      { nome: "Embalagem", tipo: "padrao" },
-    ];
-    let setoresFinal = [...setores];
-    DEPTOS.forEach(d => {
-      if (!setoresFinal.some(s => s.nome.toLowerCase() === d.nome.toLowerCase())) {
-        setoresFinal.push({ id: uid(), nome: d.nome, tipo: d.tipo });
-      }
-    });
-    const idSetor = (nome) => setoresFinal.find(s => s.nome.toLowerCase() === nome.toLowerCase())?.id || null;
-
-    // 2) Atividades por departamento, com os tempos de referência.
-    //    "lote" = feito uma vez para o lote inteiro (não multiplica pela
-    //    quantidade); "peca" = tempo por peça.
-    const ATIVIDADES = [
-      { nome: "Enfesto", setor: "Corte", seg: 20, calc: "lote" },
-      { nome: "Risco / plotagem", setor: "Corte", seg: 20, calc: "lote" },
-      { nome: "Corte", setor: "Corte", seg: 20, calc: "peca" },
-      { nome: "Separação de kits", setor: "Corte", seg: 12, calc: "peca" },
-      { nome: "Identificação / amarração", setor: "Corte", seg: 8, calc: "peca" },
-      { nome: "Gravação (silk/DTF)", setor: "Silk", seg: 55, calc: "peca" },
-      { nome: "Preparação de aviamentos", setor: "Preparação", seg: 35, calc: "peca" },
-      { nome: "Fechamento de ombro (overlock)", setor: "Costura", seg: 30, calc: "peca" },
-      { nome: "Pregação de gola (overlock)", setor: "Costura", seg: 45, calc: "peca" },
-      { nome: "Colocação de manga (overlock)", setor: "Costura", seg: 40, calc: "peca" },
-      { nome: "Fechamento lateral (overlock)", setor: "Costura", seg: 45, calc: "peca" },
-      { nome: "Bainha de manga e barra (galoneira)", setor: "Costura", seg: 35, calc: "peca" },
-      { nome: "Pregação de etiqueta (reta)", setor: "Costura", seg: 15, calc: "peca" },
-      { nome: "Revisão e limpeza de linhas", setor: "Embalagem", seg: 45, calc: "peca" },
-      { nome: "Dobra e embalagem", setor: "Embalagem", seg: 30, calc: "peca" },
-    ];
-    let etapasFinal = [...etapas];
-    ATIVIDADES.forEach(a => {
-      const existente = etapasFinal.find(e => e.nome.toLowerCase() === a.nome.toLowerCase() && e.setorId === idSetor(a.setor));
-      if (!existente) {
-        etapasFinal.push({ id: uid(), nome: a.nome, setorId: idSetor(a.setor), tipoCalculo: a.calc });
-      }
-    });
-    const idEtapa = (nome, setor) => etapasFinal.find(e => e.nome.toLowerCase() === nome.toLowerCase() && e.setorId === idSetor(setor))?.id;
-
-    // 3) Materiais com consumo por peça de uma camiseta.
-    const MATERIAIS = [
-      { nome: "Malha 100% algodão", unidade: "kg", estoque: 50, minimo: 10, maximo: 100, preco: 38.9, porPeca: 0.16 },
-      { nome: "Linha de costura", unidade: "cone", estoque: 40, minimo: 8, maximo: 60, preco: 9.5, porPeca: 0.05 },
-      { nome: "Gola ribana", unidade: "m", estoque: 200, minimo: 40, maximo: 400, preco: 6.2, porPeca: 0.25 },
-      { nome: "Etiqueta bordada", unidade: "un", estoque: 500, minimo: 100, maximo: 1000, preco: 0.35, porPeca: 1 },
-      { nome: "Embalagem plástica", unidade: "un", estoque: 500, minimo: 100, maximo: 1000, preco: 0.28, porPeca: 1 },
-    ];
-    let materiaisFinal = [...materiais];
-    MATERIAIS.forEach(m => {
-      if (!materiaisFinal.some(x => x.nome.toLowerCase() === m.nome.toLowerCase())) {
-        materiaisFinal.push({
-          id: uid(), nome: m.nome, unidade: m.unidade, quantidadeEstoque: m.estoque,
-          estoqueMinimo: m.minimo, estoqueMaximo: m.maximo, preco: m.preco,
-        });
-      }
-    });
-    const idMaterial = (nome) => materiaisFinal.find(x => x.nome.toLowerCase() === nome.toLowerCase())?.id;
-
-    // 4) O produto, com a sequência inteira vinculada na ordem de produção
-    //    real: Corte → Silk → Preparação → Costura → Embalagem.
-    const produtoId = uid();
-    const vinculosNovos = ATIVIDADES.map((a, ordem) => ({
-      id: uid(), produtoId, etapaId: idEtapa(a.nome, a.setor), tempoEstimadoSeg: a.seg, ordem,
-    })).filter(v => v.etapaId);
-    const consumosNovos = MATERIAIS.map(m => ({
-      id: uid(), produtoId, materialId: idMaterial(m.nome), quantidadePorPeca: m.porPeca,
-    })).filter(c => c.materialId);
-
-    await setSetores(setoresFinal);
-    await setEtapas(etapasFinal);
-    await setMateriais(materiaisFinal);
-    await setProdutos([...produtos, { id: produtoId, nome: NOME_PRODUTO }]);
-    await setVinculos([...vinculos, ...vinculosNovos]);
-    await setConsumosMaterial([...consumosMaterial, ...consumosNovos]);
-
-    return { produtoId, jaExistia: false };
-  }
 
   return (
     <div>
@@ -5446,7 +5362,7 @@ function Cadastros({ produtos, setProdutos, etapas, setEtapas, vinculos, setVinc
       {sub === "departamentos" && <DepartamentosCadastro setores={setores} setSetores={setSetores} etapas={etapas} setEtapas={setEtapas} vinculos={vinculos} setVinculos={setVinculos} equipes={equipes} setEquipes={setEquipes} anexos={anexos} onSalvarAnexos={onSalvarAnexos} onRemoverAnexo={onRemoverAnexo} />}
       {sub === "colaboradores" && <ColaboradoresCadastro colaboradores={colaboradores} setColaboradores={setColaboradores} acessos={acessos} ehAdministrador={ehAdministrador} />}
       {sub === "equipes" && <EquipesCadastro equipes={equipes} setEquipes={setEquipes} setores={setores} colaboradores={colaboradores} />}
-      {sub === "produtos" && <ProdutosCadastro produtos={produtos} setProdutos={setProdutos} etapas={etapas} vinculos={vinculos} setVinculos={setVinculos} setores={setores} materiais={materiais} consumosMaterial={consumosMaterial} setConsumosMaterial={setConsumosMaterial} colaboradores={colaboradores} ehAdministrador={ehAdministrador} onCriarCamisetaTeste={criarCamisetaTeste} />}
+      {sub === "produtos" && <ProdutosCadastro produtos={produtos} setProdutos={setProdutos} etapas={etapas} vinculos={vinculos} setVinculos={setVinculos} setores={setores} materiais={materiais} consumosMaterial={consumosMaterial} setConsumosMaterial={setConsumosMaterial} colaboradores={colaboradores} ehAdministrador={ehAdministrador} />}
       {sub === "materiais" && <MateriaisCadastro materiais={materiais} setMateriais={setMateriais} consumosMaterial={consumosMaterial} setConsumosMaterial={setConsumosMaterial} fornecedores={fornecedores} />}
       {sub === "fornecedores" && <FornecedoresCadastro fornecedores={fornecedores} setFornecedores={setFornecedores} solicitacoesCompra={solicitacoesCompra} cotacoesCompra={cotacoesCompra} materiais={materiais} />}
       {sub === "equipamentos" && <EquipamentosCadastro equipamentos={equipamentos} setEquipamentos={setEquipamentos} setores={setores} />}
@@ -6576,7 +6492,7 @@ function FeriadosCadastro({ feriados, setFeriados }) {
   );
 }
 
-function ProdutosCadastro({ produtos, setProdutos, etapas, vinculos, setVinculos, setores, materiais, consumosMaterial, setConsumosMaterial, colaboradores, ehAdministrador, onCriarCamisetaTeste }) {
+function ProdutosCadastro({ produtos, setProdutos, etapas, vinculos, setVinculos, setores, materiais, consumosMaterial, setConsumosMaterial, colaboradores, ehAdministrador }) {
   const [nome, setNome] = useState("");
   const [expandido, setExpandido] = useState(null);
   const [novaEtapaId, setNovaEtapaId] = useState("");
@@ -6586,20 +6502,6 @@ function ProdutosCadastro({ produtos, setProdutos, etapas, vinculos, setVinculos
   const [nomeEdicao, setNomeEdicao] = useState("");
   const [novoMaterialId, setNovoMaterialId] = useState("");
   const [novaQtdMaterial, setNovaQtdMaterial] = useState("");
-  const [criandoTeste, setCriandoTeste] = useState(false);
-  const [msgTeste, setMsgTeste] = useState("");
-
-  async function criarCamisetaTesteClick() {
-    if (!onCriarCamisetaTeste || criandoTeste) return;
-    setCriandoTeste(true); setMsgTeste("");
-    try {
-      const { produtoId, jaExistia } = await onCriarCamisetaTeste();
-      setExpandido(produtoId);
-      setMsgTeste(jaExistia
-        ? "A camiseta de teste já existia — abrindo ela abaixo."
-        : "Pronto: departamentos, 15 atividades, 5 materiais e a camiseta com a sequência inteira vinculada.");
-    } finally { setCriandoTeste(false); }
-  }
 
   async function adicionarProduto() {
     if (!nome.trim()) return;
@@ -6707,18 +6609,6 @@ function ProdutosCadastro({ produtos, setProdutos, etapas, vinculos, setVinculos
 
   return (
     <div>
-      {ehAdministrador && onCriarCamisetaTeste && (
-        <Card style={{ marginBottom: 16, borderStyle: "dashed", borderColor: "#cdb98a", background: "#f4ecd8" }}>
-          <div style={{ fontSize: 13.5, fontWeight: 700, color: "#1c2b39", marginBottom: 4 }}>Produto de teste: Camiseta básica</div>
-          <div style={{ fontSize: 12, color: "#6b5d49", marginBottom: 10 }}>
-            Cria uma camiseta completa para testar o sistema: os 5 departamentos, 15 atividades com os tempos de referência (455s por peça no total), 5 materiais com estoque e consumo, e o produto já com a sequência inteira vinculada — Corte → Silk → Preparação → Costura → Embalagem. Reaproveita o que já existir; rodar de novo não duplica.
-          </div>
-          <PrimaryButton onClick={criarCamisetaTesteClick} disabled={criandoTeste} style={{ width: "100%" }}>
-            {criandoTeste ? "Criando…" : "Criar camiseta de teste"}
-          </PrimaryButton>
-          {msgTeste && <div style={{ fontSize: 12, color: "#1a7a4c", fontWeight: 600, marginTop: 8 }}>{msgTeste}</div>}
-        </Card>
-      )}
       <Card style={{ marginBottom: 16 }}>
         <div style={{ fontSize: 15, fontWeight: 800, fontFamily: FONT_DISPLAY, marginBottom: 12, color: "#1c2b39" }}>Novo produto</div>
         <div style={{ display: "flex", gap: 8 }}>
