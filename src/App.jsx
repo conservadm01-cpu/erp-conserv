@@ -564,6 +564,71 @@ export default function App() {
   const { items: solicitacoesArte, loaded: solicitacoesArteLoaded, salvar: salvarSolicitacaoArte, remover: removerSolicitacaoArte } = useRecordCollection("solicitacao_arte");
   const [usuarioAtual, setUsuarioAtual] = useState(null);
 
+  // Adicionado: alerta de mensagens novas do chat interno — contador no
+  // ícone do Chat no menu inferior, e um aviso rápido na tela quando
+  // chega mensagem nova e a pessoa não está na aba de Chat. A "última
+  // leitura" fica salva no localStorage do aparelho (não por pessoa,
+  // já que o login aqui é só escolher o nome, sem sessão própria).
+  const [mensagensChat, setMensagensChat] = useState([]);
+  const [avisoNovaMensagem, setAvisoNovaMensagem] = useState(null);
+  const ultimaMensagemIdRef = useRef(null);
+  const [ultimaLeituraChat, setUltimaLeituraChat] = useState(() => {
+    try { return localStorage.getItem("chat_ultima_leitura"); } catch (e) { return null; }
+  });
+
+  useEffect(() => {
+    let ativo = true;
+    async function verificarMensagens() {
+      try {
+        const listaRes = await window.storage.list("mensagem:", true);
+        const chaves = (listaRes && listaRes.keys) || [];
+        const valores = (await Promise.all(chaves.map(async (k) => {
+          try { const r = await window.storage.get(k, true); return r && r.value ? JSON.parse(r.value) : null; } catch (e) { return null; }
+        }))).filter(Boolean);
+        valores.sort((a, b) => new Date(a.criadoEm) - new Date(b.criadoEm));
+        if (ativo) setMensagensChat(valores);
+      } catch (e) {
+        // sem mensagens ainda, ou falha momentânea — tenta de novo no próximo ciclo
+      }
+    }
+    verificarMensagens();
+    const intervalo = setInterval(verificarMensagens, 6000);
+    return () => { ativo = false; clearInterval(intervalo); };
+  }, []);
+
+  // Mostra o aviso rápido só quando chega uma mensagem realmente nova
+  // (diferente da última vista), de outra pessoa, e a tela de Chat não
+  // está aberta no momento.
+  useEffect(() => {
+    if (mensagensChat.length === 0) return;
+    const ultima = mensagensChat[mensagensChat.length - 1];
+    if (ultimaMensagemIdRef.current === null) {
+      ultimaMensagemIdRef.current = ultima.id;
+      return;
+    }
+    if (ultima.id === ultimaMensagemIdRef.current) return;
+    ultimaMensagemIdRef.current = ultima.id;
+    if (tab !== "chat" && ultima.autorNome !== usuarioAtual?.nome) {
+      setAvisoNovaMensagem(ultima);
+      const t = setTimeout(() => setAvisoNovaMensagem(atual => (atual && atual.id === ultima.id ? null : atual)), 5000);
+      return () => clearTimeout(t);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mensagensChat]);
+
+  // Abrir a aba de Chat marca tudo como lido.
+  useEffect(() => {
+    if (tab !== "chat") return;
+    const agora = new Date().toISOString();
+    try { localStorage.setItem("chat_ultima_leitura", agora); } catch (e) {}
+    setUltimaLeituraChat(agora);
+    setAvisoNovaMensagem(null);
+  }, [tab]);
+
+  const mensagensNaoLidas = mensagensChat.filter(m =>
+    m.autorNome !== usuarioAtual?.nome && (!ultimaLeituraChat || new Date(m.criadoEm) > new Date(ultimaLeituraChat))
+  ).length;
+
   const allLoaded = setoresLoaded && etapasLoaded && produtosLoaded && vinculosLoaded && colabLoaded
     && equipesLoaded && registrosLoaded && avaliacoesLoaded && anexosLoaded && acessosLoaded && ordensLoaded && clientesLoaded
     && materiaisLoaded && consumosMaterialLoaded && movimentacoesMaterialLoaded && solicitacoesCompraLoaded && cotacoesCompraLoaded
@@ -777,6 +842,29 @@ export default function App() {
         </div>
       </header>
 
+      {avisoNovaMensagem && (
+        <div
+          onClick={() => { setTab("chat"); setAvisoNovaMensagem(null); }}
+          style={{
+            position: "fixed", top: 10, left: 12, right: 12, zIndex: 20, maxWidth: 616, margin: "0 auto",
+            background: "#1c2b39", color: "#fff", borderRadius: 10, padding: "10px 14px", cursor: "pointer",
+            display: "flex", alignItems: "center", gap: 10, boxShadow: "0 6px 18px rgba(0,0,0,0.25)",
+            border: "1px dashed #cdb98a",
+          }}
+        >
+          <MessageCircle size={17} color="#cdb98a" style={{ flexShrink: 0 }} />
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 12, fontWeight: 700, color: "#cdb98a" }}>Nova mensagem de {avisoNovaMensagem.autorNome}</div>
+            <div style={{ fontSize: 12.5, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+              {avisoNovaMensagem.texto || ((avisoNovaMensagem.anexos || []).length > 0 ? "📎 anexo" : "")}
+            </div>
+          </div>
+          <button onClick={(e) => { e.stopPropagation(); setAvisoNovaMensagem(null); }} style={{ background: "transparent", border: "none", color: "#fff", cursor: "pointer", padding: 4, flexShrink: 0 }}>
+            <X size={15} />
+          </button>
+        </div>
+      )}
+
       <main style={{ padding: 16, maxWidth: 640, margin: "0 auto" }}>
         {tab === "producao" && perfilAtual.abas.includes("producao") && (
           <Producao
@@ -853,21 +941,28 @@ export default function App() {
           { key: "arte", label: "Criação", icon: Palette },
           { key: "avaliacao", label: "Avaliação", icon: Users },
           { key: "consumo", label: "Materiais", icon: Package },
-          { key: "chat", label: "Chat", icon: MessageCircle },
+          { key: "chat", label: "Chat", icon: MessageCircle, badge: mensagensNaoLidas },
           { key: "relatorios", label: "Relatórios", icon: BarChart3 },
           { key: "cadastros", label: "Cadastros", icon: ClipboardList },
-        ].filter(({ key }) => perfilAtual.abas.includes(key)).map(({ key, label, icon: Icon }) => (
+        ].filter(({ key }) => perfilAtual.abas.includes(key)).map(({ key, label, icon: Icon, badge }) => (
           <button key={key} onClick={() => setTab(key)} style={{
             flex: 1, background: "transparent", border: "none", cursor: "pointer",
             display: "flex", flexDirection: "column", alignItems: "center", gap: 3,
             padding: "6px 4px", color: tab === key ? "#2f4a63" : "#a3937a",
           }}>
             <span style={{
-              display: "flex", alignItems: "center", justifyContent: "center", width: 40, height: 26, borderRadius: 7,
+              position: "relative", display: "flex", alignItems: "center", justifyContent: "center", width: 40, height: 26, borderRadius: 7,
               background: tab === key ? "#f4ecd8" : "transparent",
               border: tab === key ? "1px dashed #cdb98a" : "1px solid transparent",
             }}>
               <Icon size={19} strokeWidth={tab === key ? 2.4 : 2} />
+              {badge > 0 && (
+                <span style={{
+                  position: "absolute", top: -4, right: -2, minWidth: 15, height: 15, padding: "0 3px", borderRadius: 999,
+                  background: "#b13232", color: "#fff", fontSize: 9.5, fontWeight: 800, lineHeight: "15px", textAlign: "center",
+                  border: "1.5px solid #fffdf7",
+                }}>{badge > 9 ? "9+" : badge}</span>
+              )}
             </span>
             <span style={{ fontSize: 10.5, fontWeight: tab === key ? 700 : 500 }}>{label}</span>
           </button>
