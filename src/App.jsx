@@ -3472,8 +3472,8 @@ function ArteModelagem({ solicitacoes, onSalvarSolicitacao, onRemoverSolicitacao
 
   async function criarProduto() {
     if (!novoProdutoNome.trim()) return;
-    const codigo = produtos.reduce((max, p) => Math.max(max, p.codigo || 0), 0) + 1;
-    const p = { id: uid(), codigo, nome: novoProdutoNome.trim() };
+    const sequencia = produtos.reduce((max, p) => Math.max(max, p.sequencia || 0), 0) + 1;
+    const p = { id: uid(), sequencia, codigo: montarCodigoProduto({ sequencia }), nome: novoProdutoNome.trim() };
     await setProdutos([...produtos, p]);
     setProdutoId(p.id);
     setNovoProdutoNome(""); setNovoProdutoAberto(false);
@@ -7064,6 +7064,20 @@ function FeriadosCadastro({ feriados, setFeriados }) {
   );
 }
 
+// Adicionado: monta o código estruturado do produto — 3 dígitos do grupo
+// de materiais, 3 do tipo de tecido/material, 2 da cor (as iniciais de
+// cada campo, em maiúsculo, sem acento) seguidos da sequência de entrada
+// (a ordem em que o produto foi cadastrado). Um campo em branco vira
+// "XXX"/"XX" — o código fica completo assim que o produto tiver grupo,
+// tecido e cor preenchidos.
+function abreviarCodigo(texto, tamanho) {
+  const letras = (texto || "").normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[^a-zA-Z]/g, "").toUpperCase();
+  return (letras.slice(0, tamanho) || "").padEnd(tamanho, "X");
+}
+function montarCodigoProduto({ grupoMaterial, tipoTecido, cor, sequencia }) {
+  return `${abreviarCodigo(grupoMaterial, 3)}${abreviarCodigo(tipoTecido, 3)}${abreviarCodigo(cor, 2)}${String(sequencia || 0).padStart(3, "0")}`;
+}
+
 function ProdutosCadastro({ produtos, setProdutos, etapas, vinculos, setVinculos, setores, materiais, consumosMaterial, setConsumosMaterial, colaboradores, ehAdministrador }) {
   const [nome, setNome] = useState("");
   const [expandido, setExpandido] = useState(null);
@@ -7074,21 +7088,31 @@ function ProdutosCadastro({ produtos, setProdutos, etapas, vinculos, setVinculos
   const [nomeEdicao, setNomeEdicao] = useState("");
   const [novoMaterialId, setNovoMaterialId] = useState("");
   const [novaQtdMaterial, setNovaQtdMaterial] = useState("");
-  // Adicionado: grupo de materiais e tipo de tecido — classificação livre
-  // do produto (ex.: "Malharia" / "Malha 100% algodão"), mais o código
-  // sequencial de cadastro (#001, #002... na ordem em que os produtos
-  // foram criados), mostrado na lista pra identificar o produto rápido.
+  // Adicionado: grupo de materiais, tipo de tecido e cor — classificação
+  // do produto (ex.: "Malharia" / "Malha 100% algodão" / "Preta"), que
+  // junto formam o código estruturado (3 dígitos do grupo + 3 do tecido
+  // + 2 da cor, todos como iniciais, seguidos da sequência de entrada).
   const [grupoMaterial, setGrupoMaterial] = useState("");
   const [tipoTecido, setTipoTecido] = useState("");
+  const [cor, setCor] = useState("");
   const [grupoMaterialEdicao, setGrupoMaterialEdicao] = useState("");
   const [tipoTecidoEdicao, setTipoTecidoEdicao] = useState("");
+  const [corEdicao, setCorEdicao] = useState("");
 
   async function adicionarProduto() {
     if (!nome.trim()) return;
-    const codigo = produtos.reduce((max, p) => Math.max(max, p.codigo || 0), 0) + 1;
-    const p = { id: uid(), codigo, nome: nome.trim(), grupoMaterial: grupoMaterial.trim(), tipoTecido: tipoTecido.trim() };
+    // A sequência (ordem de entrada/lançamento) é atribuída uma única
+    // vez na criação; o código em si é recalculado sempre que o grupo,
+    // o tecido ou a cor mudarem — inclusive numa edição posterior.
+    const sequencia = produtos.reduce((max, p) => Math.max(max, p.sequencia || 0), 0) + 1;
+    const grupoMaterialTrim = grupoMaterial.trim(), tipoTecidoTrim = tipoTecido.trim(), corTrim = cor.trim();
+    const p = {
+      id: uid(), sequencia,
+      codigo: montarCodigoProduto({ grupoMaterial: grupoMaterialTrim, tipoTecido: tipoTecidoTrim, cor: corTrim, sequencia }),
+      nome: nome.trim(), grupoMaterial: grupoMaterialTrim, tipoTecido: tipoTecidoTrim, cor: corTrim,
+    };
     await setProdutos([...produtos, p]);
-    setNome(""); setGrupoMaterial(""); setTipoTecido("");
+    setNome(""); setGrupoMaterial(""); setTipoTecido(""); setCor("");
     setExpandido(p.id);
   }
   async function excluirProduto(id) {
@@ -7099,16 +7123,21 @@ function ProdutosCadastro({ produtos, setProdutos, etapas, vinculos, setVinculos
   }
   function iniciarEdicaoProduto(p) {
     setEditandoId(p.id); setNomeEdicao(p.nome);
-    setGrupoMaterialEdicao(p.grupoMaterial || ""); setTipoTecidoEdicao(p.tipoTecido || "");
+    setGrupoMaterialEdicao(p.grupoMaterial || ""); setTipoTecidoEdicao(p.tipoTecido || ""); setCorEdicao(p.cor || "");
   }
   async function salvarEdicaoProduto(id) {
     // Corrigido: agora é possível renomear um produto sem excluir e
     // recriar — o que antes apagava todos os vínculos de etapas e tempos
     // estimados já cadastrados para ele.
     if (!nomeEdicao.trim()) return;
-    await setProdutos(produtos.map(p => p.id === id
-      ? { ...p, nome: nomeEdicao.trim(), grupoMaterial: grupoMaterialEdicao.trim(), tipoTecido: tipoTecidoEdicao.trim() }
-      : p));
+    await setProdutos(produtos.map(p => {
+      if (p.id !== id) return p;
+      const grupoMaterialTrim = grupoMaterialEdicao.trim(), tipoTecidoTrim = tipoTecidoEdicao.trim(), corTrim = corEdicao.trim();
+      return {
+        ...p, nome: nomeEdicao.trim(), grupoMaterial: grupoMaterialTrim, tipoTecido: tipoTecidoTrim, cor: corTrim,
+        codigo: montarCodigoProduto({ grupoMaterial: grupoMaterialTrim, tipoTecido: tipoTecidoTrim, cor: corTrim, sequencia: p.sequencia }),
+      };
+    }));
     setEditandoId(null);
   }
   async function vincularEtapa(produtoId) {
@@ -7198,17 +7227,20 @@ function ProdutosCadastro({ produtos, setProdutos, etapas, vinculos, setVinculos
       <Card style={{ marginBottom: 16 }}>
         <div style={{ fontSize: 15, fontWeight: 800, fontFamily: FONT_DISPLAY, marginBottom: 4, color: "#1c2b39" }}>Novo produto</div>
         <div style={{ fontSize: 11.5, color: "#a3937a", marginBottom: 10 }}>
-          Código #{String(produtos.reduce((max, p) => Math.max(max, p.codigo || 0), 0) + 1).padStart(3, "0")} — atribuído automaticamente, na sequência de cadastro.
+          Código: <b style={{ color: "#6b5d49", fontFamily: "monospace" }}>{montarCodigoProduto({ grupoMaterial, tipoTecido, cor, sequencia: produtos.reduce((max, p) => Math.max(max, p.sequencia || 0), 0) + 1 })}</b> — grupo (3) + material (3) + cor (2), pelas iniciais, seguido da sequência de cadastro. Preencha os campos abaixo pra completar.
         </div>
         <Field label="Nome">
           <input value={nome} onChange={e => setNome(e.target.value)} placeholder="Ex.: Camiseta básica" style={inputStyle} onKeyDown={e => e.key === "Enter" && adicionarProduto()} />
         </Field>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
           <Field label="Grupo de materiais (opcional)">
-            <input value={grupoMaterial} onChange={e => setGrupoMaterial(e.target.value)} placeholder="Ex.: Malharia, Tecido plano" style={inputStyle} />
+            <input value={grupoMaterial} onChange={e => setGrupoMaterial(e.target.value)} placeholder="Ex.: Malharia" style={inputStyle} />
           </Field>
           <Field label="Tipo de tecido (opcional)">
-            <input value={tipoTecido} onChange={e => setTipoTecido(e.target.value)} placeholder="Ex.: Malha 100% algodão" style={inputStyle} />
+            <input value={tipoTecido} onChange={e => setTipoTecido(e.target.value)} placeholder="Ex.: Algodão" style={inputStyle} />
+          </Field>
+          <Field label="Cor (opcional)">
+            <input value={cor} onChange={e => setCor(e.target.value)} placeholder="Ex.: Preta" style={inputStyle} />
           </Field>
         </div>
         <PrimaryButton onClick={adicionarProduto} disabled={!nome.trim()} style={{ width: "100%" }}><Plus size={16} /> Adicionar produto</PrimaryButton>
@@ -7226,12 +7258,12 @@ function ProdutosCadastro({ produtos, setProdutos, etapas, vinculos, setVinculos
               <div style={{ padding: "12px 14px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                 <div onClick={() => !editando && setExpandido(aberto ? null : p.id)} style={{ cursor: "pointer", flex: 1 }}>
                   <div style={{ fontWeight: 700, fontSize: 14, color: "#2a2015" }}>
-                    {p.codigo != null && <span style={{ color: "#a3937a", fontWeight: 600 }}>#{String(p.codigo).padStart(3, "0")} · </span>}
+                    {p.codigo != null && <span style={{ color: "#a3937a", fontWeight: 600, fontFamily: "monospace" }}>{p.codigo} · </span>}
                     {p.nome}
                   </div>
                   <div style={{ fontSize: 12, color: "#a3937a" }}>
                     {vinculosProduto.length} etapa{vinculosProduto.length !== 1 ? "s" : ""} vinculada{vinculosProduto.length !== 1 ? "s" : ""} · {consumosProduto.length} material{consumosProduto.length !== 1 ? "is" : ""}
-                    {p.grupoMaterial ? ` · ${p.grupoMaterial}` : ""}{p.tipoTecido ? ` · ${p.tipoTecido}` : ""}
+                    {p.grupoMaterial ? ` · ${p.grupoMaterial}` : ""}{p.tipoTecido ? ` · ${p.tipoTecido}` : ""}{p.cor ? ` · ${p.cor}` : ""}
                   </div>
                 </div>
                 <IconButton onClick={(e) => { e.stopPropagation(); iniciarEdicaoProduto(p); setExpandido(p.id); }} title="Editar"><ClipboardList size={15} /></IconButton>
@@ -7244,13 +7276,19 @@ function ProdutosCadastro({ produtos, setProdutos, etapas, vinculos, setVinculos
                       <Field label="Nome do produto">
                         <input value={nomeEdicao} onChange={e => setNomeEdicao(e.target.value)} style={inputStyle} />
                       </Field>
-                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
                         <Field label="Grupo de materiais (opcional)">
-                          <input value={grupoMaterialEdicao} onChange={e => setGrupoMaterialEdicao(e.target.value)} placeholder="Ex.: Malharia, Tecido plano" style={inputStyle} />
+                          <input value={grupoMaterialEdicao} onChange={e => setGrupoMaterialEdicao(e.target.value)} placeholder="Ex.: Malharia" style={inputStyle} />
                         </Field>
                         <Field label="Tipo de tecido (opcional)">
-                          <input value={tipoTecidoEdicao} onChange={e => setTipoTecidoEdicao(e.target.value)} placeholder="Ex.: Malha 100% algodão" style={inputStyle} />
+                          <input value={tipoTecidoEdicao} onChange={e => setTipoTecidoEdicao(e.target.value)} placeholder="Ex.: Algodão" style={inputStyle} />
                         </Field>
+                        <Field label="Cor (opcional)">
+                          <input value={corEdicao} onChange={e => setCorEdicao(e.target.value)} placeholder="Ex.: Preta" style={inputStyle} />
+                        </Field>
+                      </div>
+                      <div style={{ fontSize: 11, color: "#a3937a", marginBottom: 10 }}>
+                        Novo código: <b style={{ color: "#6b5d49", fontFamily: "monospace" }}>{montarCodigoProduto({ grupoMaterial: grupoMaterialEdicao, tipoTecido: tipoTecidoEdicao, cor: corEdicao, sequencia: p.sequencia })}</b>
                       </div>
                       <div style={{ display: "flex", gap: 8 }}>
                         <PrimaryButton onClick={() => salvarEdicaoProduto(p.id)} disabled={!nomeEdicao.trim()} style={{ flex: 1 }}>Salvar</PrimaryButton>
