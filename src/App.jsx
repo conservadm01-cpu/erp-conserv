@@ -3472,7 +3472,8 @@ function ArteModelagem({ solicitacoes, onSalvarSolicitacao, onRemoverSolicitacao
 
   async function criarProduto() {
     if (!novoProdutoNome.trim()) return;
-    const p = { id: uid(), nome: novoProdutoNome.trim() };
+    const codigo = produtos.reduce((max, p) => Math.max(max, p.codigo || 0), 0) + 1;
+    const p = { id: uid(), codigo, nome: novoProdutoNome.trim() };
     await setProdutos([...produtos, p]);
     setProdutoId(p.id);
     setNovoProdutoNome(""); setNovoProdutoAberto(false);
@@ -7073,12 +7074,21 @@ function ProdutosCadastro({ produtos, setProdutos, etapas, vinculos, setVinculos
   const [nomeEdicao, setNomeEdicao] = useState("");
   const [novoMaterialId, setNovoMaterialId] = useState("");
   const [novaQtdMaterial, setNovaQtdMaterial] = useState("");
+  // Adicionado: grupo de materiais e tipo de tecido — classificação livre
+  // do produto (ex.: "Malharia" / "Malha 100% algodão"), mais o código
+  // sequencial de cadastro (#001, #002... na ordem em que os produtos
+  // foram criados), mostrado na lista pra identificar o produto rápido.
+  const [grupoMaterial, setGrupoMaterial] = useState("");
+  const [tipoTecido, setTipoTecido] = useState("");
+  const [grupoMaterialEdicao, setGrupoMaterialEdicao] = useState("");
+  const [tipoTecidoEdicao, setTipoTecidoEdicao] = useState("");
 
   async function adicionarProduto() {
     if (!nome.trim()) return;
-    const p = { id: uid(), nome: nome.trim() };
+    const codigo = produtos.reduce((max, p) => Math.max(max, p.codigo || 0), 0) + 1;
+    const p = { id: uid(), codigo, nome: nome.trim(), grupoMaterial: grupoMaterial.trim(), tipoTecido: tipoTecido.trim() };
     await setProdutos([...produtos, p]);
-    setNome("");
+    setNome(""); setGrupoMaterial(""); setTipoTecido("");
     setExpandido(p.id);
   }
   async function excluirProduto(id) {
@@ -7087,13 +7097,18 @@ function ProdutosCadastro({ produtos, setProdutos, etapas, vinculos, setVinculos
     await setVinculos(vinculos.filter(v => v.produtoId !== id));
     await setConsumosMaterial(consumosMaterial.filter(c => c.produtoId !== id));
   }
-  function iniciarEdicaoProduto(p) { setEditandoId(p.id); setNomeEdicao(p.nome); }
+  function iniciarEdicaoProduto(p) {
+    setEditandoId(p.id); setNomeEdicao(p.nome);
+    setGrupoMaterialEdicao(p.grupoMaterial || ""); setTipoTecidoEdicao(p.tipoTecido || "");
+  }
   async function salvarEdicaoProduto(id) {
     // Corrigido: agora é possível renomear um produto sem excluir e
     // recriar — o que antes apagava todos os vínculos de etapas e tempos
     // estimados já cadastrados para ele.
     if (!nomeEdicao.trim()) return;
-    await setProdutos(produtos.map(p => p.id === id ? { ...p, nome: nomeEdicao.trim() } : p));
+    await setProdutos(produtos.map(p => p.id === id
+      ? { ...p, nome: nomeEdicao.trim(), grupoMaterial: grupoMaterialEdicao.trim(), tipoTecido: tipoTecidoEdicao.trim() }
+      : p));
     setEditandoId(null);
   }
   async function vincularEtapa(produtoId) {
@@ -7181,11 +7196,22 @@ function ProdutosCadastro({ produtos, setProdutos, etapas, vinculos, setVinculos
   return (
     <div>
       <Card style={{ marginBottom: 16 }}>
-        <div style={{ fontSize: 15, fontWeight: 800, fontFamily: FONT_DISPLAY, marginBottom: 12, color: "#1c2b39" }}>Novo produto</div>
-        <div style={{ display: "flex", gap: 8 }}>
-          <input value={nome} onChange={e => setNome(e.target.value)} placeholder="Ex.: Camiseta básica" style={{ ...inputStyle, flex: 1 }} onKeyDown={e => e.key === "Enter" && adicionarProduto()} />
-          <PrimaryButton onClick={adicionarProduto} disabled={!nome.trim()}><Plus size={16} /></PrimaryButton>
+        <div style={{ fontSize: 15, fontWeight: 800, fontFamily: FONT_DISPLAY, marginBottom: 4, color: "#1c2b39" }}>Novo produto</div>
+        <div style={{ fontSize: 11.5, color: "#a3937a", marginBottom: 10 }}>
+          Código #{String(produtos.reduce((max, p) => Math.max(max, p.codigo || 0), 0) + 1).padStart(3, "0")} — atribuído automaticamente, na sequência de cadastro.
         </div>
+        <Field label="Nome">
+          <input value={nome} onChange={e => setNome(e.target.value)} placeholder="Ex.: Camiseta básica" style={inputStyle} onKeyDown={e => e.key === "Enter" && adicionarProduto()} />
+        </Field>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+          <Field label="Grupo de materiais (opcional)">
+            <input value={grupoMaterial} onChange={e => setGrupoMaterial(e.target.value)} placeholder="Ex.: Malharia, Tecido plano" style={inputStyle} />
+          </Field>
+          <Field label="Tipo de tecido (opcional)">
+            <input value={tipoTecido} onChange={e => setTipoTecido(e.target.value)} placeholder="Ex.: Malha 100% algodão" style={inputStyle} />
+          </Field>
+        </div>
+        <PrimaryButton onClick={adicionarProduto} disabled={!nome.trim()} style={{ width: "100%" }}><Plus size={16} /> Adicionar produto</PrimaryButton>
       </Card>
 
       <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
@@ -7199,8 +7225,14 @@ function ProdutosCadastro({ produtos, setProdutos, etapas, vinculos, setVinculos
             <Card key={p.id} style={{ padding: 0, overflow: "hidden" }}>
               <div style={{ padding: "12px 14px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                 <div onClick={() => !editando && setExpandido(aberto ? null : p.id)} style={{ cursor: "pointer", flex: 1 }}>
-                  <div style={{ fontWeight: 700, fontSize: 14, color: "#2a2015" }}>{p.nome}</div>
-                  <div style={{ fontSize: 12, color: "#a3937a" }}>{vinculosProduto.length} etapa{vinculosProduto.length !== 1 ? "s" : ""} vinculada{vinculosProduto.length !== 1 ? "s" : ""} · {consumosProduto.length} material{consumosProduto.length !== 1 ? "is" : ""}</div>
+                  <div style={{ fontWeight: 700, fontSize: 14, color: "#2a2015" }}>
+                    {p.codigo != null && <span style={{ color: "#a3937a", fontWeight: 600 }}>#{String(p.codigo).padStart(3, "0")} · </span>}
+                    {p.nome}
+                  </div>
+                  <div style={{ fontSize: 12, color: "#a3937a" }}>
+                    {vinculosProduto.length} etapa{vinculosProduto.length !== 1 ? "s" : ""} vinculada{vinculosProduto.length !== 1 ? "s" : ""} · {consumosProduto.length} material{consumosProduto.length !== 1 ? "is" : ""}
+                    {p.grupoMaterial ? ` · ${p.grupoMaterial}` : ""}{p.tipoTecido ? ` · ${p.tipoTecido}` : ""}
+                  </div>
                 </div>
                 <IconButton onClick={(e) => { e.stopPropagation(); iniciarEdicaoProduto(p); setExpandido(p.id); }} title="Editar"><ClipboardList size={15} /></IconButton>
                 <IconButton onClick={(e) => { e.stopPropagation(); excluirProduto(p.id); }} danger title="Excluir produto"><Trash2 size={15} /></IconButton>
@@ -7212,6 +7244,14 @@ function ProdutosCadastro({ produtos, setProdutos, etapas, vinculos, setVinculos
                       <Field label="Nome do produto">
                         <input value={nomeEdicao} onChange={e => setNomeEdicao(e.target.value)} style={inputStyle} />
                       </Field>
+                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                        <Field label="Grupo de materiais (opcional)">
+                          <input value={grupoMaterialEdicao} onChange={e => setGrupoMaterialEdicao(e.target.value)} placeholder="Ex.: Malharia, Tecido plano" style={inputStyle} />
+                        </Field>
+                        <Field label="Tipo de tecido (opcional)">
+                          <input value={tipoTecidoEdicao} onChange={e => setTipoTecidoEdicao(e.target.value)} placeholder="Ex.: Malha 100% algodão" style={inputStyle} />
+                        </Field>
+                      </div>
                       <div style={{ display: "flex", gap: 8 }}>
                         <PrimaryButton onClick={() => salvarEdicaoProduto(p.id)} disabled={!nomeEdicao.trim()} style={{ flex: 1 }}>Salvar</PrimaryButton>
                         <button onClick={() => setEditandoId(null)} style={{ border: "1.5px solid #d9cfb7", background: "#fff", borderRadius: 9, padding: "0 14px", color: "#6b5d49", fontWeight: 700, cursor: "pointer" }}>Cancelar</button>
