@@ -6628,6 +6628,11 @@ function MateriaisCadastro({ materiais, setMateriais, consumosMaterial, setConsu
   const [fornecedorId, setFornecedorId] = useState("");
   const [novoFornecedorAberto, setNovoFornecedorAberto] = useState(false);
   const [novoFornecedorNome, setNovoFornecedorNome] = useState("");
+  // Adicionado: além do fornecedor principal (usado no código), o
+  // material pode ter outros fornecedores que também vendem esse
+  // material — útil pra cotar preço com mais de um na hora de comprar.
+  const [outroFornecedorId, setOutroFornecedorId] = useState("");
+  const [fornecedoresExtrasIds, setFornecedoresExtrasIds] = useState([]);
   // Adicionado: grupo de materiais — mesmo cadastro compartilhado com
   // Produtos (grupo_material), com opção de criar um novo ali mesmo.
   const [grupoMaterialId, setGrupoMaterialId] = useState("");
@@ -6642,6 +6647,8 @@ function MateriaisCadastro({ materiais, setMateriais, consumosMaterial, setConsu
   const [fornecedorIdEdicao, setFornecedorIdEdicao] = useState("");
   const [novoFornecedorAbertoEdicao, setNovoFornecedorAbertoEdicao] = useState(false);
   const [novoFornecedorNomeEdicao, setNovoFornecedorNomeEdicao] = useState("");
+  const [outroFornecedorIdEdicao, setOutroFornecedorIdEdicao] = useState("");
+  const [fornecedoresExtrasIdsEdicao, setFornecedoresExtrasIdsEdicao] = useState([]);
   const [grupoMaterialIdEdicao, setGrupoMaterialIdEdicao] = useState("");
   const [novoGrupoAbertoEdicao, setNovoGrupoAbertoEdicao] = useState(false);
   const [novoGrupoNomeEdicao, setNovoGrupoNomeEdicao] = useState("");
@@ -6657,6 +6664,18 @@ function MateriaisCadastro({ materiais, setMateriais, consumosMaterial, setConsu
     await setFornecedores([...(fornecedores || []), novo]);
     aoCriar(novo.id);
   }
+  function adicionarFornecedorExtra() {
+    if (!outroFornecedorId || outroFornecedorId === fornecedorId || fornecedoresExtrasIds.includes(outroFornecedorId)) return;
+    setFornecedoresExtrasIds(ids => [...ids, outroFornecedorId]);
+    setOutroFornecedorId("");
+  }
+  function removerFornecedorExtra(id) { setFornecedoresExtrasIds(ids => ids.filter(x => x !== id)); }
+  function adicionarFornecedorExtraEdicao() {
+    if (!outroFornecedorIdEdicao || outroFornecedorIdEdicao === fornecedorIdEdicao || fornecedoresExtrasIdsEdicao.includes(outroFornecedorIdEdicao)) return;
+    setFornecedoresExtrasIdsEdicao(ids => [...ids, outroFornecedorIdEdicao]);
+    setOutroFornecedorIdEdicao("");
+  }
+  function removerFornecedorExtraEdicao(id) { setFornecedoresExtrasIdsEdicao(ids => ids.filter(x => x !== id)); }
   const grupoMaterialPorId = (id) => gruposMaterial.find(g => g.id === id) || null;
   async function criarGrupoMaterial(nomeBruto, aoCriar) {
     const nomeCriado = nomeBruto.trim().toUpperCase();
@@ -6672,7 +6691,7 @@ function MateriaisCadastro({ materiais, setMateriais, consumosMaterial, setConsu
   const materiaisFiltrados = useMemo(() => {
     const termo = busca.trim().toLowerCase();
     return [...materiais]
-      .filter(m => !termo || m.nome.toLowerCase().includes(termo) || (m.fornecedorNomeSnap || "").toLowerCase().includes(termo) || (m.grupoMaterialNomeSnap || "").toLowerCase().includes(termo))
+      .filter(m => !termo || m.nome.toLowerCase().includes(termo) || (m.fornecedorNomeSnap || "").toLowerCase().includes(termo) || (m.fornecedoresExtrasNomesSnap || []).some(n => n.toLowerCase().includes(termo)) || (m.grupoMaterialNomeSnap || "").toLowerCase().includes(termo))
       .sort((a, b) => a.nome.localeCompare(b.nome));
   }, [materiais, busca]);
 
@@ -6702,9 +6721,14 @@ function MateriaisCadastro({ materiais, setMateriais, consumosMaterial, setConsu
       // Fornecedores) — o nome fica salvo junto (snapshot) pra continuar
       // aparecendo mesmo se o fornecedor for renomeado ou excluído depois.
       fornecedorId, fornecedorNomeSnap: fornecedor?.nome || null,
+      // Adicionado: outros fornecedores que também vendem esse material,
+      // além do principal — não entram no código, só ficam registrados
+      // pra cotar preço na hora de comprar.
+      fornecedoresExtrasIds: fornecedoresExtrasIds,
+      fornecedoresExtrasNomesSnap: fornecedoresExtrasIds.map(id => fornecedorPorId(id)?.nome).filter(Boolean),
       grupoMaterialId: grupoMaterialId || null, grupoMaterialNomeSnap: grupoMaterialId ? grupoMaterialPorId(grupoMaterialId)?.nome || null : null,
     }]);
-    setNome(""); setQuantidadeEstoque(""); setEstoqueMinimo(""); setEstoqueMaximo(""); setPreco(""); setFornecedorId(""); setGrupoMaterialId("");
+    setNome(""); setQuantidadeEstoque(""); setEstoqueMinimo(""); setEstoqueMaximo(""); setPreco(""); setFornecedorId(""); setFornecedoresExtrasIds([]); setGrupoMaterialId("");
   }
   async function excluir(id) {
     const consumosDoMaterial = consumosMaterial.filter(c => c.materialId === id);
@@ -6721,6 +6745,7 @@ function MateriaisCadastro({ materiais, setMateriais, consumosMaterial, setConsu
     setEstoqueMaximoEdicao(m.estoqueMaximo != null ? String(m.estoqueMaximo) : "");
     setPrecoEdicao(m.preco != null ? String(m.preco) : "");
     setFornecedorIdEdicao(m.fornecedorId || "");
+    setFornecedoresExtrasIdsEdicao(m.fornecedoresExtrasIds || []);
     setGrupoMaterialIdEdicao(m.grupoMaterialId || "");
   }
   async function salvarEdicao(id) {
@@ -6733,6 +6758,8 @@ function MateriaisCadastro({ materiais, setMateriais, consumosMaterial, setConsu
       estoqueMaximo: estoqueMaximoEdicao ? Math.round(parseFloat(estoqueMaximoEdicao) * 1000) / 1000 : null,
       preco: precoEdicao ? Math.round(parseFloat(precoEdicao) * 100) / 100 : null,
       fornecedorId: fornecedorIdEdicao, fornecedorNomeSnap: fornecedor?.nome || null,
+      fornecedoresExtrasIds: fornecedoresExtrasIdsEdicao,
+      fornecedoresExtrasNomesSnap: fornecedoresExtrasIdsEdicao.map(fid => fornecedorPorId(fid)?.nome).filter(Boolean),
       // Corrigido: se o fornecedor mudar na edição, o código é
       // recalculado com o novo fornecedor, mantendo a mesma sequência.
       codigo: `${seg(fornecedor?.codigo)}.${seg(m.sequencia)}`,
@@ -6767,6 +6794,25 @@ function MateriaisCadastro({ materiais, setMateriais, consumosMaterial, setConsu
             <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
               <input value={novoFornecedorNome} onChange={e => setNovoFornecedorNome(e.target.value)} placeholder="Nome do fornecedor" style={{ ...inputStyle, flex: 1 }} onKeyDown={e => e.key === "Enter" && criarFornecedorRapido(novoFornecedorNome, id => { setFornecedorId(id); setNovoFornecedorNome(""); setNovoFornecedorAberto(false); })} />
               <PrimaryButton onClick={() => criarFornecedorRapido(novoFornecedorNome, id => { setFornecedorId(id); setNovoFornecedorNome(""); setNovoFornecedorAberto(false); })} disabled={!novoFornecedorNome.trim()}><Plus size={16} /></PrimaryButton>
+            </div>
+          )}
+        </Field>
+        <Field label="Outros fornecedores (opcional)">
+          <div style={{ display: "flex", gap: 6 }}>
+            <Select value={outroFornecedorId} onChange={e => setOutroFornecedorId(e.target.value)} style={{ flex: 1 }}>
+              <option value="">Selecione…</option>
+              {[...(fornecedores || [])].filter(f => f.id !== fornecedorId && !fornecedoresExtrasIds.includes(f.id)).sort((a, b) => a.nome.localeCompare(b.nome)).map(f => <option key={f.id} value={f.id}>{f.nome}</option>)}
+            </Select>
+            <PrimaryButton onClick={adicionarFornecedorExtra} disabled={!outroFornecedorId}><Plus size={16} /></PrimaryButton>
+          </div>
+          {fornecedoresExtrasIds.length > 0 && (
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 8 }}>
+              {fornecedoresExtrasIds.map(id => (
+                <span key={id} style={{ display: "flex", alignItems: "center", gap: 4, background: "#f4efe2", border: "1px solid #d9cfb7", borderRadius: 999, padding: "3px 4px 3px 10px", fontSize: 12, color: "#6b5d49" }}>
+                  {fornecedorPorId(id)?.nome || "—"}
+                  <IconButton onClick={() => removerFornecedorExtra(id)} danger title="Remover"><X size={13} /></IconButton>
+                </span>
+              ))}
             </div>
           )}
         </Field>
@@ -6861,6 +6907,25 @@ function MateriaisCadastro({ materiais, setMateriais, consumosMaterial, setConsu
                       </div>
                     )}
                   </Field>
+                  <Field label="Outros fornecedores (opcional)">
+                    <div style={{ display: "flex", gap: 6 }}>
+                      <Select value={outroFornecedorIdEdicao} onChange={e => setOutroFornecedorIdEdicao(e.target.value)} style={{ flex: 1 }}>
+                        <option value="">Selecione…</option>
+                        {[...(fornecedores || [])].filter(f => f.id !== fornecedorIdEdicao && !fornecedoresExtrasIdsEdicao.includes(f.id)).sort((a, b) => a.nome.localeCompare(b.nome)).map(f => <option key={f.id} value={f.id}>{f.nome}</option>)}
+                      </Select>
+                      <PrimaryButton onClick={adicionarFornecedorExtraEdicao} disabled={!outroFornecedorIdEdicao}><Plus size={16} /></PrimaryButton>
+                    </div>
+                    {fornecedoresExtrasIdsEdicao.length > 0 && (
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 8 }}>
+                        {fornecedoresExtrasIdsEdicao.map(id => (
+                          <span key={id} style={{ display: "flex", alignItems: "center", gap: 4, background: "#f4efe2", border: "1px solid #d9cfb7", borderRadius: 999, padding: "3px 4px 3px 10px", fontSize: 12, color: "#6b5d49" }}>
+                            {fornecedorPorId(id)?.nome || "—"}
+                            <IconButton onClick={() => removerFornecedorExtraEdicao(id)} danger title="Remover"><X size={13} /></IconButton>
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </Field>
                   <Field label="Grupo de materiais (opcional)">
                     <Select value={grupoMaterialIdEdicao} onChange={e => setGrupoMaterialIdEdicao(e.target.value)}>
                       <option value="">Selecione…</option>
@@ -6893,7 +6958,12 @@ function MateriaisCadastro({ materiais, setMateriais, consumosMaterial, setConsu
                       </div>
                       {fmtPreco(m.preco) && <div style={{ fontSize: 11.5, color: "#a3937a" }}>{fmtPreco(m.preco)}/{m.unidade}</div>}
                       {m.grupoMaterialNomeSnap && <div style={{ fontSize: 11.5, color: "#a3937a" }}>Grupo: {m.grupoMaterialNomeSnap}</div>}
-                      {m.fornecedorNomeSnap && <div style={{ fontSize: 11.5, color: "#a3937a" }}>Fornecedor: {m.fornecedorNomeSnap}</div>}
+                      {m.fornecedorNomeSnap && (
+                        <div style={{ fontSize: 11.5, color: "#a3937a" }}>
+                          Fornecedor: {m.fornecedorNomeSnap}
+                          {(m.fornecedoresExtrasNomesSnap || []).length > 0 ? ` · também: ${m.fornecedoresExtrasNomesSnap.join(", ")}` : ""}
+                        </div>
+                      )}
                     </div>
                     <div style={{ display: "flex" }}>
                       <IconButton onClick={() => abrirAjuste(m.id)} title="Ajustar estoque"><Plus size={15} /></IconButton>
