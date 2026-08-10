@@ -352,6 +352,22 @@ function useRecordCollectionArray(prefix, legacyKey) {
       const antigo = items.find(p => p.id === x.id);
       return !antigo || JSON.stringify(antigo) !== JSON.stringify(x);
     });
+    // Corrigido: trava de segurança contra apagar a coleção inteira de
+    // uma vez (o que já aconteceu uma vez sem explicação — produtos e
+    // seus vínculos zerados do nada). Exclusões em cascata legítimas
+    // (ex.: apagar os vínculos de UM produto) só zeram a coleção
+    // inteira por coincidência em bases pequenas, por isso a trava só
+    // entra quando: (a) sobra ZERO registro, e (b) a coleção já tinha
+    // um tamanho relevante — abaixo disso, um "zerar tudo" tem chance
+    // real de ser intencional; acima disso, é sinal de estado
+    // desatualizado (ex.: aba aberta há muito tempo), não de uma ação
+    // de um único usuário.
+    const pareceApagaoEmMassa = items.length >= 8 && toRemove.length === items.length;
+    if (pareceApagaoEmMassa) {
+      console.error(`Recusado: setAll("${prefix}") tentou remover ${toRemove.length} de ${items.length} registro(s) de uma vez — parece um estado desatualizado, não uma exclusão intencional. Nada foi apagado.`);
+      window.alert(`Não foi possível salvar "${prefix}" — a tela parece estar desatualizada (ia remover ${toRemove.length} de ${items.length} registros de uma vez). Recarregue a página antes de tentar de novo, pra evitar perder dados.`);
+      return;
+    }
     setItemsState(next);
     try {
       await Promise.all([
@@ -6666,6 +6682,11 @@ function MateriaisCadastro({ materiais, setMateriais, consumosMaterial, setConsu
   async function criarFornecedorRapido(nomeBruto, aoCriar) {
     const nomeCriado = nomeBruto.trim();
     if (!nomeCriado) return;
+    // Corrigido: se já existe um fornecedor com esse nome (ignorando
+    // maiúsculas/espaços), reaproveita em vez de cadastrar duplicado —
+    // evita poluir a base com variações do mesmo fornecedor.
+    const existente = (fornecedores || []).find(f => f.nome.trim().toLowerCase() === nomeCriado.toLowerCase());
+    if (existente) { aoCriar(existente.id); return; }
     const codigo = (fornecedores || []).reduce((max, f) => Math.max(max, f.codigo || 0), 0) + 1;
     const novo = { id: uid(), codigo, nome: nomeCriado, contato: "", categoria: "", observacao: "" };
     await setFornecedores([...(fornecedores || []), novo]);
@@ -6687,6 +6708,10 @@ function MateriaisCadastro({ materiais, setMateriais, consumosMaterial, setConsu
   async function criarGrupoMaterial(nomeBruto, aoCriar) {
     const nomeCriado = nomeBruto.trim().toUpperCase();
     if (!nomeCriado) return;
+    // Corrigido: reaproveita o grupo se já existir um com esse nome, em
+    // vez de cadastrar duplicado.
+    const existente = gruposMaterial.find(g => g.nome === nomeCriado);
+    if (existente) { aoCriar(existente.id); return; }
     const codigo = gruposMaterial.reduce((max, g) => Math.max(max, g.codigo || 0), 0) + 1;
     const novo = { id: uid(), codigo, nome: nomeCriado };
     await setGruposMaterial([...gruposMaterial, novo]);
@@ -7424,6 +7449,10 @@ function ProdutosCadastro({ produtos, setProdutos, etapas, vinculos, setVinculos
   async function criarGrupo(nomeBruto, aoCriar) {
     const nomeCriado = nomeBruto.trim().toUpperCase();
     if (!nomeCriado) return;
+    // Corrigido: reaproveita o grupo se já existir um com esse nome, em
+    // vez de cadastrar duplicado.
+    const existente = gruposProduto.find(g => g.nome === nomeCriado);
+    if (existente) { aoCriar(existente.id); return; }
     const codigo = gruposProduto.reduce((max, g) => Math.max(max, g.codigo || 0), 0) + 1;
     const novo = { id: uid(), codigo, nome: nomeCriado };
     await setGruposProduto([...gruposProduto, novo]);
@@ -7432,6 +7461,10 @@ function ProdutosCadastro({ produtos, setProdutos, etapas, vinculos, setVinculos
   async function criarTamanho(nomeBruto, aoCriar) {
     const nomeCriado = nomeBruto.trim().toUpperCase();
     if (!nomeCriado) return;
+    // Corrigido: reaproveita o tamanho se já existir um com esse nome,
+    // em vez de cadastrar duplicado.
+    const existente = tamanhos.find(t => t.nome === nomeCriado);
+    if (existente) { aoCriar(existente.id); return; }
     const codigo = tamanhos.reduce((max, t) => Math.max(max, t.codigo || 0), 0) + 1;
     const novo = { id: uid(), codigo, nome: nomeCriado };
     await setTamanhos([...tamanhos, novo]);
