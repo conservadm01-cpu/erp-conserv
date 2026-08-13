@@ -902,6 +902,7 @@ export default function App() {
           <ArteModelagem
             solicitacoes={solicitacoesArte} onSalvarSolicitacao={salvarSolicitacaoArte} onRemoverSolicitacao={removerSolicitacaoArte}
             produtos={produtos} setProdutos={setProdutos}
+            clientes={clientes} setClientes={setClientes}
           />
         )}
         {tab === "consumo" && perfilAtual.abas.includes("consumo") && (
@@ -3399,7 +3400,7 @@ function desenharLogoWarpeada(ctx, img, quad, grid) {
 
 const LARGURA_EDICAO_MOCKUP = 320;
 
-function EstudioMockup({ onSalvar }) {
+function EstudioMockup({ onSalvar, tamanhoArte }) {
   const [imagemProduto, setImagemProduto] = useState(null);
   const [logo, setLogo] = useState(null);
   const [cantos, setCantos] = useState(null);
@@ -3439,16 +3440,28 @@ function EstudioMockup({ onSalvar }) {
 
   // Posição inicial da logo: um retângulo no centro da foto, que o
   // solicitante ajusta arrastando os 4 cantos.
+  //
+  // Corrigido: a proporção desse retângulo inicial agora vem do campo
+  // "Tamanho da arte" (ex.: "20 x 15 cm"), quando preenchido — a arte já
+  // abre com o formato pedido, em vez de sempre um quadrado genérico. O
+  // reposicionamento e redimensionamento com o mouse continuam livres
+  // depois disso.
   useEffect(() => {
     if (imagemProduto && logo && !cantos && alturaEdicao > 0) {
-      const w = LARGURA_EDICAO_MOCKUP * 0.4, h = alturaEdicao * 0.4;
+      const medida = (tamanhoArte || "").match(/(\d+(?:[.,]\d+)?)\s*[x×X]\s*(\d+(?:[.,]\d+)?)/);
+      const proporcao = medida
+        ? parseFloat(medida[1].replace(",", ".")) / parseFloat(medida[2].replace(",", "."))
+        : (logo.width / logo.height) || 1;
+      let w = LARGURA_EDICAO_MOCKUP * 0.4, h = w / proporcao;
+      const alturaMax = alturaEdicao * 0.8;
+      if (h > alturaMax) { w *= alturaMax / h; h = alturaMax; }
       const cx = LARGURA_EDICAO_MOCKUP / 2, cy = alturaEdicao / 2;
       setCantos([
         { x: cx - w / 2, y: cy - h / 2 }, { x: cx + w / 2, y: cy - h / 2 },
         { x: cx + w / 2, y: cy + h / 2 }, { x: cx - w / 2, y: cy + h / 2 },
       ]);
     }
-  }, [imagemProduto, logo, cantos, alturaEdicao]);
+  }, [imagemProduto, logo, cantos, alturaEdicao, tamanhoArte]);
 
   useEffect(() => {
     if (!imagemProduto || !canvasRef.current || alturaEdicao === 0) return;
@@ -3527,7 +3540,7 @@ function EstudioMockup({ onSalvar }) {
     <Card style={{ marginTop: 4, marginBottom: 14, background: "#faf6ec" }}>
       <div style={{ fontSize: 13, fontWeight: 800, color: "#1c2b39", marginBottom: 4 }}>Estúdio de mockup (opcional)</div>
       <div style={{ fontSize: 11.5, color: "#6b5d49", marginBottom: 10 }}>
-        Suba a foto do produto e a logo do cliente, depois arraste os 4 cantos da logo até encaixar na perspectiva do tecido na foto. Não é uma simulação 3D — é um posicionamento com perspectiva sobre a própria foto.
+        Suba a foto do produto e a logo do cliente — a arte já abre no formato do campo "Tamanho da arte" (se preenchido) — depois arraste os 4 cantos com o mouse até encaixar na posição e na perspectiva do tecido na foto. Não é uma simulação 3D — é um posicionamento com perspectiva sobre a própria foto.
       </div>
       <div style={{ display: "flex", gap: 8, marginBottom: 10, flexWrap: "wrap" }}>
         <input ref={inputProdutoRef} type="file" accept="image/*" style={{ display: "none" }} onChange={onEscolherProduto} />
@@ -3561,11 +3574,27 @@ function EstudioMockup({ onSalvar }) {
   );
 }
 
-function ArteModelagem({ solicitacoes, onSalvarSolicitacao, onRemoverSolicitacao, produtos, setProdutos }) {
+function ArteModelagem({ solicitacoes, onSalvarSolicitacao, onRemoverSolicitacao, produtos, setProdutos, clientes, setClientes }) {
   const [tipo, setTipo] = useState("arte");
   const [produtoId, setProdutoId] = useState("");
   const [novoProdutoAberto, setNovoProdutoAberto] = useState(false);
   const [novoProdutoNome, setNovoProdutoNome] = useState("");
+  // Adicionado: cliente da solicitação — com cadastro rápido, igual aos
+  // outros "+ Novo X" já usados no app.
+  const [clienteId, setClienteId] = useState("");
+  const [novoClienteAberto, setNovoClienteAberto] = useState(false);
+  const [novoClienteNome, setNovoClienteNome] = useState("");
+  async function criarClienteRapido(nomeBruto, aoCriar) {
+    const nomeCriado = nomeBruto.trim();
+    if (!nomeCriado) return;
+    // Reaproveita se já existir um cliente com esse nome, em vez de
+    // cadastrar duplicado.
+    const existente = (clientes || []).find(c => c.nome.trim().toLowerCase() === nomeCriado.toLowerCase());
+    if (existente) { aoCriar(existente.id); return; }
+    const novo = { id: uid(), nome: nomeCriado, contato: "", observacao: "" };
+    await setClientes([...(clientes || []), novo]);
+    aoCriar(novo.id);
+  }
   // Arte finalista
   const [observacaoCliente, setObservacaoCliente] = useState("");
   const [tamanhoArte, setTamanhoArte] = useState("");
@@ -3626,9 +3655,11 @@ function ArteModelagem({ solicitacoes, onSalvarSolicitacao, onRemoverSolicitacao
     // Adicionado: numeração sequencial da fila, mesma lógica usada nas
     // Ordens de Produção — sempre o maior número já usado + 1.
     const numero = solicitacoes.reduce((max, s) => Math.max(max, s.numero || 0), 0) + 1;
+    const cliente = (clientes || []).find(c => c.id === clienteId);
     const nova = {
       id: uid(), numero, tipo,
       produtoId, produtoNomeSnap: produto?.nome || "—",
+      clienteId: clienteId || null, clienteNomeSnap: cliente?.nome || null,
       status: "pendente",
       ...(tipo === "arte" ? {
         observacaoCliente: observacaoCliente.trim(),
@@ -3644,7 +3675,7 @@ function ArteModelagem({ solicitacoes, onSalvarSolicitacao, onRemoverSolicitacao
       criadaEm: new Date().toISOString(), concluidaEm: null,
     };
     await onSalvarSolicitacao(nova);
-    setProdutoId("");
+    setProdutoId(""); setClienteId("");
     setObservacaoCliente(""); setTamanhoArte(""); setLocalizacaoArte(""); setPantones([""]); setArquivosArte([]);
     setMedidas(""); setDetalhesProjeto(""); setArquivosModelagem([]);
   }
@@ -3664,7 +3695,7 @@ function ArteModelagem({ solicitacoes, onSalvarSolicitacao, onRemoverSolicitacao
   const filtradas = solicitacoes.filter(s => {
     const termo = busca.trim().toLowerCase();
     if (!termo) return true;
-    return (s.produtoNomeSnap || "").toLowerCase().includes(termo) || `#${String(s.numero).padStart(3, "0")}`.includes(termo);
+    return (s.produtoNomeSnap || "").toLowerCase().includes(termo) || (s.clienteNomeSnap || "").toLowerCase().includes(termo) || `#${String(s.numero).padStart(3, "0")}`.includes(termo);
   });
   const pendentes = [...filtradas.filter(s => s.status !== "concluida")].sort((a, b) => (a.numero || 0) - (b.numero || 0));
   const concluidas = [...filtradas.filter(s => s.status === "concluida")].sort((a, b) => new Date(b.concluidaEm || 0) - new Date(a.concluidaEm || 0));
@@ -3702,7 +3733,7 @@ function ArteModelagem({ solicitacoes, onSalvarSolicitacao, onRemoverSolicitacao
               </div>
               <div style={{ fontWeight: 800, fontSize: 14, color: "#1c2b39" }}>#{String(s.numero).padStart(3, "0")} · {s.produtoNomeSnap}</div>
               <div style={{ fontSize: 12, color: "#a3937a" }}>
-                criada em {new Date(s.criadaEm).toLocaleDateString("pt-BR")}{(s.arquivos || []).length > 0 ? ` · 📎 ${s.arquivos.length}` : ""}
+                {s.clienteNomeSnap ? `${s.clienteNomeSnap} · ` : ""}criada em {new Date(s.criadaEm).toLocaleDateString("pt-BR")}{(s.arquivos || []).length > 0 ? ` · 📎 ${s.arquivos.length}` : ""}
               </div>
             </div>
           </div>
@@ -3775,9 +3806,25 @@ function ArteModelagem({ solicitacoes, onSalvarSolicitacao, onRemoverSolicitacao
           )}
         </Field>
 
+        <Field label="Cliente (opcional)">
+          <Select value={clienteId} onChange={e => setClienteId(e.target.value)}>
+            <option value="">Selecione…</option>
+            {[...(clientes || [])].sort((a, b) => a.nome.localeCompare(b.nome)).map(c => <option key={c.id} value={c.id}>{c.nome}</option>)}
+          </Select>
+          <button type="button" onClick={() => setNovoClienteAberto(v => !v)} style={linkButtonStyle}>
+            {novoClienteAberto ? "Cancelar" : "+ Novo cliente"}
+          </button>
+          {novoClienteAberto && (
+            <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+              <input value={novoClienteNome} onChange={e => setNovoClienteNome(e.target.value)} placeholder="Nome do cliente" style={{ ...inputStyle, flex: 1 }} onKeyDown={e => e.key === "Enter" && criarClienteRapido(novoClienteNome, id => { setClienteId(id); setNovoClienteNome(""); setNovoClienteAberto(false); })} />
+              <PrimaryButton onClick={() => criarClienteRapido(novoClienteNome, id => { setClienteId(id); setNovoClienteNome(""); setNovoClienteAberto(false); })} disabled={!novoClienteNome.trim()}><Plus size={16} /></PrimaryButton>
+            </div>
+          )}
+        </Field>
+
         {tipo === "arte" ? (
           <>
-            <EstudioMockup onSalvar={arquivo => setArquivosArte(a => [...a, arquivo])} />
+            <EstudioMockup onSalvar={arquivo => setArquivosArte(a => [...a, arquivo])} tamanhoArte={tamanhoArte} />
             <Field label="Anexo da arte (opcional)">
               {renderGaleriaAnexo(arquivosArte, removerArquivoArte)}
               <input ref={arquivoArteRef} type="file" multiple accept="image/*,.pdf,.ai,.eps,.cdr" style={{ display: "none" }}
@@ -3843,7 +3890,7 @@ function ArteModelagem({ solicitacoes, onSalvarSolicitacao, onRemoverSolicitacao
 
       <Card style={{ marginBottom: 16, padding: 12 }}>
         <Field label="Pesquisar">
-          <input value={busca} onChange={e => setBusca(e.target.value)} placeholder="Nº da solicitação ou produto…" style={inputStyle} />
+          <input value={busca} onChange={e => setBusca(e.target.value)} placeholder="Nº da solicitação, produto ou cliente…" style={inputStyle} />
         </Field>
       </Card>
 
