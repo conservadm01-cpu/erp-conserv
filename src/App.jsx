@@ -6355,13 +6355,12 @@ function RelatorioGradeImpressao({ payload, onFechar }) {
               </div>
               {!folhaUnica && <div style={{ fontSize: 12, fontWeight: 700, color: "#2f4a63" }}>Folha {totalFolhas} de {totalFolhas}</div>}
             </div>
-            {/* Adicionado: em relatórios de folha única, os anexos saem em
-                miniaturas menores (3 colunas, sem forçar quebra de
-                página) pra caber junto com a grade de informações na
-                mesma folha. Nos demais relatórios, continuam em 2
-                colunas com imagem grande, uma quebra de página a cada
-                2 arquivos. */}
-            <div style={{ display: "grid", gridTemplateColumns: folhaUnica ? "repeat(3, 1fr)" : "1fr 1fr", gap: folhaUnica ? 10 : 14 }}>
+            {/* Corrigido: relatórios de folha única também usam 2 colunas
+                com imagem grande (igual aos demais relatórios) — a
+                logo/arte fica bem mais visível; o encolhimento
+                automático da folha (mais acima) garante que ainda cabe
+                tudo numa página só, do tamanho que for necessário. */}
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: folhaUnica ? 12 : 14 }}>
               {payload.anexos.map((a, i) => (
                 <div key={a.id} style={{
                   border: "1px solid #e6ddc8", borderRadius: 8, overflow: "hidden", breakInside: "avoid",
@@ -6371,11 +6370,11 @@ function RelatorioGradeImpressao({ payload, onFechar }) {
                   }),
                 }}>
                   {a.tipo && a.tipo.startsWith("image/") ? (
-                    <img src={a.dataUrl} alt={a.nome} style={{ width: "100%", height: folhaUnica ? "160px" : "46vh", objectFit: "contain", display: "block", background: "#f4efe2" }} />
+                    <img src={a.dataUrl} alt={a.nome} style={{ width: "100%", height: folhaUnica ? "280px" : "46vh", objectFit: "contain", display: "block", background: "#f4efe2" }} />
                   ) : a.tipo && a.tipo.startsWith("video/") ? (
-                    <video src={a.dataUrl} controls style={{ width: "100%", height: folhaUnica ? "160px" : "46vh", objectFit: "contain", display: "block", background: "#000" }} className="no-print-video" />
+                    <video src={a.dataUrl} controls style={{ width: "100%", height: folhaUnica ? "280px" : "46vh", objectFit: "contain", display: "block", background: "#000" }} className="no-print-video" />
                   ) : (
-                    <div style={{ width: "100%", height: folhaUnica ? "160px" : "46vh", display: "flex", alignItems: "center", justifyContent: "center", color: "#a3937a" }}>Arquivo</div>
+                    <div style={{ width: "100%", height: folhaUnica ? "280px" : "46vh", display: "flex", alignItems: "center", justifyContent: "center", color: "#a3937a" }}>Arquivo</div>
                   )}
                   <div style={{ fontSize: 12, color: "#6b5d49", padding: "6px 9px", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{a.nome}</div>
                 </div>
