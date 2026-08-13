@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef } from "react";
-import { Clock, Users, Package, BarChart3, Plus, Trash2, X, Play, Loader2, ClipboardList, Paperclip, Check, ChevronUp, ChevronDown, ListOrdered, Scissors, Printer, MessageCircle, Send, Pin, Smartphone } from "lucide-react";
+import { Clock, Users, Package, BarChart3, Plus, Trash2, X, Play, Loader2, ClipboardList, Paperclip, Check, ChevronUp, ChevronDown, ListOrdered, Scissors, Printer, MessageCircle, Send, Pin, Smartphone, Palette } from "lucide-react";
 
 // ---------- Identidade visual (tema de confecção) ----------
 // Fonte de destaque "Fraunces" (serifada, com entalhes que lembram costura)
@@ -575,6 +575,9 @@ export default function App() {
   // Adicionado: Ordens de Produção (OP) — controle sequencial de um lote
   // desde a primeira etapa (normalmente Corte) até a última do produto.
   const { items: ordensProducao, loaded: ordensLoaded, salvar: salvarOrdemProducao, remover: removerOrdemProducao } = useRecordCollection("ordem_producao");
+  // Adicionado: fila de solicitações de arte para o(a) arte-finalista —
+  // pedidos que precisam ser resolvidos antes da produção começar.
+  const { items: solicitacoesArte, loaded: solicitacoesArteLoaded, salvar: salvarSolicitacaoArte, remover: removerSolicitacaoArte } = useRecordCollection("solicitacao_arte");
   const [usuarioAtual, setUsuarioAtual] = useState(null);
 
   // Adicionado: alerta de mensagens novas do chat interno — contador no
@@ -645,7 +648,7 @@ export default function App() {
   const allLoaded = setoresLoaded && etapasLoaded && produtosLoaded && vinculosLoaded && colabLoaded
     && equipesLoaded && registrosLoaded && avaliacoesLoaded && anexosLoaded && acessosLoaded && ordensLoaded && clientesLoaded
     && materiaisLoaded && consumosMaterialLoaded && movimentacoesMaterialLoaded && solicitacoesCompraLoaded && cotacoesCompraLoaded
-    && fornecedoresLoaded && equipamentosLoaded && movimentacoesEstoqueLoaded && feriadosLoaded
+    && fornecedoresLoaded && equipamentosLoaded && movimentacoesEstoqueLoaded && feriadosLoaded && solicitacoesArteLoaded
     && gruposProdutoLoaded && gruposMaterialLoaded && tamanhosLoaded;
   const [seedChecked, setSeedChecked] = useState(false);
 
@@ -657,8 +660,8 @@ export default function App() {
   // colaboradores). O chat interno fica liberado pros três perfis, já
   // que é um canal de conversa entre todo mundo que usa o sistema.
   const PERFIS_ACESSO = {
-    administrador: { label: "Administrador", abas: ["producao", "avaliacao", "consumo", "relatorios", "cadastros", "chat"] },
-    gestor: { label: "Gestor", abas: ["producao", "avaliacao", "consumo", "relatorios", "cadastros", "chat"] },
+    administrador: { label: "Administrador", abas: ["producao", "arte", "avaliacao", "consumo", "relatorios", "cadastros", "chat"] },
+    gestor: { label: "Gestor", abas: ["producao", "arte", "avaliacao", "consumo", "relatorios", "cadastros", "chat"] },
     colaborador: { label: "Colaborador", abas: ["producao", "chat"] },
   };
   const perfilAtual = PERFIS_ACESSO[usuarioAtual?.perfil] || PERFIS_ACESSO.colaborador;
@@ -891,6 +894,13 @@ export default function App() {
             consumosMaterial={consumosMaterial} materiais={materiais} ehAdministrador={ehAdministrador}
           />
         )}
+        {tab === "arte" && perfilAtual.abas.includes("arte") && (
+          <Criacao
+            solicitacoes={solicitacoesArte} onSalvarSolicitacao={salvarSolicitacaoArte} onRemoverSolicitacao={removerSolicitacaoArte}
+            produtos={produtos} setProdutos={setProdutos}
+            clientes={clientes} setClientes={setClientes}
+          />
+        )}
         {tab === "avaliacao" && perfilAtual.abas.includes("avaliacao") && (
           <Avaliacao colaboradores={colaboradores} avaliacoes={avaliacoes} onSalvarAvaliacao={salvarAvaliacao} onRemoverAvaliacao={removerAvaliacao} />
         )}
@@ -949,6 +959,7 @@ export default function App() {
       }}>
         {[
           { key: "producao", label: "Produção", icon: Clock },
+          { key: "arte", label: "Criação", icon: Palette },
           { key: "avaliacao", label: "Avaliação", icon: Users },
           { key: "consumo", label: "Materiais", icon: Package },
           { key: "chat", label: "Chat", icon: MessageCircle, badge: mensagensNaoLidas },
@@ -3282,6 +3293,476 @@ function Avaliacao({ colaboradores, avaliacoes, onSalvarAvaliacao, onRemoverAval
             </div>
           </Card>
         ))}
+      </div>
+    </div>
+  );
+}
+
+// ---------- Criação (solicitação de arte) ----------
+// Adicionado: fila de solicitações de arte para o(a) arte-finalista,
+// seguindo um modelo fixo de informações (cliente, produto, medidas,
+// personalização, arquivos, texto e observações) — o mesmo modelo que
+// já era usado manualmente para pedir arte pelo grupo, agora dentro do
+// sistema. Cada solicitação pode ser copiada como texto pronto, no
+// mesmo formato, pra colar onde for preciso.
+const TIPOS_PERSONALIZACAO = ["Silk", "Bordado", "Sublimação", "Outro"];
+const LOCAIS_PERSONALIZACAO = ["Frente", "Costas", "Bolso", "Manga", "Outro"];
+
+function gerarTextoSolicitacaoArte(s) {
+  const personalizacao = s.tipoPersonalizacao === "Outro" ? (s.tipoPersonalizacaoOutro || "Outro") : (s.tipoPersonalizacao || "—");
+  const local = s.localPersonalizacao === "Outro" ? (s.localPersonalizacaoOutro || "Outro") : (s.localPersonalizacao || "—");
+  const linhas = [
+    "📌 SOLICITAÇÃO DE ARTE", "",
+    `👤 Cliente: ${s.clienteNomeSnap || "—"}`,
+    `📦 Produto: ${s.produtoNomeSnap || "—"}`,
+    `📏 Tamanho/medida do produto: ${s.tamanhoProduto || "—"}`,
+    `🎨 Cor do produto: ${s.corProduto || "—"}`,
+    `🧵 Tecido/material: ${s.tecidoMaterial || "—"}`,
+    `🖨️ Tipo de personalização: ${personalizacao}`,
+    `📍 Local da personalização: ${local}`,
+    `📐 Tamanho da estampa/logo: ${s.tamanhoEstampa || "—"}`,
+    `🎨 Cor da estampa: ${s.corEstampa || "—"}`,
+    `🔢 Quantidade: ${s.quantidade || "—"}`, "",
+    "🖼️ LOGO/ARQUIVO DO CLIENTE:",
+    (s.arquivosLogo || []).length > 0 ? `${s.arquivosLogo.length} arquivo(s) anexado(s) na solicitação.` : "Nenhum arquivo anexado ainda.", "",
+    "✍️ TEXTO QUE DEVE ENTRAR NA ARTE:",
+    s.textoArte || "—", "",
+    "📷 REFERÊNCIA:",
+    (s.arquivosReferencia || []).length > 0 ? `${s.arquivosReferencia.length} arquivo(s) anexado(s).` : "Nenhuma referência anexada.", "",
+    "📝 OBSERVAÇÕES DO CLIENTE:",
+    s.observacoesCliente || "—",
+  ];
+  return linhas.join("\n");
+}
+function gerarTextoAlteracaoArte(s) {
+  const linhas = [
+    "📌 ALTERAÇÃO DE ARTE", "",
+    `👤 Cliente: ${s.clienteNomeSnap || "—"}`,
+    `📦 Produto: ${s.produtoNomeSnap || "—"}`, "",
+    "✏️ O QUE PRECISA SER ALTERADO:",
+    s.descricaoAlteracao || "—",
+  ];
+  if ((s.observacoesCliente || "").trim()) linhas.push("", "📝 OBSERVAÇÕES:", s.observacoesCliente);
+  return linhas.join("\n");
+}
+async function copiarTexto(texto) {
+  try {
+    await navigator.clipboard.writeText(texto);
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
+function Criacao({ solicitacoes, onSalvarSolicitacao, onRemoverSolicitacao, produtos, setProdutos, clientes, setClientes }) {
+  const [ehAlteracao, setEhAlteracao] = useState(false);
+  const [clienteId, setClienteId] = useState("");
+  const [novoClienteAberto, setNovoClienteAberto] = useState(false);
+  const [novoClienteNome, setNovoClienteNome] = useState("");
+  const [produtoId, setProdutoId] = useState("");
+  const [novoProdutoAberto, setNovoProdutoAberto] = useState(false);
+  const [novoProdutoNome, setNovoProdutoNome] = useState("");
+  // Nova arte
+  const [tamanhoProduto, setTamanhoProduto] = useState("");
+  const [corProduto, setCorProduto] = useState("");
+  const [tecidoMaterial, setTecidoMaterial] = useState("");
+  const [tipoPersonalizacao, setTipoPersonalizacao] = useState("");
+  const [tipoPersonalizacaoOutro, setTipoPersonalizacaoOutro] = useState("");
+  const [localPersonalizacao, setLocalPersonalizacao] = useState("");
+  const [localPersonalizacaoOutro, setLocalPersonalizacaoOutro] = useState("");
+  const [tamanhoEstampa, setTamanhoEstampa] = useState("");
+  const [corEstampa, setCorEstampa] = useState("");
+  const [quantidade, setQuantidade] = useState("");
+  const [arquivosLogo, setArquivosLogo] = useState([]);
+  const arquivoLogoRef = useRef(null);
+  const [textoArte, setTextoArte] = useState("");
+  const [arquivosReferencia, setArquivosReferencia] = useState([]);
+  const arquivoReferenciaRef = useRef(null);
+  const [observacoesCliente, setObservacoesCliente] = useState("");
+  // Alteração de arte
+  const [descricaoAlteracao, setDescricaoAlteracao] = useState("");
+
+  const [busca, setBusca] = useState("");
+  const [expandidoId, setExpandidoId] = useState(null);
+  const [copiadoId, setCopiadoId] = useState(null);
+
+  async function criarClienteRapido(nomeBruto, aoCriar) {
+    const nomeCriado = nomeBruto.trim();
+    if (!nomeCriado) return;
+    const existente = (clientes || []).find(c => c.nome.trim().toLowerCase() === nomeCriado.toLowerCase());
+    if (existente) { aoCriar(existente.id); return; }
+    const novo = { id: uid(), nome: nomeCriado, contato: "", observacao: "" };
+    await setClientes([...(clientes || []), novo]);
+    aoCriar(novo.id);
+  }
+  async function criarProduto() {
+    if (!novoProdutoNome.trim()) return;
+    const sequencia = produtos.reduce((max, p) => Math.max(max, p.sequencia || 0), 0) + 1;
+    // Adicionado rapidamente por aqui, sem grupo/tecido/tamanho — por isso
+    // ainda não tem um código completo (isso fica pendente até alguém
+    // terminar o cadastro em Cadastros → Produtos).
+    const p = { id: uid(), sequencia, codigo: null, nome: novoProdutoNome.trim().toUpperCase() };
+    await setProdutos([...produtos, p]);
+    setProdutoId(p.id);
+    setNovoProdutoNome(""); setNovoProdutoAberto(false);
+  }
+
+  async function lerArquivos(fileList) {
+    const arquivos = Array.from(fileList || []);
+    const novos = [];
+    for (const file of arquivos) {
+      if (file.size > 4.5 * 1024 * 1024) { alert(`"${file.name}" é maior que 4,5MB e não pode ser anexado.`); continue; }
+      const dataUrl = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+      });
+      novos.push({ id: uid(), nome: file.name, tipo: file.type, dataUrl });
+    }
+    return novos;
+  }
+  async function anexarLogo(fileList) { const novos = await lerArquivos(fileList); if (novos.length) setArquivosLogo(a => [...a, ...novos]); }
+  async function anexarReferencia(fileList) { const novos = await lerArquivos(fileList); if (novos.length) setArquivosReferencia(a => [...a, ...novos]); }
+  function removerArquivoLogo(id) { setArquivosLogo(a => a.filter(x => x.id !== id)); }
+  function removerArquivoReferencia(id) { setArquivosReferencia(a => a.filter(x => x.id !== id)); }
+
+  // Adicionado: cliente e produto são obrigatórios sempre — pra alteração
+  // de arte, também é preciso descrever claramente o que precisa mudar.
+  const podeCriar = !!clienteId && !!produtoId && (!ehAlteracao || descricaoAlteracao.trim().length > 0);
+
+  function limparFormulario() {
+    setClienteId(""); setProdutoId("");
+    setTamanhoProduto(""); setCorProduto(""); setTecidoMaterial("");
+    setTipoPersonalizacao(""); setTipoPersonalizacaoOutro("");
+    setLocalPersonalizacao(""); setLocalPersonalizacaoOutro("");
+    setTamanhoEstampa(""); setCorEstampa(""); setQuantidade("");
+    setArquivosLogo([]); setTextoArte(""); setArquivosReferencia([]); setObservacoesCliente("");
+    setDescricaoAlteracao(""); setEhAlteracao(false);
+  }
+
+  async function criarSolicitacao() {
+    if (!podeCriar) return;
+    const cliente = (clientes || []).find(c => c.id === clienteId);
+    const produto = produtos.find(p => p.id === produtoId);
+    // Adicionado: numeração sequencial da fila — sempre o maior número já
+    // usado + 1, igual às Ordens de Produção.
+    const numero = solicitacoes.reduce((max, s) => Math.max(max, s.numero || 0), 0) + 1;
+    const nova = {
+      id: uid(), numero,
+      ehAlteracao,
+      clienteId, clienteNomeSnap: cliente?.nome || "—",
+      produtoId, produtoNomeSnap: produto?.nome || "—",
+      status: "pendente",
+      ...(ehAlteracao ? {
+        descricaoAlteracao: descricaoAlteracao.trim(),
+        observacoesCliente: observacoesCliente.trim(),
+        arquivosReferencia,
+      } : {
+        tamanhoProduto: tamanhoProduto.trim(), corProduto: corProduto.trim(), tecidoMaterial: tecidoMaterial.trim(),
+        tipoPersonalizacao, tipoPersonalizacaoOutro: tipoPersonalizacaoOutro.trim(),
+        localPersonalizacao, localPersonalizacaoOutro: localPersonalizacaoOutro.trim(),
+        tamanhoEstampa: tamanhoEstampa.trim(), corEstampa: corEstampa.trim(), quantidade: quantidade.trim(),
+        arquivosLogo, textoArte: textoArte.trim(), arquivosReferencia, observacoesCliente: observacoesCliente.trim(),
+      }),
+      criadaEm: new Date().toISOString(), concluidaEm: null,
+    };
+    await onSalvarSolicitacao(nova);
+    limparFormulario();
+  }
+
+  async function alternarConcluida(s) {
+    await onSalvarSolicitacao({
+      ...s,
+      status: s.status === "concluida" ? "pendente" : "concluida",
+      concluidaEm: s.status === "concluida" ? null : new Date().toISOString(),
+    });
+  }
+  async function excluir(id) {
+    if (!window.confirm("Excluir esta solicitação?")) return;
+    await onRemoverSolicitacao(id);
+  }
+  async function aoCopiar(s) {
+    const texto = s.ehAlteracao ? gerarTextoAlteracaoArte(s) : gerarTextoSolicitacaoArte(s);
+    const ok = await copiarTexto(texto);
+    if (ok) { setCopiadoId(s.id); setTimeout(() => setCopiadoId(null), 2000); }
+    else alert("Não foi possível copiar automaticamente. Selecione e copie o texto manualmente.");
+  }
+
+  const filtradas = solicitacoes.filter(s => {
+    const termo = busca.trim().toLowerCase();
+    if (!termo) return true;
+    return (s.produtoNomeSnap || "").toLowerCase().includes(termo) || (s.clienteNomeSnap || "").toLowerCase().includes(termo) || `#${String(s.numero).padStart(3, "0")}`.includes(termo);
+  });
+  const pendentes = [...filtradas.filter(s => s.status !== "concluida")].sort((a, b) => (a.numero || 0) - (b.numero || 0));
+  const concluidas = [...filtradas.filter(s => s.status === "concluida")].sort((a, b) => new Date(b.concluidaEm || 0) - new Date(a.concluidaEm || 0));
+
+  function renderGaleriaAnexo(arquivos, onRemover) {
+    if (arquivos.length === 0) return null;
+    return (
+      <div style={{ display: "flex", gap: 6, marginBottom: 8, flexWrap: "wrap" }}>
+        {arquivos.map(a => (
+          <div key={a.id} style={{ position: "relative", border: "1px solid #e6ddc8", borderRadius: 6, overflow: "hidden", background: "#fff" }}>
+            {a.tipo && a.tipo.startsWith("image/")
+              ? <img src={a.dataUrl} alt={a.nome} style={{ width: 56, height: 56, objectFit: "cover", display: "block" }} />
+              : <div style={{ width: 56, height: 56, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", color: "#a3937a", gap: 2 }}>
+                  <Paperclip size={15} />
+                  <span style={{ fontSize: 8, padding: "0 3px", textAlign: "center", overflow: "hidden", whiteSpace: "nowrap", textOverflow: "ellipsis", maxWidth: 52 }}>{a.nome}</span>
+                </div>}
+            <button onClick={() => onRemover(a.id)} style={{ position: "absolute", top: 2, right: 2, background: "rgba(255,255,255,0.92)", border: "none", borderRadius: 999, width: 17, height: 17, cursor: "pointer", color: "#b13232", display: "flex", alignItems: "center", justifyContent: "center" }}><X size={10} /></button>
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  function renderCardSolicitacao(s) {
+    const expandido = expandidoId === s.id;
+    return (
+      <Card key={s.id} style={{ padding: 14 }}>
+        <div onClick={() => setExpandidoId(expandido ? null : s.id)} style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8, cursor: "pointer" }}>
+          <div style={{ display: "flex", alignItems: "flex-start", gap: 6 }}>
+            {expandido ? <ChevronUp size={16} style={{ marginTop: 3, color: "#a3937a", flexShrink: 0 }} /> : <ChevronDown size={16} style={{ marginTop: 3, color: "#a3937a", flexShrink: 0 }} />}
+            <div>
+              {s.ehAlteracao && (
+                <div style={{ display: "inline-flex", alignItems: "center", fontSize: 10.5, fontWeight: 700, color: "#b5820a", background: "#fbf0da", padding: "2px 7px", borderRadius: 999, marginBottom: 4 }}>
+                  Alteração de arte
+                </div>
+              )}
+              <div style={{ fontWeight: 800, fontSize: 14, color: "#1c2b39" }}>#{String(s.numero).padStart(3, "0")} · {s.produtoNomeSnap}</div>
+              <div style={{ fontSize: 12, color: "#a3937a" }}>
+                {s.clienteNomeSnap ? `${s.clienteNomeSnap} · ` : ""}criada em {new Date(s.criadaEm).toLocaleDateString("pt-BR")}{(s.arquivosLogo || []).length > 0 ? ` · 📎 ${s.arquivosLogo.length}` : ""}
+              </div>
+            </div>
+          </div>
+          <StatusDot cor={s.status === "concluida" ? "verde" : "laranja"} />
+        </div>
+        {expandido && (
+          <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px solid #efe8d8" }}>
+            {s.ehAlteracao ? (
+              <div style={{ display: "flex", flexDirection: "column", gap: 6, fontSize: 12.5, color: "#2a2015" }}>
+                <div><b>O que precisa ser alterado:</b> <span style={{ whiteSpace: "pre-wrap" }}>{s.descricaoAlteracao}</span></div>
+                {s.observacoesCliente && <div><b>Observações:</b> {s.observacoesCliente}</div>}
+              </div>
+            ) : (
+              <div style={{ display: "flex", flexDirection: "column", gap: 6, fontSize: 12.5, color: "#2a2015" }}>
+                {s.tamanhoProduto && <div><b>Tamanho/medida do produto:</b> {s.tamanhoProduto}</div>}
+                {s.corProduto && <div><b>Cor do produto:</b> {s.corProduto}</div>}
+                {s.tecidoMaterial && <div><b>Tecido/material:</b> {s.tecidoMaterial}</div>}
+                {s.tipoPersonalizacao && <div><b>Tipo de personalização:</b> {s.tipoPersonalizacao === "Outro" ? s.tipoPersonalizacaoOutro : s.tipoPersonalizacao}</div>}
+                {s.localPersonalizacao && <div><b>Local da personalização:</b> {s.localPersonalizacao === "Outro" ? s.localPersonalizacaoOutro : s.localPersonalizacao}</div>}
+                {s.tamanhoEstampa && <div><b>Tamanho da estampa/logo:</b> {s.tamanhoEstampa}</div>}
+                {s.corEstampa && <div><b>Cor da estampa:</b> {s.corEstampa}</div>}
+                {s.quantidade && <div><b>Quantidade:</b> {s.quantidade}</div>}
+                {s.textoArte && <div><b>Texto que deve entrar na arte:</b> <span style={{ whiteSpace: "pre-wrap" }}>{s.textoArte}</span></div>}
+                {s.observacoesCliente && <div><b>Observações do cliente:</b> {s.observacoesCliente}</div>}
+              </div>
+            )}
+            {(s.arquivosLogo || []).length > 0 && (
+              <>
+                <div style={{ fontSize: 11.5, fontWeight: 700, color: "#6b5d49", marginTop: 10 }}>Logo/arquivo do cliente</div>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8, marginTop: 4 }}>
+                  {s.arquivosLogo.map(a => (
+                    a.tipo && a.tipo.startsWith("image/")
+                      ? <a key={a.id} href={a.dataUrl} download={a.nome}><img src={a.dataUrl} alt={a.nome} style={{ width: "100%", height: 80, objectFit: "cover", borderRadius: 6, border: "1px solid #e6ddc8", display: "block" }} /></a>
+                      : <a key={a.id} href={a.dataUrl} download={a.nome} style={{ fontSize: 11, color: "#2f4a63", border: "1px solid #e6ddc8", borderRadius: 6, padding: "4px 8px", textDecoration: "none", display: "inline-flex", alignItems: "center", gap: 4 }}><Paperclip size={11} /> {a.nome}</a>
+                  ))}
+                </div>
+              </>
+            )}
+            {(s.arquivosReferencia || []).length > 0 && (
+              <>
+                <div style={{ fontSize: 11.5, fontWeight: 700, color: "#6b5d49", marginTop: 10 }}>Referência</div>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8, marginTop: 4 }}>
+                  {s.arquivosReferencia.map(a => (
+                    a.tipo && a.tipo.startsWith("image/")
+                      ? <a key={a.id} href={a.dataUrl} download={a.nome}><img src={a.dataUrl} alt={a.nome} style={{ width: "100%", height: 80, objectFit: "cover", borderRadius: 6, border: "1px solid #e6ddc8", display: "block" }} /></a>
+                      : <a key={a.id} href={a.dataUrl} download={a.nome} style={{ fontSize: 11, color: "#2f4a63", border: "1px solid #e6ddc8", borderRadius: 6, padding: "4px 8px", textDecoration: "none", display: "inline-flex", alignItems: "center", gap: 4 }}><Paperclip size={11} /> {a.nome}</a>
+                  ))}
+                </div>
+              </>
+            )}
+            <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+              <button type="button" onClick={() => aoCopiar(s)} style={{
+                flex: 1, border: "1.5px solid #d9cfb7", background: "#fff", borderRadius: 9, padding: "9px 10px",
+                color: "#2f4a63", fontWeight: 700, cursor: "pointer", fontSize: 13, display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
+              }}>
+                <Paperclip size={14} /> {copiadoId === s.id ? "Texto copiado ✓" : "Copiar texto"}
+              </button>
+              <PrimaryButton onClick={() => alternarConcluida(s)} style={{ flex: 1 }}>
+                <Check size={16} /> {s.status === "concluida" ? "Reabrir" : "Marcar concluída"}
+              </PrimaryButton>
+              <IconButton onClick={() => excluir(s.id)} danger title="Excluir"><Trash2 size={16} /></IconButton>
+            </div>
+          </div>
+        )}
+      </Card>
+    );
+  }
+
+  return (
+    <div>
+      <Card style={{ marginBottom: 16 }}>
+        <div style={{ fontSize: 15, fontWeight: 800, fontFamily: FONT_DISPLAY, marginBottom: 6, color: "#1c2b39" }}>Nova solicitação de arte</div>
+        <div style={{ fontSize: 12.5, color: "#6b5d49", marginBottom: 12 }}>
+          Fila de pedidos para o(a) arte-finalista, na ordem em que chegam. Confirme com o cliente todas as informações antes de enviar — pedidos incompletos podem atrasar a criação.
+        </div>
+        <Field label="Tipo de pedido">
+          <div style={{ display: "flex", gap: 8 }}>
+            <ToggleChip ativo={!ehAlteracao} onClick={() => setEhAlteracao(false)}>Nova arte</ToggleChip>
+            <ToggleChip ativo={ehAlteracao} colorAtivo="#b5820a" onClick={() => setEhAlteracao(true)}>Alteração de arte</ToggleChip>
+          </div>
+        </Field>
+
+        <Field label="Cliente">
+          <Select value={clienteId} onChange={e => setClienteId(e.target.value)}>
+            <option value="">Selecione…</option>
+            {[...(clientes || [])].sort((a, b) => a.nome.localeCompare(b.nome)).map(c => <option key={c.id} value={c.id}>{c.nome}</option>)}
+          </Select>
+          <button type="button" onClick={() => setNovoClienteAberto(v => !v)} style={linkButtonStyle}>
+            {novoClienteAberto ? "Cancelar" : "+ Novo cliente"}
+          </button>
+          {novoClienteAberto && (
+            <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+              <input value={novoClienteNome} onChange={e => setNovoClienteNome(e.target.value)} placeholder="Nome do cliente" style={{ ...inputStyle, flex: 1 }} onKeyDown={e => e.key === "Enter" && criarClienteRapido(novoClienteNome, id => { setClienteId(id); setNovoClienteNome(""); setNovoClienteAberto(false); })} />
+              <PrimaryButton onClick={() => criarClienteRapido(novoClienteNome, id => { setClienteId(id); setNovoClienteNome(""); setNovoClienteAberto(false); })} disabled={!novoClienteNome.trim()}><Plus size={16} /></PrimaryButton>
+            </div>
+          )}
+        </Field>
+
+        <Field label="Produto">
+          <Select value={produtoId} onChange={e => setProdutoId(e.target.value)}>
+            <option value="">Selecione…</option>
+            {[...produtos].sort((a, b) => a.nome.localeCompare(b.nome)).map(p => <option key={p.id} value={p.id}>{p.nome}</option>)}
+          </Select>
+          <button type="button" onClick={() => setNovoProdutoAberto(v => !v)} style={linkButtonStyle}>
+            {novoProdutoAberto ? "Cancelar" : "+ Cadastrar novo produto"}
+          </button>
+          {novoProdutoAberto && (
+            <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+              <input value={novoProdutoNome} onChange={e => setNovoProdutoNome(e.target.value)} placeholder="Nome do novo produto" style={{ ...inputStyle, flex: 1 }} onKeyDown={e => e.key === "Enter" && criarProduto()} />
+              <PrimaryButton onClick={criarProduto} disabled={!novoProdutoNome.trim()}><Plus size={16} /></PrimaryButton>
+            </div>
+          )}
+        </Field>
+
+        {ehAlteracao ? (
+          <>
+            <Field label="O que precisa ser alterado">
+              <textarea value={descricaoAlteracao} onChange={e => setDescricaoAlteracao(e.target.value)} rows={3}
+                placeholder={"Descreva claramente a mudança.\nEx.: Alterar a logo do peito de 10 cm para 8 cm e trocar a cor branca por dourada."}
+                style={{ ...inputStyle, resize: "vertical", fontFamily: "inherit" }} />
+              <div style={{ fontSize: 11, color: "#a3937a", marginTop: 4 }}>
+                ❌ "Cliente pediu para mudar." — evite. ✅ Diga exatamente o que muda.
+              </div>
+            </Field>
+            <Field label="Referência (opcional)">
+              {renderGaleriaAnexo(arquivosReferencia, removerArquivoReferencia)}
+              <input ref={arquivoReferenciaRef} type="file" multiple accept="image/*,.pdf" style={{ display: "none" }}
+                onChange={e => { anexarReferencia(e.target.files); e.target.value = ""; }} />
+              <button type="button" onClick={() => arquivoReferenciaRef.current && arquivoReferenciaRef.current.click()} style={{
+                fontSize: 12.5, border: "1px dashed #cdb98a", background: "#f4ecd8", borderRadius: 7, padding: "7px 11px",
+                cursor: "pointer", display: "flex", alignItems: "center", gap: 6, color: "#2f4a63", fontWeight: 700,
+              }}><Paperclip size={14} /> Anexar arquivo</button>
+            </Field>
+            <Field label="Observações (opcional)">
+              <textarea value={observacoesCliente} onChange={e => setObservacoesCliente(e.target.value)} rows={2}
+                style={{ ...inputStyle, resize: "vertical", fontFamily: "inherit" }} />
+            </Field>
+          </>
+        ) : (
+          <>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+              <Field label="Tamanho/medida do produto">
+                <input value={tamanhoProduto} onChange={e => setTamanhoProduto(e.target.value)} placeholder="Ex.: M" style={inputStyle} />
+              </Field>
+              <Field label="Cor do produto">
+                <input value={corProduto} onChange={e => setCorProduto(e.target.value)} placeholder="Ex.: Preto" style={inputStyle} />
+              </Field>
+            </div>
+            <Field label="Tecido/material">
+              <input value={tecidoMaterial} onChange={e => setTecidoMaterial(e.target.value)} placeholder="Ex.: Malha PV" style={inputStyle} />
+            </Field>
+            <Field label="Tipo de personalização">
+              <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                {TIPOS_PERSONALIZACAO.map(t => <ToggleChip key={t} ativo={tipoPersonalizacao === t} onClick={() => setTipoPersonalizacao(t)}>{t}</ToggleChip>)}
+              </div>
+              {tipoPersonalizacao === "Outro" && (
+                <input value={tipoPersonalizacaoOutro} onChange={e => setTipoPersonalizacaoOutro(e.target.value)} placeholder="Qual?" style={{ ...inputStyle, marginTop: 8 }} />
+              )}
+            </Field>
+            <Field label="Local da personalização">
+              <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                {LOCAIS_PERSONALIZACAO.map(l => <ToggleChip key={l} ativo={localPersonalizacao === l} onClick={() => setLocalPersonalizacao(l)}>{l}</ToggleChip>)}
+              </div>
+              {localPersonalizacao === "Outro" && (
+                <input value={localPersonalizacaoOutro} onChange={e => setLocalPersonalizacaoOutro(e.target.value)} placeholder="Qual?" style={{ ...inputStyle, marginTop: 8 }} />
+              )}
+            </Field>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+              <Field label="Tamanho da estampa/logo">
+                <input value={tamanhoEstampa} onChange={e => setTamanhoEstampa(e.target.value)} placeholder="Ex.: 20 x 15 cm" style={inputStyle} />
+              </Field>
+              <Field label="Cor da estampa">
+                <input value={corEstampa} onChange={e => setCorEstampa(e.target.value)} placeholder="Ex.: Branco" style={inputStyle} />
+              </Field>
+            </div>
+            <Field label="Quantidade">
+              <input type="number" min="0" value={quantidade} onChange={e => setQuantidade(e.target.value)} placeholder="Ex.: 50" style={inputStyle} />
+            </Field>
+            <Field label="Logo/arquivo do cliente">
+              {renderGaleriaAnexo(arquivosLogo, removerArquivoLogo)}
+              <input ref={arquivoLogoRef} type="file" multiple accept="image/*,.pdf,.ai,.eps,.cdr,.svg" style={{ display: "none" }}
+                onChange={e => { anexarLogo(e.target.files); e.target.value = ""; }} />
+              <button type="button" onClick={() => arquivoLogoRef.current && arquivoLogoRef.current.click()} style={{
+                fontSize: 12.5, border: "1px dashed #cdb98a", background: "#f4ecd8", borderRadius: 7, padding: "7px 11px",
+                cursor: "pointer", display: "flex", alignItems: "center", gap: 6, color: "#2f4a63", fontWeight: 700,
+              }}><Paperclip size={14} /> Anexar arquivo</button>
+              <div style={{ fontSize: 11, color: "#a3937a", marginTop: 4 }}>De preferência em boa qualidade — PDF, CDR, AI, SVG ou PNG.</div>
+            </Field>
+            <Field label="Texto que deve entrar na arte">
+              <textarea value={textoArte} onChange={e => setTextoArte(e.target.value)} rows={2}
+                placeholder="Escreva exatamente como deverá aparecer" style={{ ...inputStyle, resize: "vertical", fontFamily: "inherit" }} />
+            </Field>
+            <Field label="Referência (opcional)">
+              {renderGaleriaAnexo(arquivosReferencia, removerArquivoReferencia)}
+              <input ref={arquivoReferenciaRef} type="file" multiple accept="image/*,.pdf" style={{ display: "none" }}
+                onChange={e => { anexarReferencia(e.target.files); e.target.value = ""; }} />
+              <button type="button" onClick={() => arquivoReferenciaRef.current && arquivoReferenciaRef.current.click()} style={{
+                fontSize: 12.5, border: "1px dashed #cdb98a", background: "#f4ecd8", borderRadius: 7, padding: "7px 11px",
+                cursor: "pointer", display: "flex", alignItems: "center", gap: 6, color: "#2f4a63", fontWeight: 700,
+              }}><Paperclip size={14} /> Anexar arquivo</button>
+              <div style={{ fontSize: 11, color: "#a3937a", marginTop: 4 }}>Foto, modelo ou exemplo que o cliente tenha enviado.</div>
+            </Field>
+            <Field label="Observações do cliente">
+              <textarea value={observacoesCliente} onChange={e => setObservacoesCliente(e.target.value)} rows={2}
+                placeholder="Qualquer detalhe adicional solicitado" style={{ ...inputStyle, resize: "vertical", fontFamily: "inherit" }} />
+            </Field>
+          </>
+        )}
+
+        <PrimaryButton onClick={criarSolicitacao} disabled={!podeCriar} style={{ width: "100%", marginTop: 4 }}>
+          <Plus size={16} /> Adicionar à fila
+        </PrimaryButton>
+        {!podeCriar && <div style={{ fontSize: 11, color: "#a3937a", marginTop: 6, textAlign: "center" }}>{ehAlteracao ? "Selecione cliente, produto e descreva o que precisa mudar." : "Selecione o cliente e o produto para poder adicionar."}</div>}
+      </Card>
+
+      <Card style={{ marginBottom: 16, padding: 12 }}>
+        <Field label="Pesquisar">
+          <input value={busca} onChange={e => setBusca(e.target.value)} placeholder="Nº da solicitação, produto ou cliente…" style={inputStyle} />
+        </Field>
+      </Card>
+
+      <div style={{ fontSize: 13, fontWeight: 700, color: "#6b5d49", margin: "4px 2px 8px" }}>Pendentes</div>
+      {pendentes.length === 0 && <div style={{ fontSize: 13.5, color: "#a3937a", padding: "8px 2px", marginBottom: 16 }}>{busca ? "Nenhuma solicitação pendente encontrada para essa pesquisa." : "Nenhuma solicitação pendente."}</div>}
+      <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 20 }}>
+        {pendentes.map(renderCardSolicitacao)}
+      </div>
+
+      <div style={{ fontSize: 13, fontWeight: 700, color: "#6b5d49", margin: "4px 2px 8px" }}>Concluídas</div>
+      {concluidas.length === 0 && <div style={{ fontSize: 13.5, color: "#a3937a", padding: "8px 2px" }}>{busca ? "Nenhuma solicitação concluída encontrada para essa pesquisa." : "Nenhuma solicitação concluída ainda."}</div>}
+      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+        {concluidas.map(renderCardSolicitacao)}
       </div>
     </div>
   );
