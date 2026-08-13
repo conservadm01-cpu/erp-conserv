@@ -3824,7 +3824,18 @@ function Criacao({ solicitacoes, onSalvarSolicitacao, onRemoverSolicitacao, prod
       );
     }
     if ((s.observacoesCliente || "").trim()) linhas.push({ campo: "Observações do cliente", valor: s.observacoesCliente });
-    const anexos = [...(s.fotosProduto || []), ...(s.arquivosLogo || []), ...(s.mockupsGerados || []), ...(s.arquivosReferencia || [])];
+    // Corrigido: quando existe um posicionamento gerado (a mesma foto do
+    // produto já com a arte do cliente encaixada), a foto crua do
+    // produto fica redundante no impresso — mostrava a mesma peça duas
+    // vezes. Com posicionamento, só ele entra (além da arte original e
+    // da referência); sem posicionamento, a foto crua continua entrando.
+    const temMockup = (s.mockupsGerados || []).length > 0;
+    const anexos = [
+      ...(temMockup ? [] : (s.fotosProduto || [])),
+      ...(s.arquivosLogo || []),
+      ...(s.mockupsGerados || []),
+      ...(s.arquivosReferencia || []),
+    ];
     onImprimirGrade({
       titulo: `${s.ehAlteracao ? "Alteração" : "Solicitação"} de arte #${String(s.numero).padStart(3, "0")} — ${s.clienteNomeSnap || "Sem cliente"}`,
       subtitulo: resumoItens(s.itens),
