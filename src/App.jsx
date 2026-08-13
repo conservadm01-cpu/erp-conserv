@@ -3829,6 +3829,7 @@ function Criacao({ solicitacoes, onSalvarSolicitacao, onRemoverSolicitacao, prod
       titulo: `${s.ehAlteracao ? "Alteração" : "Solicitação"} de arte #${String(s.numero).padStart(3, "0")} — ${s.clienteNomeSnap || "Sem cliente"}`,
       subtitulo: resumoItens(s.itens),
       geradoEm: new Date().toLocaleString("pt-BR"),
+      orientacao: "retrato",
       colunas: [{ key: "campo", label: "Campo" }, { key: "valor", label: "Informação" }],
       linhas,
       anexos,
@@ -6170,10 +6171,17 @@ function RelatorioGradeImpressao({ payload, onFechar }) {
   const temAnexos = payload.anexos && payload.anexos.length > 0;
   const totalFolhas = 1 + (temMateriais ? 1 : 0) + (temAnexos ? 1 : 0);
 
+  // Corrigido: orientação da folha agora vem do payload — a maioria dos
+  // relatórios (grade da OP, materiais) usa tabelas largas e sai melhor
+  // em paisagem, mas alguns (ex.: impressão de arte) ficam melhores em
+  // retrato. "landscape" continua sendo o padrão pra não mudar o
+  // comportamento de quem já usava esse impresso.
+  const orientacao = payload.orientacao === "retrato" ? "portrait" : "landscape";
+
   return (
     <div style={{ minHeight: "100vh", background: "#efe9db" }}>
       <style>{`
-        @page { size: landscape; margin: 12mm; }
+        @page { size: ${orientacao}; margin: 12mm; }
         @media print {
           .no-print { display: none !important; }
           .no-print-video { display: none !important; }
