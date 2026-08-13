@@ -3830,6 +3830,7 @@ function Criacao({ solicitacoes, onSalvarSolicitacao, onRemoverSolicitacao, prod
       subtitulo: resumoItens(s.itens),
       geradoEm: new Date().toLocaleString("pt-BR"),
       orientacao: "retrato",
+      folhaUnica: true,
       colunas: [{ key: "campo", label: "Campo" }, { key: "valor", label: "Informação" }],
       linhas,
       anexos,
@@ -6169,7 +6170,12 @@ function RelatorioGradeImpressao({ payload, onFechar }) {
   // de impressas e separadas.
   const temMateriais = payload.materiais && payload.materiais.length > 0;
   const temAnexos = payload.anexos && payload.anexos.length > 0;
-  const totalFolhas = 1 + (temMateriais ? 1 : 0) + (temAnexos ? 1 : 0);
+  // Corrigido: alguns relatórios (ex.: impressão de arte) cabem numa
+  // folha só — nesse caso não força quebra de página entre as seções
+  // nem numera "Folha X de Y", e os anexos saem em miniaturas menores
+  // (em vez de uma imagem grande por página) pra caber tudo junto.
+  const folhaUnica = !!payload.folhaUnica;
+  const totalFolhas = folhaUnica ? 1 : 1 + (temMateriais ? 1 : 0) + (temAnexos ? 1 : 0);
 
   // Corrigido: orientação da folha agora vem do payload — a maioria dos
   // relatórios (grade da OP, materiais) usa tabelas largas e sai melhor
@@ -6246,13 +6252,13 @@ function RelatorioGradeImpressao({ payload, onFechar }) {
           // sai impressa em folhas separadas (Atividades / Materiais /
           // Arquivos), cada uma podendo ir pra uma pessoa diferente
           // (produção, separação de materiais, referência visual).
-          <div style={{ marginTop: 22, pageBreakBefore: "always", breakBefore: "page" }}>
+          <div style={{ marginTop: 22, ...(folhaUnica ? {} : { pageBreakBefore: "always", breakBefore: "page" }) }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
               <div>
                 <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 1.2, color: "#6b5d49", textTransform: "uppercase" }}>{payload.titulo}</div>
                 <div style={{ fontSize: 13.5, fontWeight: 700, color: "#1c2b39", marginTop: 2, fontFamily: FONT_DISPLAY }}>Materiais necessários</div>
               </div>
-              <div style={{ fontSize: 12, fontWeight: 700, color: "#2f4a63" }}>Folha 2 de {totalFolhas}</div>
+              {!folhaUnica && <div style={{ fontSize: 12, fontWeight: 700, color: "#2f4a63" }}>Folha 2 de {totalFolhas}</div>}
             </div>
             <div style={{ marginTop: 10 }} />
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
@@ -6279,33 +6285,35 @@ function RelatorioGradeImpressao({ payload, onFechar }) {
         )}
 
         {payload.anexos && payload.anexos.length > 0 && (
-          <div style={{ marginTop: 22, pageBreakBefore: "always", breakBefore: "page" }}>
+          <div style={{ marginTop: 22, ...(folhaUnica ? {} : { pageBreakBefore: "always", breakBefore: "page" }) }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 10 }}>
               <div>
                 <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 1.2, color: "#6b5d49", textTransform: "uppercase" }}>{payload.titulo}</div>
                 <div style={{ fontSize: 13.5, fontWeight: 700, color: "#1c2b39", marginTop: 2, fontFamily: FONT_DISPLAY }}>Arquivos anexados</div>
               </div>
-              <div style={{ fontSize: 12, fontWeight: 700, color: "#2f4a63" }}>Folha {totalFolhas} de {totalFolhas}</div>
+              {!folhaUnica && <div style={{ fontSize: 12, fontWeight: 700, color: "#2f4a63" }}>Folha {totalFolhas} de {totalFolhas}</div>}
             </div>
-            {/* Adicionado: 2 colunas com imagem grande (cada uma ocupando
-                metade da folha em paisagem) em vez de uma grade de
-                miniaturas — referência visual de verdade pra quem corta/
-                estampa a peça, não só um lembrete de que existe um anexo.
-                A cada 2 arquivos força quebra de folha, pra manter
-                sempre 2 por página. */}
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
+            {/* Adicionado: em relatórios de folha única, os anexos saem em
+                miniaturas menores (3 colunas, sem forçar quebra de
+                página) pra caber junto com a grade de informações na
+                mesma folha. Nos demais relatórios, continuam em 2
+                colunas com imagem grande, uma quebra de página a cada
+                2 arquivos. */}
+            <div style={{ display: "grid", gridTemplateColumns: folhaUnica ? "repeat(3, 1fr)" : "1fr 1fr", gap: folhaUnica ? 10 : 14 }}>
               {payload.anexos.map((a, i) => (
                 <div key={a.id} style={{
                   border: "1px solid #e6ddc8", borderRadius: 8, overflow: "hidden", breakInside: "avoid",
-                  pageBreakAfter: i % 2 === 1 && i !== payload.anexos.length - 1 ? "always" : "auto",
-                  breakAfter: i % 2 === 1 && i !== payload.anexos.length - 1 ? "page" : "auto",
+                  ...(folhaUnica ? {} : {
+                    pageBreakAfter: i % 2 === 1 && i !== payload.anexos.length - 1 ? "always" : "auto",
+                    breakAfter: i % 2 === 1 && i !== payload.anexos.length - 1 ? "page" : "auto",
+                  }),
                 }}>
                   {a.tipo && a.tipo.startsWith("image/") ? (
-                    <img src={a.dataUrl} alt={a.nome} style={{ width: "100%", height: "46vh", objectFit: "contain", display: "block", background: "#f4efe2" }} />
+                    <img src={a.dataUrl} alt={a.nome} style={{ width: "100%", height: folhaUnica ? "160px" : "46vh", objectFit: "contain", display: "block", background: "#f4efe2" }} />
                   ) : a.tipo && a.tipo.startsWith("video/") ? (
-                    <video src={a.dataUrl} controls style={{ width: "100%", height: "46vh", objectFit: "contain", display: "block", background: "#000" }} className="no-print-video" />
+                    <video src={a.dataUrl} controls style={{ width: "100%", height: folhaUnica ? "160px" : "46vh", objectFit: "contain", display: "block", background: "#000" }} className="no-print-video" />
                   ) : (
-                    <div style={{ width: "100%", height: "46vh", display: "flex", alignItems: "center", justifyContent: "center", color: "#a3937a" }}>Arquivo</div>
+                    <div style={{ width: "100%", height: folhaUnica ? "160px" : "46vh", display: "flex", alignItems: "center", justifyContent: "center", color: "#a3937a" }}>Arquivo</div>
                   )}
                   <div style={{ fontSize: 12, color: "#6b5d49", padding: "6px 9px", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{a.nome}</div>
                 </div>
