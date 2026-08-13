@@ -899,6 +899,7 @@ export default function App() {
             solicitacoes={solicitacoesArte} onSalvarSolicitacao={salvarSolicitacaoArte} onRemoverSolicitacao={removerSolicitacaoArte}
             produtos={produtos} setProdutos={setProdutos}
             clientes={clientes} setClientes={setClientes}
+            onImprimirGrade={setRelatorioGradeImpressao}
           />
         )}
         {tab === "avaliacao" && perfilAtual.abas.includes("avaliacao") && (
@@ -3298,15 +3299,296 @@ function Avaliacao({ colaboradores, avaliacoes, onSalvarAvaliacao, onRemoverAval
   );
 }
 
+// ---------- Estúdio de posicionamento (encaixa a arte do cliente na foto
+// do produto, com perspectiva) ----------
+// Adicionado: não é uma simulação 3D de verdade (isso exigiria modelo 3D
+// da peça, que o sistema não tem) — é um "warp" de perspectiva: a arte é
+// deformada para encaixar no quadrilátero que o solicitante desenha por
+// cima da foto, arrastando os 4 cantos com o mouse. Como o canvas 2D só
+// faz transformações afins (sem perspectiva), a arte é desenhada em uma
+// malha de pequenos triângulos, cada um com sua própria transformação
+// afim — a técnica padrão para simular um warp de perspectiva sem WebGL.
+
+// Mapeia o quadrado unitário (0,0)-(1,0)-(1,1)-(0,1) para um
+// quadrilátero qualquer — fórmula clássica de "unit square to quad"
+// (Heckbert). Usada porque a origem (a arte) sempre parte de um
+// retângulo simples; só o destino (o que o usuário desenhou) é livre.
+function mapaQuadrilatero(quad) {
+  const [p0, p1, p2, p3] = quad;
+  const dx1 = p1.x - p2.x, dx2 = p3.x - p2.x, dx3 = p0.x - p1.x + p2.x - p3.x;
+  const dy1 = p1.y - p2.y, dy2 = p3.y - p2.y, dy3 = p0.y - p1.y + p2.y - p3.y;
+  let g = 0, h = 0;
+  if (Math.abs(dx3) > 1e-9 || Math.abs(dy3) > 1e-9) {
+    const den = dx1 * dy2 - dx2 * dy1;
+    if (Math.abs(den) > 1e-9) {
+      g = (dx3 * dy2 - dx2 * dy3) / den;
+      h = (dx1 * dy3 - dy1 * dx3) / den;
+    }
+  }
+  return {
+    a: p1.x - p0.x + g * p1.x, b: p3.x - p0.x + h * p3.x, c: p0.x,
+    d: p1.y - p0.y + g * p1.y, e: p3.y - p0.y + h * p3.y, f: p0.y,
+    g, h,
+  };
+}
+function aplicarMapaQuad(coef, u, v) {
+  const denom = coef.g * u + coef.h * v + 1;
+  return { x: (coef.a * u + coef.b * v + coef.c) / denom, y: (coef.d * u + coef.e * v + coef.f) / denom };
+}
+// Resolve o sistema 3x3 M·x = b por Cramer — usado para achar a
+// transformação afim que leva um triângulo de origem a um de destino.
+function resolverSistema3x3(M, b) {
+  const det3 = (m) => (
+    m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1]) -
+    m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0]) +
+    m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0])
+  );
+  const D = det3(M);
+  if (Math.abs(D) < 1e-9) return null;
+  const substituir = (col) => M.map((linha, i) => linha.map((v, j) => j === col ? b[i] : v));
+  return [det3(substituir(0)) / D, det3(substituir(1)) / D, det3(substituir(2)) / D];
+}
+function afimDeTriangulo(S0, S1, S2, D0, D1, D2) {
+  const M = [[S0.x, S0.y, 1], [S1.x, S1.y, 1], [S2.x, S2.y, 1]];
+  const solX = resolverSistema3x3(M, [D0.x, D1.x, D2.x]);
+  const solY = resolverSistema3x3(M, [D0.y, D1.y, D2.y]);
+  if (!solX || !solY) return null;
+  return [solX[0], solY[0], solX[1], solY[1], solX[2], solY[2]];
+}
+function desenharTrianguloWarp(ctx, img, S0, S1, S2, D0, D1, D2) {
+  const m = afimDeTriangulo(S0, S1, S2, D0, D1, D2);
+  if (!m) return;
+  ctx.save();
+  ctx.beginPath();
+  ctx.moveTo(D0.x, D0.y); ctx.lineTo(D1.x, D1.y); ctx.lineTo(D2.x, D2.y);
+  ctx.closePath();
+  ctx.clip();
+  ctx.transform(...m);
+  ctx.drawImage(img, 0, 0);
+  ctx.restore();
+}
+// Desenha a imagem `img` inteira deformada para caber no quadrilátero
+// `quad` (4 pontos, na ordem: topo-esq, topo-dir, baixo-dir, baixo-esq),
+// subdividindo em uma malha `grid` x `grid` de triângulos.
+function desenharLogoWarpeada(ctx, img, quad, grid) {
+  const coef = mapaQuadrilatero(quad);
+  const passo = 1 / grid;
+  for (let j = 0; j < grid; j++) {
+    for (let i = 0; i < grid; i++) {
+      const u0 = i * passo, u1 = (i + 1) * passo, v0 = j * passo, v1 = (j + 1) * passo;
+      const P00 = aplicarMapaQuad(coef, u0, v0), P10 = aplicarMapaQuad(coef, u1, v0);
+      const P11 = aplicarMapaQuad(coef, u1, v1), P01 = aplicarMapaQuad(coef, u0, v1);
+      const S00 = { x: u0 * img.width, y: v0 * img.height }, S10 = { x: u1 * img.width, y: v0 * img.height };
+      const S11 = { x: u1 * img.width, y: v1 * img.height }, S01 = { x: u0 * img.width, y: v1 * img.height };
+      desenharTrianguloWarp(ctx, img, S00, S10, S11, P00, P10, P11);
+      desenharTrianguloWarp(ctx, img, S00, S11, S01, P00, P11, P01);
+    }
+  }
+}
+const LARGURA_EDICAO_MOCKUP = 320;
+function carregarImagemDeDataUrl(dataUrl) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve({ img, width: img.naturalWidth, height: img.naturalHeight });
+    img.onerror = reject;
+    img.src = dataUrl;
+  });
+}
+
+// Adicionado: em vez de pedir upload próprio dentro da ferramenta, o
+// Estúdio de posicionamento usa direto as fotos do produto e as artes do
+// cliente que já foram anexadas mais acima no formulário — escolhe uma
+// de cada (se houver mais de uma) e arrasta os 4 cantos com o mouse.
+function EstudioPosicionamento({ fotosProduto, arquivosLogo, tamanhoEstampa, onSalvar }) {
+  const fotosImagem = (fotosProduto || []).filter(a => a.tipo && a.tipo.startsWith("image/"));
+  const logosImagem = (arquivosLogo || []).filter(a => a.tipo && a.tipo.startsWith("image/"));
+  const [fotoId, setFotoId] = useState("");
+  const [logoId, setLogoId] = useState("");
+  const [imagemProduto, setImagemProduto] = useState(null);
+  const [logo, setLogo] = useState(null);
+  const [cantos, setCantos] = useState(null);
+  const [arrastando, setArrastando] = useState(null);
+  const [salvo, setSalvo] = useState(false);
+  const canvasRef = useRef(null);
+
+  useEffect(() => {
+    if (fotosImagem.length > 0 && !fotosImagem.some(a => a.id === fotoId)) setFotoId(fotosImagem[0].id);
+    if (logosImagem.length > 0 && !logosImagem.some(a => a.id === logoId)) setLogoId(logosImagem[0].id);
+  }, [fotosImagem, logosImagem]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    const arquivo = fotosImagem.find(a => a.id === fotoId);
+    if (!arquivo) { setImagemProduto(null); return; }
+    let vivo = true;
+    carregarImagemDeDataUrl(arquivo.dataUrl).then(img => { if (vivo) { setImagemProduto(img); setCantos(null); } });
+    return () => { vivo = false; };
+  }, [fotoId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    const arquivo = logosImagem.find(a => a.id === logoId);
+    if (!arquivo) { setLogo(null); return; }
+    let vivo = true;
+    carregarImagemDeDataUrl(arquivo.dataUrl).then(img => { if (vivo) { setLogo(img); setCantos(null); } });
+    return () => { vivo = false; };
+  }, [logoId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const alturaEdicao = imagemProduto ? Math.round(LARGURA_EDICAO_MOCKUP * imagemProduto.height / imagemProduto.width) : 0;
+
+  // Posição inicial da arte: um retângulo no centro da foto, na
+  // proporção do campo "Tamanho da estampa/logo" (ex.: "20 x 15 cm"),
+  // quando preenchido — em vez de sempre um quadrado genérico. O
+  // reposicionamento com o mouse continua livre depois disso.
+  useEffect(() => {
+    if (imagemProduto && logo && !cantos && alturaEdicao > 0) {
+      const medida = (tamanhoEstampa || "").match(/(\d+(?:[.,]\d+)?)\s*[x×X]\s*(\d+(?:[.,]\d+)?)/);
+      const proporcao = medida
+        ? parseFloat(medida[1].replace(",", ".")) / parseFloat(medida[2].replace(",", "."))
+        : (logo.width / logo.height) || 1;
+      let w = LARGURA_EDICAO_MOCKUP * 0.4, h = w / proporcao;
+      const alturaMax = alturaEdicao * 0.8;
+      if (h > alturaMax) { w *= alturaMax / h; h = alturaMax; }
+      const cx = LARGURA_EDICAO_MOCKUP / 2, cy = alturaEdicao / 2;
+      setCantos([
+        { x: cx - w / 2, y: cy - h / 2 }, { x: cx + w / 2, y: cy - h / 2 },
+        { x: cx + w / 2, y: cy + h / 2 }, { x: cx - w / 2, y: cy + h / 2 },
+      ]);
+    }
+  }, [imagemProduto, logo, cantos, alturaEdicao, tamanhoEstampa]);
+
+  useEffect(() => {
+    if (!imagemProduto || !canvasRef.current || alturaEdicao === 0) return;
+    const canvas = canvasRef.current;
+    canvas.width = LARGURA_EDICAO_MOCKUP; canvas.height = alturaEdicao;
+    const ctx = canvas.getContext("2d");
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(imagemProduto.img, 0, 0, canvas.width, canvas.height);
+    if (logo && cantos) {
+      desenharLogoWarpeada(ctx, logo.img, cantos, 18);
+      ctx.beginPath();
+      ctx.moveTo(cantos[0].x, cantos[0].y);
+      cantos.slice(1).forEach(p => ctx.lineTo(p.x, p.y));
+      ctx.closePath();
+      ctx.strokeStyle = "rgba(47,74,99,0.55)";
+      ctx.lineWidth = 1;
+      ctx.stroke();
+      cantos.forEach(p => {
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, 7, 0, Math.PI * 2);
+        ctx.fillStyle = "#fff";
+        ctx.fill();
+        ctx.lineWidth = 2;
+        ctx.strokeStyle = "#2f4a63";
+        ctx.stroke();
+      });
+    }
+  }, [imagemProduto, logo, cantos, alturaEdicao]);
+
+  function posicaoDoEvento(e) {
+    const rect = canvasRef.current.getBoundingClientRect();
+    const ponto = e.touches && e.touches[0] ? e.touches[0] : e;
+    return {
+      x: (ponto.clientX - rect.left) * (canvasRef.current.width / rect.width),
+      y: (ponto.clientY - rect.top) * (canvasRef.current.height / rect.height),
+    };
+  }
+  function aoPressionar(e) {
+    if (!cantos) return;
+    const pos = posicaoDoEvento(e);
+    const idx = cantos.findIndex(p => Math.hypot(p.x - pos.x, p.y - pos.y) < 18);
+    if (idx >= 0) { setArrastando(idx); e.preventDefault(); }
+  }
+  function aoMover(e) {
+    if (arrastando == null) return;
+    e.preventDefault();
+    const pos = posicaoDoEvento(e);
+    setCantos(atual => atual.map((p, i) => i === arrastando
+      ? { x: Math.max(0, Math.min(LARGURA_EDICAO_MOCKUP, pos.x)), y: Math.max(0, Math.min(alturaEdicao, pos.y)) }
+      : p));
+  }
+  function aoSoltar() { setArrastando(null); }
+
+  function salvarComposicao() {
+    if (!imagemProduto || !logo || !cantos) return;
+    // Refaz o desenho na resolução real da foto (não na de exibição),
+    // pra sair com qualidade melhor no anexo salvo.
+    const escala = imagemProduto.width / LARGURA_EDICAO_MOCKUP;
+    const cantosReais = cantos.map(p => ({ x: p.x * escala, y: p.y * escala }));
+    const canvasFinal = document.createElement("canvas");
+    canvasFinal.width = imagemProduto.width; canvasFinal.height = imagemProduto.height;
+    const ctx = canvasFinal.getContext("2d");
+    ctx.drawImage(imagemProduto.img, 0, 0);
+    desenharLogoWarpeada(ctx, logo.img, cantosReais, 24);
+    onSalvar({ id: uid(), nome: `mockup-${Date.now()}.png`, tipo: "image/png", dataUrl: canvasFinal.toDataURL("image/png") });
+    setSalvo(true);
+    setTimeout(() => setSalvo(false), 2500);
+  }
+
+  if (fotosImagem.length === 0 || logosImagem.length === 0) {
+    return (
+      <Card style={{ marginTop: 4, marginBottom: 14, background: "#faf6ec" }}>
+        <div style={{ fontSize: 13, fontWeight: 800, color: "#1c2b39", marginBottom: 4 }}>Posicionar arte na foto (opcional)</div>
+        <div style={{ fontSize: 11.5, color: "#6b5d49" }}>
+          Envie uma foto do produto e um arquivo de imagem da arte do cliente (PNG/JPG) acima pra poder posicionar com o mouse.
+        </div>
+      </Card>
+    );
+  }
+
+  return (
+    <Card style={{ marginTop: 4, marginBottom: 14, background: "#faf6ec" }}>
+      <div style={{ fontSize: 13, fontWeight: 800, color: "#1c2b39", marginBottom: 4 }}>Posicionar arte na foto (opcional)</div>
+      <div style={{ fontSize: 11.5, color: "#6b5d49", marginBottom: 10 }}>
+        Escolha a foto do produto e a arte do cliente, depois arraste os 4 cantos com o mouse até encaixar na posição e na perspectiva do produto. Não é uma simulação 3D — é um posicionamento com perspectiva sobre a própria foto.
+      </div>
+      {(fotosImagem.length > 1 || logosImagem.length > 1) && (
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 10 }}>
+          <Field label="Foto do produto">
+            <Select value={fotoId} onChange={e => setFotoId(e.target.value)}>
+              {fotosImagem.map(a => <option key={a.id} value={a.id}>{a.nome}</option>)}
+            </Select>
+          </Field>
+          <Field label="Arte do cliente">
+            <Select value={logoId} onChange={e => setLogoId(e.target.value)}>
+              {logosImagem.map(a => <option key={a.id} value={a.id}>{a.nome}</option>)}
+            </Select>
+          </Field>
+        </div>
+      )}
+      {imagemProduto && (
+        <div style={{ display: "flex", justifyContent: "center", marginBottom: 10 }}>
+          <canvas
+            ref={canvasRef}
+            style={{ width: LARGURA_EDICAO_MOCKUP, height: alturaEdicao, borderRadius: 8, border: "1px solid #e6ddc8", touchAction: "none", cursor: arrastando != null ? "grabbing" : logo ? "grab" : "default" }}
+            onMouseDown={aoPressionar} onMouseMove={aoMover} onMouseUp={aoSoltar} onMouseLeave={aoSoltar}
+            onTouchStart={aoPressionar} onTouchMove={aoMover} onTouchEnd={aoSoltar}
+          />
+        </div>
+      )}
+      {imagemProduto && logo && (
+        <PrimaryButton onClick={salvarComposicao} style={{ width: "100%" }}>
+          <Check size={16} /> {salvo ? "Salvo ✓" : "Salvar posicionamento"}
+        </PrimaryButton>
+      )}
+    </Card>
+  );
+}
+
 // ---------- Criação (solicitação de arte) ----------
 // Adicionado: fila de solicitações de arte para o(a) arte-finalista,
-// seguindo um modelo fixo de informações (cliente, produto, medidas,
+// seguindo um modelo fixo de informações (cliente, produtos, medidas,
 // personalização, arquivos, texto e observações) — o mesmo modelo que
 // já era usado manualmente para pedir arte pelo grupo, agora dentro do
-// sistema. Cada solicitação pode ser copiada como texto pronto, no
-// mesmo formato, pra colar onde for preciso.
+// sistema. Cada solicitação pode ser copiada como texto pronto (no
+// mesmo formato) ou impressa trazendo a grade de informações + os
+// arquivos do produto e do cliente.
 const TIPOS_PERSONALIZACAO = ["Silk", "Bordado", "Sublimação", "Outro"];
-const LOCAIS_PERSONALIZACAO = ["Frente", "Costas", "Bolso", "Manga", "Outro"];
+// Corrigido: lista de locais de personalização ampliada, incluindo
+// posições mais específicas (lateral, centralizado, cantos).
+const LOCAIS_PERSONALIZACAO = ["Frente", "Costas", "Manga", "Bolso", "Lateral", "Centralizado", "Canto superior direito", "Canto superior esquerdo", "Outro"];
+
+function resumoItens(itens) {
+  return (itens || []).map(it => `${it.produtoNomeSnap} (${it.quantidade})`).join(", ") || "—";
+}
 
 function gerarTextoSolicitacaoArte(s) {
   const personalizacao = s.tipoPersonalizacao === "Outro" ? (s.tipoPersonalizacaoOutro || "Outro") : (s.tipoPersonalizacao || "—");
@@ -3314,15 +3596,17 @@ function gerarTextoSolicitacaoArte(s) {
   const linhas = [
     "📌 SOLICITAÇÃO DE ARTE", "",
     `👤 Cliente: ${s.clienteNomeSnap || "—"}`,
-    `📦 Produto: ${s.produtoNomeSnap || "—"}`,
+    "📦 Produto(s):",
+    ...(s.itens || []).map(it => ` - ${it.produtoNomeSnap} — ${it.quantidade}`),
     `📏 Tamanho/medida do produto: ${s.tamanhoProduto || "—"}`,
     `🎨 Cor do produto: ${s.corProduto || "—"}`,
     `🧵 Tecido/material: ${s.tecidoMaterial || "—"}`,
     `🖨️ Tipo de personalização: ${personalizacao}`,
     `📍 Local da personalização: ${local}`,
     `📐 Tamanho da estampa/logo: ${s.tamanhoEstampa || "—"}`,
-    `🎨 Cor da estampa: ${s.corEstampa || "—"}`,
-    `🔢 Quantidade: ${s.quantidade || "—"}`, "",
+    `🎨 Cor da estampa: ${s.corEstampa || "—"}`, "",
+    "🖼️ FOTO DO PRODUTO:",
+    (s.fotosProduto || []).length > 0 ? `${s.fotosProduto.length} arquivo(s) anexado(s).` : "Nenhuma foto anexada ainda.", "",
     "🖼️ LOGO/ARQUIVO DO CLIENTE:",
     (s.arquivosLogo || []).length > 0 ? `${s.arquivosLogo.length} arquivo(s) anexado(s) na solicitação.` : "Nenhum arquivo anexado ainda.", "",
     "✍️ TEXTO QUE DEVE ENTRAR NA ARTE:",
@@ -3338,7 +3622,8 @@ function gerarTextoAlteracaoArte(s) {
   const linhas = [
     "📌 ALTERAÇÃO DE ARTE", "",
     `👤 Cliente: ${s.clienteNomeSnap || "—"}`,
-    `📦 Produto: ${s.produtoNomeSnap || "—"}`, "",
+    "📦 Produto(s):",
+    ...(s.itens || []).map(it => ` - ${it.produtoNomeSnap} — ${it.quantidade}`), "",
     "✏️ O QUE PRECISA SER ALTERADO:",
     s.descricaoAlteracao || "—",
   ];
@@ -3354,12 +3639,17 @@ async function copiarTexto(texto) {
   }
 }
 
-function Criacao({ solicitacoes, onSalvarSolicitacao, onRemoverSolicitacao, produtos, setProdutos, clientes, setClientes }) {
+function Criacao({ solicitacoes, onSalvarSolicitacao, onRemoverSolicitacao, produtos, setProdutos, clientes, setClientes, onImprimirGrade }) {
   const [ehAlteracao, setEhAlteracao] = useState(false);
   const [clienteId, setClienteId] = useState("");
   const [novoClienteAberto, setNovoClienteAberto] = useState(false);
   const [novoClienteNome, setNovoClienteNome] = useState("");
-  const [produtoId, setProdutoId] = useState("");
+  // Adicionado: agora dá pra pedir arte para mais de um produto na mesma
+  // solicitação, cada um com sua própria quantidade — mesmo padrão de
+  // "itens" já usado nas Ordens de Produção.
+  const [itens, setItens] = useState([]);
+  const [produtoParaAdicionar, setProdutoParaAdicionar] = useState("");
+  const [quantidadeParaAdicionar, setQuantidadeParaAdicionar] = useState("");
   const [novoProdutoAberto, setNovoProdutoAberto] = useState(false);
   const [novoProdutoNome, setNovoProdutoNome] = useState("");
   // Nova arte
@@ -3372,9 +3662,13 @@ function Criacao({ solicitacoes, onSalvarSolicitacao, onRemoverSolicitacao, prod
   const [localPersonalizacaoOutro, setLocalPersonalizacaoOutro] = useState("");
   const [tamanhoEstampa, setTamanhoEstampa] = useState("");
   const [corEstampa, setCorEstampa] = useState("");
-  const [quantidade, setQuantidade] = useState("");
+  // Adicionado: foto do produto — separada do arquivo do cliente — usada
+  // tanto na impressão quanto no Estúdio de posicionamento.
+  const [fotosProduto, setFotosProduto] = useState([]);
+  const fotoProdutoRef = useRef(null);
   const [arquivosLogo, setArquivosLogo] = useState([]);
   const arquivoLogoRef = useRef(null);
+  const [mockupsGerados, setMockupsGerados] = useState([]);
   const [textoArte, setTextoArte] = useState("");
   const [arquivosReferencia, setArquivosReferencia] = useState([]);
   const arquivoReferenciaRef = useRef(null);
@@ -3403,9 +3697,22 @@ function Criacao({ solicitacoes, onSalvarSolicitacao, onRemoverSolicitacao, prod
     // terminar o cadastro em Cadastros → Produtos).
     const p = { id: uid(), sequencia, codigo: null, nome: novoProdutoNome.trim().toUpperCase() };
     await setProdutos([...produtos, p]);
-    setProdutoId(p.id);
+    setProdutoParaAdicionar(p.id);
     setNovoProdutoNome(""); setNovoProdutoAberto(false);
   }
+  const produtosDisponiveisParaAdicionar = useMemo(
+    () => [...produtos].sort((a, b) => a.nome.localeCompare(b.nome)).filter(p => !itens.some(it => it.produtoId === p.id)),
+    [produtos, itens]
+  );
+  const qtdParaAdicionarNum = parseInt(quantidadeParaAdicionar || "0", 10);
+  const podeAdicionarItem = !!produtoParaAdicionar && qtdParaAdicionarNum > 0;
+  function adicionarItem() {
+    if (!podeAdicionarItem) return;
+    const produto = produtos.find(p => p.id === produtoParaAdicionar);
+    setItens(atual => [...atual, { produtoId: produtoParaAdicionar, produtoNomeSnap: produto?.nome || "—", quantidade: qtdParaAdicionarNum }]);
+    setProdutoParaAdicionar(""); setQuantidadeParaAdicionar("");
+  }
+  function removerItem(produtoId) { setItens(atual => atual.filter(it => it.produtoId !== produtoId)); }
 
   async function lerArquivos(fileList) {
     const arquivos = Array.from(fileList || []);
@@ -3422,29 +3729,33 @@ function Criacao({ solicitacoes, onSalvarSolicitacao, onRemoverSolicitacao, prod
     }
     return novos;
   }
+  async function anexarFotoProduto(fileList) { const novos = await lerArquivos(fileList); if (novos.length) setFotosProduto(a => [...a, ...novos]); }
   async function anexarLogo(fileList) { const novos = await lerArquivos(fileList); if (novos.length) setArquivosLogo(a => [...a, ...novos]); }
   async function anexarReferencia(fileList) { const novos = await lerArquivos(fileList); if (novos.length) setArquivosReferencia(a => [...a, ...novos]); }
+  function removerFotoProduto(id) { setFotosProduto(a => a.filter(x => x.id !== id)); }
   function removerArquivoLogo(id) { setArquivosLogo(a => a.filter(x => x.id !== id)); }
   function removerArquivoReferencia(id) { setArquivosReferencia(a => a.filter(x => x.id !== id)); }
+  function removerMockup(id) { setMockupsGerados(a => a.filter(x => x.id !== id)); }
 
-  // Adicionado: cliente e produto são obrigatórios sempre — pra alteração
-  // de arte, também é preciso descrever claramente o que precisa mudar.
-  const podeCriar = !!clienteId && !!produtoId && (!ehAlteracao || descricaoAlteracao.trim().length > 0);
+  // Adicionado: cliente e ao menos 1 produto (com quantidade) são
+  // obrigatórios sempre — pra alteração de arte, também é preciso
+  // descrever claramente o que precisa mudar.
+  const podeCriar = !!clienteId && itens.length > 0 && (!ehAlteracao || descricaoAlteracao.trim().length > 0);
 
   function limparFormulario() {
-    setClienteId(""); setProdutoId("");
+    setClienteId(""); setItens([]); setProdutoParaAdicionar(""); setQuantidadeParaAdicionar("");
     setTamanhoProduto(""); setCorProduto(""); setTecidoMaterial("");
     setTipoPersonalizacao(""); setTipoPersonalizacaoOutro("");
     setLocalPersonalizacao(""); setLocalPersonalizacaoOutro("");
-    setTamanhoEstampa(""); setCorEstampa(""); setQuantidade("");
-    setArquivosLogo([]); setTextoArte(""); setArquivosReferencia([]); setObservacoesCliente("");
+    setTamanhoEstampa(""); setCorEstampa("");
+    setFotosProduto([]); setArquivosLogo([]); setMockupsGerados([]);
+    setTextoArte(""); setArquivosReferencia([]); setObservacoesCliente("");
     setDescricaoAlteracao(""); setEhAlteracao(false);
   }
 
   async function criarSolicitacao() {
     if (!podeCriar) return;
     const cliente = (clientes || []).find(c => c.id === clienteId);
-    const produto = produtos.find(p => p.id === produtoId);
     // Adicionado: numeração sequencial da fila — sempre o maior número já
     // usado + 1, igual às Ordens de Produção.
     const numero = solicitacoes.reduce((max, s) => Math.max(max, s.numero || 0), 0) + 1;
@@ -3452,7 +3763,7 @@ function Criacao({ solicitacoes, onSalvarSolicitacao, onRemoverSolicitacao, prod
       id: uid(), numero,
       ehAlteracao,
       clienteId, clienteNomeSnap: cliente?.nome || "—",
-      produtoId, produtoNomeSnap: produto?.nome || "—",
+      itens,
       status: "pendente",
       ...(ehAlteracao ? {
         descricaoAlteracao: descricaoAlteracao.trim(),
@@ -3462,8 +3773,9 @@ function Criacao({ solicitacoes, onSalvarSolicitacao, onRemoverSolicitacao, prod
         tamanhoProduto: tamanhoProduto.trim(), corProduto: corProduto.trim(), tecidoMaterial: tecidoMaterial.trim(),
         tipoPersonalizacao, tipoPersonalizacaoOutro: tipoPersonalizacaoOutro.trim(),
         localPersonalizacao, localPersonalizacaoOutro: localPersonalizacaoOutro.trim(),
-        tamanhoEstampa: tamanhoEstampa.trim(), corEstampa: corEstampa.trim(), quantidade: quantidade.trim(),
-        arquivosLogo, textoArte: textoArte.trim(), arquivosReferencia, observacoesCliente: observacoesCliente.trim(),
+        tamanhoEstampa: tamanhoEstampa.trim(), corEstampa: corEstampa.trim(),
+        fotosProduto, arquivosLogo, mockupsGerados,
+        textoArte: textoArte.trim(), arquivosReferencia, observacoesCliente: observacoesCliente.trim(),
       }),
       criadaEm: new Date().toISOString(), concluidaEm: null,
     };
@@ -3488,11 +3800,45 @@ function Criacao({ solicitacoes, onSalvarSolicitacao, onRemoverSolicitacao, prod
     if (ok) { setCopiadoId(s.id); setTimeout(() => setCopiadoId(null), 2000); }
     else alert("Não foi possível copiar automaticamente. Selecione e copie o texto manualmente.");
   }
+  // Adicionado: impressão trazendo a grade de informações (com o nome do
+  // cliente na primeira linha) e, em folha separada, os arquivos do
+  // produto + do cliente — reaproveita o mesmo impresso já usado pelas
+  // Ordens de Produção.
+  function imprimirSolicitacao(s) {
+    const linhas = [
+      { campo: "Cliente", valor: s.clienteNomeSnap || "—" },
+      { campo: "Produto(s)", valor: resumoItens(s.itens) },
+    ];
+    if (s.ehAlteracao) {
+      linhas.push({ campo: "O que precisa ser alterado", valor: s.descricaoAlteracao || "—" });
+    } else {
+      linhas.push(
+        { campo: "Tamanho/medida do produto", valor: s.tamanhoProduto || "—" },
+        { campo: "Cor do produto", valor: s.corProduto || "—" },
+        { campo: "Tecido/material", valor: s.tecidoMaterial || "—" },
+        { campo: "Tipo de personalização", valor: (s.tipoPersonalizacao === "Outro" ? s.tipoPersonalizacaoOutro : s.tipoPersonalizacao) || "—" },
+        { campo: "Local da personalização", valor: (s.localPersonalizacao === "Outro" ? s.localPersonalizacaoOutro : s.localPersonalizacao) || "—" },
+        { campo: "Tamanho da estampa/logo", valor: s.tamanhoEstampa || "—" },
+        { campo: "Cor da estampa", valor: s.corEstampa || "—" },
+        { campo: "Texto que deve entrar na arte", valor: s.textoArte || "—" },
+      );
+    }
+    if ((s.observacoesCliente || "").trim()) linhas.push({ campo: "Observações do cliente", valor: s.observacoesCliente });
+    const anexos = [...(s.fotosProduto || []), ...(s.arquivosLogo || []), ...(s.mockupsGerados || []), ...(s.arquivosReferencia || [])];
+    onImprimirGrade({
+      titulo: `${s.ehAlteracao ? "Alteração" : "Solicitação"} de arte #${String(s.numero).padStart(3, "0")} — ${s.clienteNomeSnap || "Sem cliente"}`,
+      subtitulo: resumoItens(s.itens),
+      geradoEm: new Date().toLocaleString("pt-BR"),
+      colunas: [{ key: "campo", label: "Campo" }, { key: "valor", label: "Informação" }],
+      linhas,
+      anexos,
+    });
+  }
 
   const filtradas = solicitacoes.filter(s => {
     const termo = busca.trim().toLowerCase();
     if (!termo) return true;
-    return (s.produtoNomeSnap || "").toLowerCase().includes(termo) || (s.clienteNomeSnap || "").toLowerCase().includes(termo) || `#${String(s.numero).padStart(3, "0")}`.includes(termo);
+    return (s.itens || []).some(it => (it.produtoNomeSnap || "").toLowerCase().includes(termo)) || (s.clienteNomeSnap || "").toLowerCase().includes(termo) || `#${String(s.numero).padStart(3, "0")}`.includes(termo);
   });
   const pendentes = [...filtradas.filter(s => s.status !== "concluida")].sort((a, b) => (a.numero || 0) - (b.numero || 0));
   const concluidas = [...filtradas.filter(s => s.status === "concluida")].sort((a, b) => new Date(b.concluidaEm || 0) - new Date(a.concluidaEm || 0));
@@ -3516,8 +3862,25 @@ function Criacao({ solicitacoes, onSalvarSolicitacao, onRemoverSolicitacao, prod
     );
   }
 
+  function renderGaleriaVisualizacao(titulo, arquivos) {
+    if (!arquivos || arquivos.length === 0) return null;
+    return (
+      <>
+        <div style={{ fontSize: 11.5, fontWeight: 700, color: "#6b5d49", marginTop: 10 }}>{titulo}</div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8, marginTop: 4 }}>
+          {arquivos.map(a => (
+            a.tipo && a.tipo.startsWith("image/")
+              ? <a key={a.id} href={a.dataUrl} download={a.nome}><img src={a.dataUrl} alt={a.nome} style={{ width: "100%", height: 80, objectFit: "cover", borderRadius: 6, border: "1px solid #e6ddc8", display: "block" }} /></a>
+              : <a key={a.id} href={a.dataUrl} download={a.nome} style={{ fontSize: 11, color: "#2f4a63", border: "1px solid #e6ddc8", borderRadius: 6, padding: "4px 8px", textDecoration: "none", display: "inline-flex", alignItems: "center", gap: 4 }}><Paperclip size={11} /> {a.nome}</a>
+          ))}
+        </div>
+      </>
+    );
+  }
+
   function renderCardSolicitacao(s) {
     const expandido = expandidoId === s.id;
+    const totalArquivos = (s.fotosProduto || []).length + (s.arquivosLogo || []).length;
     return (
       <Card key={s.id} style={{ padding: 14 }}>
         <div onClick={() => setExpandidoId(expandido ? null : s.id)} style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8, cursor: "pointer" }}>
@@ -3529,9 +3892,9 @@ function Criacao({ solicitacoes, onSalvarSolicitacao, onRemoverSolicitacao, prod
                   Alteração de arte
                 </div>
               )}
-              <div style={{ fontWeight: 800, fontSize: 14, color: "#1c2b39" }}>#{String(s.numero).padStart(3, "0")} · {s.produtoNomeSnap}</div>
+              <div style={{ fontWeight: 800, fontSize: 14, color: "#1c2b39" }}>#{String(s.numero).padStart(3, "0")} · {resumoItens(s.itens)}</div>
               <div style={{ fontSize: 12, color: "#a3937a" }}>
-                {s.clienteNomeSnap ? `${s.clienteNomeSnap} · ` : ""}criada em {new Date(s.criadaEm).toLocaleDateString("pt-BR")}{(s.arquivosLogo || []).length > 0 ? ` · 📎 ${s.arquivosLogo.length}` : ""}
+                {s.clienteNomeSnap ? `${s.clienteNomeSnap} · ` : ""}criada em {new Date(s.criadaEm).toLocaleDateString("pt-BR")}{totalArquivos > 0 ? ` · 📎 ${totalArquivos}` : ""}
               </div>
             </div>
           </div>
@@ -3539,57 +3902,41 @@ function Criacao({ solicitacoes, onSalvarSolicitacao, onRemoverSolicitacao, prod
         </div>
         {expandido && (
           <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px solid #efe8d8" }}>
-            {s.ehAlteracao ? (
-              <div style={{ display: "flex", flexDirection: "column", gap: 6, fontSize: 12.5, color: "#2a2015" }}>
-                <div><b>O que precisa ser alterado:</b> <span style={{ whiteSpace: "pre-wrap" }}>{s.descricaoAlteracao}</span></div>
-                {s.observacoesCliente && <div><b>Observações:</b> {s.observacoesCliente}</div>}
-              </div>
-            ) : (
-              <div style={{ display: "flex", flexDirection: "column", gap: 6, fontSize: 12.5, color: "#2a2015" }}>
-                {s.tamanhoProduto && <div><b>Tamanho/medida do produto:</b> {s.tamanhoProduto}</div>}
-                {s.corProduto && <div><b>Cor do produto:</b> {s.corProduto}</div>}
-                {s.tecidoMaterial && <div><b>Tecido/material:</b> {s.tecidoMaterial}</div>}
-                {s.tipoPersonalizacao && <div><b>Tipo de personalização:</b> {s.tipoPersonalizacao === "Outro" ? s.tipoPersonalizacaoOutro : s.tipoPersonalizacao}</div>}
-                {s.localPersonalizacao && <div><b>Local da personalização:</b> {s.localPersonalizacao === "Outro" ? s.localPersonalizacaoOutro : s.localPersonalizacao}</div>}
-                {s.tamanhoEstampa && <div><b>Tamanho da estampa/logo:</b> {s.tamanhoEstampa}</div>}
-                {s.corEstampa && <div><b>Cor da estampa:</b> {s.corEstampa}</div>}
-                {s.quantidade && <div><b>Quantidade:</b> {s.quantidade}</div>}
-                {s.textoArte && <div><b>Texto que deve entrar na arte:</b> <span style={{ whiteSpace: "pre-wrap" }}>{s.textoArte}</span></div>}
-                {s.observacoesCliente && <div><b>Observações do cliente:</b> {s.observacoesCliente}</div>}
-              </div>
-            )}
-            {(s.arquivosLogo || []).length > 0 && (
-              <>
-                <div style={{ fontSize: 11.5, fontWeight: 700, color: "#6b5d49", marginTop: 10 }}>Logo/arquivo do cliente</div>
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8, marginTop: 4 }}>
-                  {s.arquivosLogo.map(a => (
-                    a.tipo && a.tipo.startsWith("image/")
-                      ? <a key={a.id} href={a.dataUrl} download={a.nome}><img src={a.dataUrl} alt={a.nome} style={{ width: "100%", height: 80, objectFit: "cover", borderRadius: 6, border: "1px solid #e6ddc8", display: "block" }} /></a>
-                      : <a key={a.id} href={a.dataUrl} download={a.nome} style={{ fontSize: 11, color: "#2f4a63", border: "1px solid #e6ddc8", borderRadius: 6, padding: "4px 8px", textDecoration: "none", display: "inline-flex", alignItems: "center", gap: 4 }}><Paperclip size={11} /> {a.nome}</a>
-                  ))}
-                </div>
-              </>
-            )}
-            {(s.arquivosReferencia || []).length > 0 && (
-              <>
-                <div style={{ fontSize: 11.5, fontWeight: 700, color: "#6b5d49", marginTop: 10 }}>Referência</div>
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8, marginTop: 4 }}>
-                  {s.arquivosReferencia.map(a => (
-                    a.tipo && a.tipo.startsWith("image/")
-                      ? <a key={a.id} href={a.dataUrl} download={a.nome}><img src={a.dataUrl} alt={a.nome} style={{ width: "100%", height: 80, objectFit: "cover", borderRadius: 6, border: "1px solid #e6ddc8", display: "block" }} /></a>
-                      : <a key={a.id} href={a.dataUrl} download={a.nome} style={{ fontSize: 11, color: "#2f4a63", border: "1px solid #e6ddc8", borderRadius: 6, padding: "4px 8px", textDecoration: "none", display: "inline-flex", alignItems: "center", gap: 4 }}><Paperclip size={11} /> {a.nome}</a>
-                  ))}
-                </div>
-              </>
-            )}
-            <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+            <div style={{ display: "flex", flexDirection: "column", gap: 6, fontSize: 12.5, color: "#2a2015" }}>
+              <div><b>Cliente:</b> {s.clienteNomeSnap || "—"}</div>
+              <div><b>Produto(s):</b> {(s.itens || []).map(it => `${it.produtoNomeSnap} (${it.quantidade})`).join(", ") || "—"}</div>
+              {s.ehAlteracao ? (
+                <>
+                  <div><b>O que precisa ser alterado:</b> <span style={{ whiteSpace: "pre-wrap" }}>{s.descricaoAlteracao}</span></div>
+                  {s.observacoesCliente && <div><b>Observações:</b> {s.observacoesCliente}</div>}
+                </>
+              ) : (
+                <>
+                  {s.tamanhoProduto && <div><b>Tamanho/medida do produto:</b> {s.tamanhoProduto}</div>}
+                  {s.corProduto && <div><b>Cor do produto:</b> {s.corProduto}</div>}
+                  {s.tecidoMaterial && <div><b>Tecido/material:</b> {s.tecidoMaterial}</div>}
+                  {s.tipoPersonalizacao && <div><b>Tipo de personalização:</b> {s.tipoPersonalizacao === "Outro" ? s.tipoPersonalizacaoOutro : s.tipoPersonalizacao}</div>}
+                  {s.localPersonalizacao && <div><b>Local da personalização:</b> {s.localPersonalizacao === "Outro" ? s.localPersonalizacaoOutro : s.localPersonalizacao}</div>}
+                  {s.tamanhoEstampa && <div><b>Tamanho da estampa/logo:</b> {s.tamanhoEstampa}</div>}
+                  {s.corEstampa && <div><b>Cor da estampa:</b> {s.corEstampa}</div>}
+                  {s.textoArte && <div><b>Texto que deve entrar na arte:</b> <span style={{ whiteSpace: "pre-wrap" }}>{s.textoArte}</span></div>}
+                  {s.observacoesCliente && <div><b>Observações do cliente:</b> {s.observacoesCliente}</div>}
+                </>
+              )}
+            </div>
+            {renderGaleriaVisualizacao("Foto do produto", s.fotosProduto)}
+            {renderGaleriaVisualizacao("Logo/arquivo do cliente", s.arquivosLogo)}
+            {renderGaleriaVisualizacao("Posicionamento gerado", s.mockupsGerados)}
+            {renderGaleriaVisualizacao("Referência", s.arquivosReferencia)}
+            <div style={{ display: "flex", gap: 8, marginTop: 12, flexWrap: "wrap" }}>
               <button type="button" onClick={() => aoCopiar(s)} style={{
-                flex: 1, border: "1.5px solid #d9cfb7", background: "#fff", borderRadius: 9, padding: "9px 10px",
+                flex: 1, minWidth: 120, border: "1.5px solid #d9cfb7", background: "#fff", borderRadius: 9, padding: "9px 10px",
                 color: "#2f4a63", fontWeight: 700, cursor: "pointer", fontSize: 13, display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
               }}>
                 <Paperclip size={14} /> {copiadoId === s.id ? "Texto copiado ✓" : "Copiar texto"}
               </button>
-              <PrimaryButton onClick={() => alternarConcluida(s)} style={{ flex: 1 }}>
+              <IconButton onClick={() => imprimirSolicitacao(s)} title="Imprimir ordem de criação"><Printer size={15} /></IconButton>
+              <PrimaryButton onClick={() => alternarConcluida(s)} style={{ flex: 1, minWidth: 140 }}>
                 <Check size={16} /> {s.status === "concluida" ? "Reabrir" : "Marcar concluída"}
               </PrimaryButton>
               <IconButton onClick={() => excluir(s.id)} danger title="Excluir"><Trash2 size={16} /></IconButton>
@@ -3630,11 +3977,28 @@ function Criacao({ solicitacoes, onSalvarSolicitacao, onRemoverSolicitacao, prod
           )}
         </Field>
 
-        <Field label="Produto">
-          <Select value={produtoId} onChange={e => setProdutoId(e.target.value)}>
-            <option value="">Selecione…</option>
-            {[...produtos].sort((a, b) => a.nome.localeCompare(b.nome)).map(p => <option key={p.id} value={p.id}>{p.nome}</option>)}
-          </Select>
+        <Field label="Produtos e quantidades">
+          {produtosDisponiveisParaAdicionar.length > 0 ? (
+            <>
+              <div style={{ display: "flex", gap: 6 }}>
+                <Select value={produtoParaAdicionar} onChange={e => setProdutoParaAdicionar(e.target.value)} style={{ flex: 1 }}>
+                  <option value="">Produto…</option>
+                  {produtosDisponiveisParaAdicionar.map(p => <option key={p.id} value={p.id}>{p.nome}</option>)}
+                </Select>
+                <input type="number" min="1" step="1" value={quantidadeParaAdicionar} onChange={e => setQuantidadeParaAdicionar(e.target.value)} placeholder="Qtd." style={{ ...inputStyle, width: 78 }} />
+              </div>
+              <button type="button" onClick={adicionarItem} disabled={!podeAdicionarItem} style={{
+                marginTop: 8, width: "100%", border: "1.5px solid " + (podeAdicionarItem ? "#2f4a63" : "#d9cfb7"),
+                background: podeAdicionarItem ? "#2f4a63" : "#f4efe2", color: podeAdicionarItem ? "#fff" : "#a3937a",
+                borderRadius: 8, padding: "8px 12px", fontSize: 13, fontWeight: 700,
+                cursor: podeAdicionarItem ? "pointer" : "not-allowed", display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
+              }}>
+                <Plus size={15} /> Adicionar produto
+              </button>
+            </>
+          ) : (
+            <div style={{ fontSize: 11.5, color: "#a3937a" }}>Todos os produtos cadastrados já foram adicionados.</div>
+          )}
           <button type="button" onClick={() => setNovoProdutoAberto(v => !v)} style={linkButtonStyle}>
             {novoProdutoAberto ? "Cancelar" : "+ Cadastrar novo produto"}
           </button>
@@ -3642,6 +4006,16 @@ function Criacao({ solicitacoes, onSalvarSolicitacao, onRemoverSolicitacao, prod
             <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
               <input value={novoProdutoNome} onChange={e => setNovoProdutoNome(e.target.value)} placeholder="Nome do novo produto" style={{ ...inputStyle, flex: 1 }} onKeyDown={e => e.key === "Enter" && criarProduto()} />
               <PrimaryButton onClick={criarProduto} disabled={!novoProdutoNome.trim()}><Plus size={16} /></PrimaryButton>
+            </div>
+          )}
+          {itens.length > 0 && (
+            <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 10 }}>
+              {itens.map(it => (
+                <div key={it.produtoId} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", background: "#fff", border: "1px solid #e6ddc8", borderRadius: 8, padding: "7px 10px" }}>
+                  <span style={{ fontSize: 13, color: "#2a2015" }}>{it.produtoNomeSnap} — {it.quantidade} peças</span>
+                  <IconButton onClick={() => removerItem(it.produtoId)} danger title="Remover"><X size={14} /></IconButton>
+                </div>
+              ))}
             </div>
           )}
         </Field>
@@ -3699,16 +4073,20 @@ function Criacao({ solicitacoes, onSalvarSolicitacao, onRemoverSolicitacao, prod
                 <input value={localPersonalizacaoOutro} onChange={e => setLocalPersonalizacaoOutro(e.target.value)} placeholder="Qual?" style={{ ...inputStyle, marginTop: 8 }} />
               )}
             </Field>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-              <Field label="Tamanho da estampa/logo">
-                <input value={tamanhoEstampa} onChange={e => setTamanhoEstampa(e.target.value)} placeholder="Ex.: 20 x 15 cm" style={inputStyle} />
-              </Field>
-              <Field label="Cor da estampa">
-                <input value={corEstampa} onChange={e => setCorEstampa(e.target.value)} placeholder="Ex.: Branco" style={inputStyle} />
-              </Field>
-            </div>
-            <Field label="Quantidade">
-              <input type="number" min="0" value={quantidade} onChange={e => setQuantidade(e.target.value)} placeholder="Ex.: 50" style={inputStyle} />
+            <Field label="Tamanho da estampa/logo">
+              <input value={tamanhoEstampa} onChange={e => setTamanhoEstampa(e.target.value)} placeholder="Ex.: 20 x 15 cm" style={inputStyle} />
+            </Field>
+            <Field label="Cor da estampa">
+              <input value={corEstampa} onChange={e => setCorEstampa(e.target.value)} placeholder="Ex.: Branco" style={inputStyle} />
+            </Field>
+            <Field label="Foto do produto">
+              {renderGaleriaAnexo(fotosProduto, removerFotoProduto)}
+              <input ref={fotoProdutoRef} type="file" multiple accept="image/*" style={{ display: "none" }}
+                onChange={e => { anexarFotoProduto(e.target.files); e.target.value = ""; }} />
+              <button type="button" onClick={() => fotoProdutoRef.current && fotoProdutoRef.current.click()} style={{
+                fontSize: 12.5, border: "1px dashed #cdb98a", background: "#f4ecd8", borderRadius: 7, padding: "7px 11px",
+                cursor: "pointer", display: "flex", alignItems: "center", gap: 6, color: "#2f4a63", fontWeight: 700,
+              }}><Paperclip size={14} /> Anexar foto</button>
             </Field>
             <Field label="Logo/arquivo do cliente">
               {renderGaleriaAnexo(arquivosLogo, removerArquivoLogo)}
@@ -3720,6 +4098,13 @@ function Criacao({ solicitacoes, onSalvarSolicitacao, onRemoverSolicitacao, prod
               }}><Paperclip size={14} /> Anexar arquivo</button>
               <div style={{ fontSize: 11, color: "#a3937a", marginTop: 4 }}>De preferência em boa qualidade — PDF, CDR, AI, SVG ou PNG.</div>
             </Field>
+
+            <EstudioPosicionamento
+              fotosProduto={fotosProduto} arquivosLogo={arquivosLogo} tamanhoEstampa={tamanhoEstampa}
+              onSalvar={arquivo => setMockupsGerados(a => [...a, arquivo])}
+            />
+            {renderGaleriaAnexo(mockupsGerados, removerMockup)}
+
             <Field label="Texto que deve entrar na arte">
               <textarea value={textoArte} onChange={e => setTextoArte(e.target.value)} rows={2}
                 placeholder="Escreva exatamente como deverá aparecer" style={{ ...inputStyle, resize: "vertical", fontFamily: "inherit" }} />
@@ -3744,7 +4129,7 @@ function Criacao({ solicitacoes, onSalvarSolicitacao, onRemoverSolicitacao, prod
         <PrimaryButton onClick={criarSolicitacao} disabled={!podeCriar} style={{ width: "100%", marginTop: 4 }}>
           <Plus size={16} /> Adicionar à fila
         </PrimaryButton>
-        {!podeCriar && <div style={{ fontSize: 11, color: "#a3937a", marginTop: 6, textAlign: "center" }}>{ehAlteracao ? "Selecione cliente, produto e descreva o que precisa mudar." : "Selecione o cliente e o produto para poder adicionar."}</div>}
+        {!podeCriar && <div style={{ fontSize: 11, color: "#a3937a", marginTop: 6, textAlign: "center" }}>{ehAlteracao ? "Selecione cliente, ao menos 1 produto e descreva o que precisa mudar." : "Selecione o cliente e ao menos 1 produto para poder adicionar."}</div>}
       </Card>
 
       <Card style={{ marginBottom: 16, padding: 12 }}>
@@ -3767,7 +4152,6 @@ function Criacao({ solicitacoes, onSalvarSolicitacao, onRemoverSolicitacao, prod
     </div>
   );
 }
-
 // ---------- Chat interno (conversa entre os usuários do sistema) ----------
 // Adicionado: canal único de conversa entre todo mundo que usa o app —
 // colaboradores, gestores e administradores. Como o armazenamento do app
