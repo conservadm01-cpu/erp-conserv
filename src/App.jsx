@@ -6183,6 +6183,45 @@ function RelatorioGradeImpressao({ payload, onFechar }) {
   // retrato. "landscape" continua sendo o padrão pra não mudar o
   // comportamento de quem já usava esse impresso.
   const orientacao = payload.orientacao === "retrato" ? "portrait" : "landscape";
+  // Adicionado: tamanho útil da folha A4 (297x210mm) descontando a
+  // margem de 12mm de cada lado definida em @page — é o espaço real
+  // disponível pro conteúdo em folha única.
+  const larguraMm = orientacao === "portrait" ? 186 : 273;
+  const alturaMm = orientacao === "portrait" ? 273 : 186;
+
+  // Corrigido: só remover a quebra de página forçada (feito antes) não
+  // garante que o conteúdo caiba fisicamente numa folha — se passasse
+  // da altura, o navegador simplesmente criava uma segunda página do
+  // mesmo jeito. Agora, em relatórios de folha única, o conteúdo é
+  // medido depois de montado (e depois das imagens carregarem) e
+  // encolhido via CSS transform na proporção exata que falta pra caber
+  // na área útil da folha — sempre 1 página só, do tamanho que for.
+  const caixaRef = useRef(null);
+  const conteudoRef = useRef(null);
+  const [escala, setEscala] = useState(1);
+  useEffect(() => {
+    if (!folhaUnica) { setEscala(1); return; }
+    let cancelado = false;
+    function recalcular() {
+      if (cancelado || !caixaRef.current || !conteudoRef.current) return;
+      const alturaDisponivel = caixaRef.current.clientHeight;
+      const alturaConteudo = conteudoRef.current.scrollHeight;
+      setEscala(alturaConteudo > alturaDisponivel ? Math.max(0.3, (alturaDisponivel / alturaConteudo) * 0.985) : 1);
+    }
+    setEscala(1);
+    const t1 = setTimeout(recalcular, 30);
+    const imgs = conteudoRef.current ? Array.from(conteudoRef.current.querySelectorAll("img")) : [];
+    imgs.forEach(img => {
+      if (!img.complete) { img.addEventListener("load", recalcular); img.addEventListener("error", recalcular); }
+    });
+    const t2 = setTimeout(recalcular, 400);
+    window.addEventListener("resize", recalcular);
+    return () => {
+      cancelado = true; clearTimeout(t1); clearTimeout(t2);
+      imgs.forEach(img => { img.removeEventListener("load", recalcular); img.removeEventListener("error", recalcular); });
+      window.removeEventListener("resize", recalcular);
+    };
+  }, [folhaUnica, payload]);
 
   return (
     <div style={{ minHeight: "100vh", background: "#efe9db" }}>
@@ -6191,7 +6230,8 @@ function RelatorioGradeImpressao({ payload, onFechar }) {
         @media print {
           .no-print { display: none !important; }
           .no-print-video { display: none !important; }
-          .folha { box-shadow: none !important; margin: 0 !important; width: 100% !important; max-width: 100% !important; padding: 0 !important; }
+          .folha { box-shadow: none !important; margin: 0 !important; }
+          .folha:not(.folha-unica) { width: 100% !important; max-width: 100% !important; padding: 0 !important; }
           body { background: #fff !important; }
           table { table-layout: fixed; }
           th, td { word-break: break-word; overflow-wrap: break-word; }
@@ -6207,10 +6247,21 @@ function RelatorioGradeImpressao({ payload, onFechar }) {
         <button onClick={handleImprimir} style={{ background: "#2f4a63", border: "none", color: "#fff", borderRadius: 8, padding: "8px 14px", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>Imprimir / Salvar PDF</button>
       </div>
 
-      <div className="folha" style={{
-        maxWidth: 980, margin: "20px auto 60px", background: "#fff", borderRadius: 10,
-        boxShadow: "0 2px 10px rgba(0,0,0,0.08)", padding: "28px 26px", fontFamily: FONT_BODY, color: "#2a2015",
-      }}>
+      <div
+        className={folhaUnica ? "folha folha-unica" : "folha"}
+        ref={folhaUnica ? caixaRef : null}
+        style={folhaUnica ? {
+          width: `${larguraMm}mm`, height: `${alturaMm}mm`, margin: "20px auto 60px", background: "#fff", borderRadius: 10,
+          boxShadow: "0 2px 10px rgba(0,0,0,0.08)", overflow: "hidden", fontFamily: FONT_BODY, color: "#2a2015",
+        } : {
+          maxWidth: 980, margin: "20px auto 60px", background: "#fff", borderRadius: 10,
+          boxShadow: "0 2px 10px rgba(0,0,0,0.08)", padding: "28px 26px", fontFamily: FONT_BODY, color: "#2a2015",
+        }}
+      >
+      <div
+        ref={folhaUnica ? conteudoRef : null}
+        style={folhaUnica ? { padding: "14mm 12mm", transform: `scale(${escala})`, transformOrigin: "top left", width: `${100 / escala}%`, boxSizing: "border-box" } : undefined}
+      >
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", borderBottom: "2px solid #1c2b39", paddingBottom: 14, marginBottom: 16 }}>
           <div>
             <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 1.2, color: "#6b5d49", textTransform: "uppercase" }}>Controle de Produção</div>
@@ -6322,6 +6373,7 @@ function RelatorioGradeImpressao({ payload, onFechar }) {
             <div className="no-print" style={{ fontSize: 11, color: "#a3937a", marginTop: 8 }}>Vídeos não aparecem no PDF impresso — só na tela. Nomes dos arquivos ficam listados no impresso.</div>
           </div>
         )}
+      </div>
       </div>
 
       <div className="no-print" style={{ maxWidth: 980, margin: "0 auto 40px", padding: "0 16px", textAlign: "center" }}>
