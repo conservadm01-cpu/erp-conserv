@@ -110,7 +110,6 @@ function etapaAtual(et, db) {
   return {
     ...et,
     nome: def.nome || et.nome,
-    departamentoId: def.departamentoId || et.departamentoId,
     modoTempo: def.modoTempo || 'peca',
     tempoProducao: def.tempoProducao,
     unidadeTempo: def.unidadeTempo,
@@ -2061,6 +2060,7 @@ function LancamentoProducao({
 
     // a mesma máquina também não pode receber dois trabalhos no mesmo horário
     const equipUsado = dados.equipamentoId || et.equipamentoId || '';
+    const maqUsada = (db.equipamentos || []).find(q => q.id === equipUsado);
     if (equipUsado) {
       const choqueMaq = emAberto.find(a => a.equipamentoId === equipUsado && sobrepoe(inicio, fimPrevisto, a.inicio, a.previsaoFim || a.inicio));
       if (choqueMaq) {
@@ -2078,7 +2078,7 @@ function LancamentoProducao({
         opRotulo: rotuloOP(op),
         etapaIdx: idx,
         etapaNome: et.nome,
-        departamentoId: et.departamentoId || '',
+        departamentoId: maqUsada ? maqUsada.departamentoId || '' : '',
         equipamentoId: equipUsado,
         modo: dados.modo,
         colaborador: responsaveis[0],
@@ -2575,9 +2575,13 @@ function FormIniciarEtapa({
   const [campos, setCampos] = useState({});
   const [equipamentoId, setEquipamentoId] = useState(etapa.equipamentoId || '');
   const maquinas = maquinasDaEtapa(etapa, db);
-  const doDep = db.colaboradores.filter(c => c.status !== 'Inativo' && c.departamentoId === etapa.departamentoId);
-  const outros = db.colaboradores.filter(c => c.status !== 'Inativo' && c.departamentoId !== etapa.departamentoId);
-  const nomeDep = normaliza(dep && dep.nome || '');
+  // o departamento de referência (para colaboradores em destaque e campos extras)
+  // vem do equipamento selecionado, já que a etapa em si não pertence mais a um departamento
+  const maquinaSelecionada = (db.equipamentos || []).find(q => q.id === equipamentoId);
+  const depDaMaquina = maquinaSelecionada ? db.departamentos.find(d => d.id === maquinaSelecionada.departamentoId) : dep;
+  const doDep = db.colaboradores.filter(c => c.status !== 'Inativo' && depDaMaquina && c.departamentoId === depDaMaquina.id);
+  const outros = db.colaboradores.filter(c => c.status !== 'Inativo' && !(depDaMaquina && c.departamentoId === depDaMaquina.id));
+  const nomeDep = normaliza(depDaMaquina && depDaMaquina.nome || '');
 
   // campos extras conforme o setor
   const extras = [];
@@ -3449,12 +3453,12 @@ function Departamentos({
     setModal(null);
   }
   function remove(id) {
-    const emUso = db.etapasProducao.filter(e => e.departamentoId === id).length;
-    const msg = emUso ? `Este departamento está vinculado a ${emUso} etapa(s) de produção. Excluir mesmo assim? As etapas ficarão sem departamento.` : 'Excluir este departamento?';
+    const emUso = (db.equipamentos || []).filter(e => e.departamentoId === id).length;
+    const msg = emUso ? `Este departamento está vinculado a ${emUso} equipamento(s). Excluir mesmo assim? Os equipamentos ficarão sem departamento.` : 'Excluir este departamento?';
     if (!confirm(msg)) return;
     update(d => {
       d.departamentos = d.departamentos.filter(x => x.id !== id);
-      d.etapasProducao = d.etapasProducao.map(e => e.departamentoId === id ? {
+      d.equipamentos = (d.equipamentos || []).map(e => e.departamentoId === id ? {
         ...e,
         departamentoId: ''
       } : e);
@@ -3485,8 +3489,8 @@ function Departamentos({
     className: "num"
   }, "Média salarial"), /*#__PURE__*/React.createElement("th", {
     className: "num"
-  }, "Etapas vinculadas"), /*#__PURE__*/React.createElement("th", null))), /*#__PURE__*/React.createElement("tbody", null, db.departamentos.map(dep => {
-    const qtdEtapas = db.etapasProducao.filter(e => e.departamentoId === dep.id).length;
+  }, "Equipamentos"), /*#__PURE__*/React.createElement("th", null))), /*#__PURE__*/React.createElement("tbody", null, db.departamentos.map(dep => {
+    const qtdEtapas = (db.equipamentos || []).filter(e => e.departamentoId === dep.id).length;
     const qtdColab = db.colaboradores.filter(c => c.departamentoId === dep.id && c.status !== 'Inativo').length;
     const media = mediaSalarialDepartamento(db, dep.id);
     return /*#__PURE__*/React.createElement("tr", {
@@ -3596,148 +3600,50 @@ function EtapasProducao({
       return d;
     });
   }
-  return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
-    className: "page-head"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "eyebrow"
-  }, "Etapas de produção & tempos"), /*#__PURE__*/React.createElement("button", {
-    className: "btn accent",
-    onClick: () => setModal({}),
-    disabled: db.departamentos.length === 0
-  }, "+ Nova etapa")), db.departamentos.length === 0 && /*#__PURE__*/React.createElement("div", {
-    className: "empty",
-    style: {
-      marginBottom: 16
-    }
-  }, "Cadastre ao menos um departamento antes de criar etapas de produção."), db.etapasProducao.length === 0 ? /*#__PURE__*/React.createElement(Empty, {
-    text: "Nenhuma etapa de produção cadastrada. Ex: Corte, Costura, Revisão — cada uma vinculada a um departamento, com seu tempo de produção."
-  }) : (() => {
-    // agrupa as etapas por departamento
-    const grupos = [];
-    const porDep = {};
-    db.etapasProducao.forEach(et => {
-      const k = et.departamentoId || '_sem';
-      if (!porDep[k]) {
-        porDep[k] = {
-          dep: db.departamentos.find(d => d.id === et.departamentoId),
-          itens: []
-        };
-        grupos.push({
-          k,
-          ...porDep[k]
-        });
-      }
-      porDep[k].itens.push(et);
-    });
-    return grupos.map(g => {
-      const itens = porDep[g.k].itens;
-      let somaMin = 0,
-        temVariavel = false,
-        somaCusto = 0;
-      itens.forEach(et => {
-        if (et.modoTempo === 'peca' || num(et.tamanhoLote) > 0) somaMin += cargaEtapaMinutos(et, 1, 1);else temVariavel = true;
-        const c = custoMaoDeObraPorPeca(et, db);
-        if (c !== null) somaCusto += c;
-      });
-      return /*#__PURE__*/React.createElement("div", {
-        key: g.k,
-        style: {
-          marginBottom: 18
-        }
-      }, /*#__PURE__*/React.createElement("div", {
-        style: {
-          display: 'flex',
-          alignItems: 'center',
-          gap: 8,
-          margin: '0 0 8px 0',
-          flexWrap: 'wrap'
-        }
-      }, /*#__PURE__*/React.createElement("div", {
-        style: {
-          width: 6,
-          height: 18,
-          background: 'var(--thread)',
-          borderRadius: 3
-        }
-      }), /*#__PURE__*/React.createElement("h3", {
-        style: {
-          margin: 0
-        }
-      }, g.dep ? g.dep.nome : 'Sem departamento'), /*#__PURE__*/React.createElement("span", {
-        className: "small muted"
-      }, itens.length, " etapa", itens.length > 1 ? 's' : '', " · ", somaMin.toFixed(2), " min/peça", temVariavel && ' (+ variáveis)', " · ", /*#__PURE__*/React.createElement("strong", null, money(somaCusto)), "/peça", (() => {
-        const md = mediaSalarialDepartamento(db, g.k === '_sem' ? '' : g.dep && g.dep.id);
-        return md === null ? /*#__PURE__*/React.createElement("span", {
-          style: {
-            color: 'var(--bad)'
-          }
-        }, " · sem base salarial") : /*#__PURE__*/React.createElement(React.Fragment, null, " · média salarial ", money(md));
-      })())), /*#__PURE__*/React.createElement("div", {
-        className: "panel",
-        style: {
-          padding: 0,
-          marginBottom: 0
-        }
-      }, /*#__PURE__*/React.createElement("table", null, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("th", {
-        style: {
-          width: 30
-        }
-      }, "#"), /*#__PURE__*/React.createElement("th", null, "Etapa"), /*#__PURE__*/React.createElement("th", {
-        className: "num"
-      }, "Tempo"), /*#__PURE__*/React.createElement("th", {
-        className: "num"
-      }, "Min/peça"), /*#__PURE__*/React.createElement("th", {
-        className: "num"
-      }, "Custo/min"), /*#__PURE__*/React.createElement("th", {
-        className: "num"
-      }, "Custo da etapa"), /*#__PURE__*/React.createElement("th", {
-        style: {
-          width: 150
-        }
-      }))), /*#__PURE__*/React.createElement("tbody", null, itens.map((et, i) => {
-        const custo = custoMaoDeObraPorPeca(et, db);
-        const cMin = custoPorMinutoDepartamento(db, et.departamentoId);
-        const mPeca = et.modoTempo === 'peca' || num(et.tamanhoLote) > 0 ? cargaEtapaMinutos(et, 1, 1) : null;
-        return /*#__PURE__*/React.createElement("tr", {
-          key: et.id
-        }, /*#__PURE__*/React.createElement("td", {
-          className: "small muted"
-        }, i + 1), /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement("strong", null, et.nome)), /*#__PURE__*/React.createElement("td", {
-          className: "num small"
-        }, labelModoTempo(et)), /*#__PURE__*/React.createElement("td", {
-          className: "num small"
-        }, mPeca !== null ? mPeca.toFixed(3) : /*#__PURE__*/React.createElement("span", {
-          className: "muted"
-        }, "informe o lote"), et.modoTempo !== 'peca' && num(et.tamanhoLote) > 0 && /*#__PURE__*/React.createElement("div", {
-          className: "muted",
-          style: {
-            fontSize: 10
-          }
-        }, "lote ", num(et.tamanhoLote), " pçs")), /*#__PURE__*/React.createElement("td", {
-          className: "num small"
-        }, cMin === null ? /*#__PURE__*/React.createElement("span", {
-          className: "muted"
-        }, "—") : money(cMin)), /*#__PURE__*/React.createElement("td", {
-          className: "num small"
-        }, /*#__PURE__*/React.createElement("strong", null, custo === null ? /*#__PURE__*/React.createElement("span", {
-          className: "muted"
-        }, et.modoTempo === 'peca' ? 'sem equipe no depto.' : 'informe o lote') : money(custo))), /*#__PURE__*/React.createElement("td", {
-          className: "row-actions"
-        }, /*#__PURE__*/React.createElement("button", {
-          className: "btn ghost sm",
-          onClick: () => setModal(et)
-        }, "Editar"), /*#__PURE__*/React.createElement("button", {
-          className: "btn danger sm",
-          onClick: () => remove(et.id)
-        }, "Excluir")));
-      })))));
-    });
-  })(), modal !== null && /*#__PURE__*/React.createElement(EtapaProducaoModal, {
-    et: modal,
-    db: db,
-    onClose: () => setModal(null),
-    onSave: save
-  }));
+  return <div>
+    <div className="page-head">
+      <div>
+        <div className="eyebrow">Etapas de produção &amp; tempos</div>
+      </div>
+      <button className="btn accent" onClick={() => setModal({})}>+ Nova etapa</button>
+    </div>
+    <div className="small muted" style={{ marginBottom: 12 }}>As etapas não pertencem mais a um departamento — vincule cada equipamento (em Equipamentos) às etapas que ele executa. O custo de mão de obra passa a ser calculado pelo colaborador real apontado em cada produção.</div>
+    {db.etapasProducao.length === 0 ? <Empty text="Nenhuma etapa de produção cadastrada. Ex: Corte, Costura, Revisão." /> : <div className="panel" style={{ padding: 0 }}>
+      <table>
+        <thead>
+          <tr>
+            <th style={{ width: 30 }}>#</th>
+            <th>Etapa</th>
+            <th className="num">Tempo</th>
+            <th className="num">Min/peça</th>
+            <th>Equipamentos capazes</th>
+            <th style={{ width: 150 }}></th>
+          </tr>
+        </thead>
+        <tbody>
+          {db.etapasProducao.map((et, i) => {
+            const mPeca = et.modoTempo === 'peca' || num(et.tamanhoLote) > 0 ? cargaEtapaMinutos(et, 1, 1) : null;
+            const maquinas = (db.equipamentos || []).filter(q => (q.etapaIds || []).includes(et.id));
+            return <tr key={et.id}>
+              <td className="small muted">{i + 1}</td>
+              <td><strong>{et.nome}</strong></td>
+              <td className="num small">{labelModoTempo(et)}</td>
+              <td className="num small">
+                {mPeca !== null ? mPeca.toFixed(3) : <span className="muted">informe o lote</span>}
+                {et.modoTempo !== 'peca' && num(et.tamanhoLote) > 0 && <div className="muted" style={{ fontSize: 10 }}>lote {num(et.tamanhoLote)} pçs</div>}
+              </td>
+              <td className="small">{maquinas.length === 0 ? <span className="muted" style={{ color: 'var(--bad)' }}>nenhum equipamento</span> : maquinas.map(q => q.codigo).join(', ')}</td>
+              <td className="row-actions">
+                <button className="btn ghost sm" onClick={() => setModal(et)}>Editar</button>
+                <button className="btn danger sm" onClick={() => remove(et.id)}>Excluir</button>
+              </td>
+            </tr>;
+          })}
+        </tbody>
+      </table>
+    </div>}
+    {modal !== null && <EtapaProducaoModal et={modal} db={db} onClose={() => setModal(null)} onSave={save} />}
+  </div>;
 }
 function EtapaProducaoModal({
   et,
@@ -3747,7 +3653,6 @@ function EtapaProducaoModal({
 }) {
   const [f, setF] = useState({
     nome: '',
-    departamentoId: db.departamentos[0]?.id || '',
     modoTempo: 'peca',
     tempoProducao: 0,
     unidadeTempo: 'seg',
@@ -3760,35 +3665,24 @@ function EtapaProducaoModal({
     [k]: v
   }));
 
-  // equipamentos do departamento — apenas informativo; a máquina é escolhida na OP
-  const maquinasDoDepto = (db.equipamentos || []).filter(q => q.departamentoId === f.departamentoId && (q.status || 'Operando') !== 'Baixado');
-  const depNome = (db.departamentos.find(d => d.id === f.departamentoId) || {}).nome || '';
+  // equipamentos capazes de executar esta etapa — apenas informativo; cadastrados em Equipamentos
+  const maquinasCapazes = et.id ? (db.equipamentos || []).filter(q => (q.status || 'Operando') !== 'Baixado' && (q.etapaIds || []).includes(et.id)) : [];
   return /*#__PURE__*/React.createElement(Modal, {
     title: et.id ? 'Editar etapa de produção' : 'Nova etapa de produção',
     onClose: onClose
   }, /*#__PURE__*/React.createElement(Field, {
-    label: "1. Departamento"
-  }, /*#__PURE__*/React.createElement("select", {
-    value: f.departamentoId,
-    onChange: e => set('departamentoId', e.target.value)
-  }, /*#__PURE__*/React.createElement("option", {
-    value: ""
-  }, "— selecione —"), db.departamentos.map(dep => /*#__PURE__*/React.createElement("option", {
-    key: dep.id,
-    value: dep.id
-  }, dep.nome)))), maquinasDoDepto.length > 0 && /*#__PURE__*/React.createElement("div", {
+    label: "1. Nome da etapa"
+  }, /*#__PURE__*/React.createElement("input", {
+    value: f.nome,
+    onChange: e => set('nome', e.target.value),
+    placeholder: "Chulear bolso, Viés de barra, Presponto…"
+  })), et.id && /*#__PURE__*/React.createElement("div", {
     className: "small muted",
     style: {
       marginTop: -8,
       marginBottom: 12
     }
-  }, "Equipamentos disponíveis em ", depNome, ": ", maquinasDoDepto.map(q => `${q.codigo} · ${q.nome}`).join(' | '), ". A máquina é escolhida na Ordem de Produção."), /*#__PURE__*/React.createElement(Field, {
-    label: "2. Nome da etapa"
-  }, /*#__PURE__*/React.createElement("input", {
-    value: f.nome,
-    onChange: e => set('nome', e.target.value),
-    placeholder: "Chulear bolso, Viés de barra, Presponto…"
-  })), /*#__PURE__*/React.createElement("div", {
+  }, maquinasCapazes.length > 0 ? `Equipamentos que já executam esta etapa: ${maquinasCapazes.map(q => `${q.codigo} · ${q.nome}`).join(' | ')}.` : "Nenhum equipamento cadastrado para executar esta etapa ainda — marque em Equipamentos."), /*#__PURE__*/React.createElement("div", {
     className: "field"
   }, /*#__PURE__*/React.createElement("label", null, "Como o tempo é medido"), /*#__PURE__*/React.createElement("div", {
     style: {
@@ -3811,14 +3705,14 @@ function EtapaProducaoModal({
   }, "Por equipe"))), /*#__PURE__*/React.createElement("div", {
     className: "grid3"
   }, /*#__PURE__*/React.createElement(Field, {
-    label: f.modoTempo === 'peca' ? '3. Tempo da peça' : f.modoTempo === 'lote' ? '3. Tempo para a OP inteira' : '3. Tempo do ciclo da equipe'
+    label: f.modoTempo === 'peca' ? '2. Tempo da peça' : f.modoTempo === 'lote' ? '2. Tempo para a OP inteira' : '2. Tempo do ciclo da equipe'
   }, /*#__PURE__*/React.createElement("input", {
     type: "number",
     step: "0.01",
     value: f.tempoProducao,
     onChange: e => set('tempoProducao', e.target.value)
   })), /*#__PURE__*/React.createElement(Field, {
-    label: "4. Unidade de tempo"
+    label: "3. Unidade de tempo"
   }, /*#__PURE__*/React.createElement("select", {
     value: f.unidadeTempo,
     onChange: e => set('unidadeTempo', e.target.value)
@@ -3851,67 +3745,12 @@ function EtapaProducaoModal({
       marginTop: -6,
       marginBottom: 14
     }
-  }, num(f.tamanhoLote) > 0 ? /*#__PURE__*/React.createElement(React.Fragment, null, "O tempo informado produz ", /*#__PURE__*/React.createElement("strong", null, num(f.tamanhoLote)), " peças", ' ', "— equivale a ", /*#__PURE__*/React.createElement("strong", null, cargaEtapaMinutos(f, 1, 1).toFixed(3), " min por peça"), ".", ' ', "Uma OP de 500 peças levaria ", minParaHHMM(cargaEtapaMinutos(f, 500, 500)), ".") : /*#__PURE__*/React.createElement(React.Fragment, null, "Sem a quantidade do lote, o sistema assume que o tempo cobre a quantidade inteira de cada Ordem de Produção.")), (() => {
-    // custo da etapa calculado pelo custo médio de mão de obra do departamento
-    const equipe = db.colaboradores.filter(c => c.departamentoId === f.departamentoId && c.status !== 'Inativo' && num(c.salario) > 0);
-    const media = mediaSalarialDepartamento(db, f.departamentoId);
-    const custoMin = custoPorMinutoDepartamento(db, f.departamentoId);
-    const lote = num(f.tamanhoLote);
-    const porLote = f.modoTempo === 'lote' || f.modoTempo === 'equipe';
-    const temBase = f.modoTempo === 'peca' || lote > 0;
-    const minPeca = temBase ? cargaEtapaMinutos(f, 1, 1) : null;
-    const pessoas = f.modoTempo === 'equipe' ? Math.max(num(f.tamanhoEquipe), 1) : 1;
-    const custoPeca = custoMin !== null && minPeca !== null ? custoMin * minPeca * pessoas : null;
-    const minLote = custoMin !== null && lote > 0 ? cargaEtapaMinutos(f, lote, lote) : null;
-    const custoLote = minLote !== null ? custoMin * minLote * pessoas : null;
-    return /*#__PURE__*/React.createElement("div", {
-      className: "panel",
-      style: {
-        background: '#fff',
-        marginBottom: 14
-      }
-    }, /*#__PURE__*/React.createElement("h3", null, "Custo da etapa — base: custo médio de mão de obra"), !f.departamentoId ? /*#__PURE__*/React.createElement("div", {
-      className: "small muted"
-    }, "Selecione o departamento para calcular o custo.") : media === null ? /*#__PURE__*/React.createElement("div", {
-      className: "small",
-      style: {
-        color: 'var(--bad)'
-      }
-    }, depNome ? `O departamento ${depNome} não tem colaboradores ativos com salário cadastrado.` : 'Departamento sem equipe cadastrada.', ' ', "Sem essa base não é possível calcular o custo da etapa.") : /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("table", null, /*#__PURE__*/React.createElement("tbody", null, /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("td", null, "Colaboradores considerados"), /*#__PURE__*/React.createElement("td", {
-      className: "num"
-    }, equipe.length, " em ", depNome)), /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("td", null, "Custo médio de mão de obra (mensal)"), /*#__PURE__*/React.createElement("td", {
-      className: "num"
-    }, money(media))), /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("td", null, "Custo por hora (", HORAS_MES_PADRAO, "h/mês)"), /*#__PURE__*/React.createElement("td", {
-      className: "num"
-    }, money(media / HORAS_MES_PADRAO))), /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("td", null, "Custo por minuto"), /*#__PURE__*/React.createElement("td", {
-      className: "num"
-    }, money(custoMin))), porLote && lote > 0 && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("td", null, "Tempo do lote"), /*#__PURE__*/React.createElement("td", {
-      className: "num"
-    }, minLote !== null ? `${minParaHHMM(minLote)} para ${lote} peças` : '—')), custoLote !== null && /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("td", null, "Custo do lote inteiro"), /*#__PURE__*/React.createElement("td", {
-      className: "num"
-    }, money(custoLote))), /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("td", null, "Diluição por peça"), /*#__PURE__*/React.createElement("td", {
-      className: "num"
-    }, minLote !== null ? `${money(custoLote)} ÷ ${lote} peças` : '—'))), f.modoTempo === 'equipe' && /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("td", null, "Pessoas na equipe (multiplica o custo)"), /*#__PURE__*/React.createElement("td", {
-      className: "num"
-    }, "× ", pessoas)), /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("td", null, "Tempo por peça"), /*#__PURE__*/React.createElement("td", {
-      className: "num"
-    }, minPeca !== null ? `${minPeca.toFixed(3)} min` : 'informe a quantidade do lote')), /*#__PURE__*/React.createElement("tr", {
-      style: {
-        background: 'var(--ok-bg)'
-      }
-    }, /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement("strong", null, "Custo da etapa por peça")), /*#__PURE__*/React.createElement("td", {
-      className: "num"
-    }, /*#__PURE__*/React.createElement("strong", {
-      style: {
-        color: 'var(--ok)'
-      }
-    }, custoPeca !== null ? money(custoPeca) : 'informe a quantidade do lote'))))), custoPeca !== null && /*#__PURE__*/React.createElement("div", {
-      className: "small muted",
-      style: {
-        marginTop: 8
-      }
-    }, "Referência: ", money(custoPeca * 100), " a cada 100 peças · ", money(custoPeca * 1000), " a cada 1.000 peças. O valor é recalculado sozinho quando a média salarial do departamento muda.")));
-  })(), /*#__PURE__*/React.createElement("div", {
+  }, num(f.tamanhoLote) > 0 ? /*#__PURE__*/React.createElement(React.Fragment, null, "O tempo informado produz ", /*#__PURE__*/React.createElement("strong", null, num(f.tamanhoLote)), " peças", ' ', "— equivale a ", /*#__PURE__*/React.createElement("strong", null, cargaEtapaMinutos(f, 1, 1).toFixed(3), " min por peça"), ".", ' ', "Uma OP de 500 peças levaria ", minParaHHMM(cargaEtapaMinutos(f, 500, 500)), ".") : /*#__PURE__*/React.createElement(React.Fragment, null, "Sem a quantidade do lote, o sistema assume que o tempo cobre a quantidade inteira de cada Ordem de Produção.")), /*#__PURE__*/React.createElement("div", {
+    className: "small muted",
+    style: {
+      marginBottom: 14
+    }
+  }, "O custo de mão de obra desta etapa não é mais estimado aqui — ele é calculado com o salário real do colaborador apontado em cada produção, em Produção → Cronograma."), /*#__PURE__*/React.createElement("div", {
     className: "modal-actions"
   }, /*#__PURE__*/React.createElement("button", {
     className: "btn ghost",
@@ -3919,7 +3758,7 @@ function EtapaProducaoModal({
   }, "Cancelar"), /*#__PURE__*/React.createElement("button", {
     className: "btn accent",
     onClick: () => onSave(f),
-    disabled: !f.nome || !f.departamentoId
+    disabled: !f.nome
   }, "Salvar")));
 }
 function EnderecoFields({
@@ -4949,6 +4788,7 @@ function EquipamentoModal({
     status: 'Operando',
     observacoes: '',
     manutencoes: [],
+    etapaIds: [],
     ...eq
   });
   const set = (k, v) => setF(prev => ({
@@ -5069,6 +4909,23 @@ function EquipamentoModal({
     key: st,
     value: st
   }, st))))), /*#__PURE__*/React.createElement(Field, {
+    label: "Etapas de produção que este equipamento pode executar"
+  }, (db.etapasProducao || []).length === 0 ? /*#__PURE__*/React.createElement("div", {
+    className: "small muted"
+  }, "Cadastre etapas de produção antes.") : /*#__PURE__*/React.createElement("div", {
+    style: { display: 'flex', flexWrap: 'wrap', gap: 6 }
+  }, (db.etapasProducao || []).map(et => {
+    const marcado = (f.etapaIds || []).includes(et.id);
+    return /*#__PURE__*/React.createElement("button", {
+      key: et.id,
+      type: "button",
+      className: 'btn sm ' + (marcado ? 'accent' : 'ghost'),
+      onClick: () => set('etapaIds', marcado ? (f.etapaIds || []).filter(id => id !== et.id) : [...(f.etapaIds || []), et.id])
+    }, et.nome);
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "small muted",
+    style: { marginTop: 6 }
+  }, "Duas ou mais máquinas podem executar a mesma etapa — o sistema distribui a produção entre elas conforme a carga do dia.")), /*#__PURE__*/React.createElement(Field, {
     label: "Observações"
   }, /*#__PURE__*/React.createElement("textarea", {
     rows: "2",
@@ -6218,24 +6075,16 @@ function ProdutoModal({
     const linhas = f.etapas.map(l => {
       const et = (db.etapasProducao || []).find(e => e.id === l.etapaId);
       if (!et) return null;
-      const dep = db.departamentos.find(d => d.id === et.departamentoId);
+      const maquinas = (db.equipamentos || []).filter(q => (q.etapaIds || []).includes(et.id));
       const min = cargaEtapaMinutos(et, 1, 1); // minutos por peça
-      const media = mediaSalarialDepartamento(db, et.departamentoId);
-      const custoMin = custoPorMinutoDepartamento(db, et.departamentoId);
-      const custo = custoMaoDeObraPorPeca(et, db);
       return {
         et,
-        dep,
-        min,
-        media,
-        custoMin,
-        custo
+        maquinas,
+        min
       };
     }).filter(Boolean);
     const totalMin = linhas.reduce((a, l) => a + (l.et.modoTempo === 'peca' ? l.min : 0), 0);
-    const total = linhas.reduce((a, l) => a + (l.custo || 0), 0);
     const variavel = linhas.some(l => l.et.modoTempo !== 'peca');
-    const semBase = linhas.some(l => l.media === null);
     return /*#__PURE__*/React.createElement("div", {
       className: "panel",
       style: {
@@ -6243,52 +6092,31 @@ function ProdutoModal({
         marginTop: 10,
         marginBottom: 0
       }
-    }, /*#__PURE__*/React.createElement("h3", null, "Custo de produção por peça — tempo × média salarial"), /*#__PURE__*/React.createElement("table", null, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("th", null, "Etapa"), /*#__PURE__*/React.createElement("th", null, "Departamento"), /*#__PURE__*/React.createElement("th", {
+    }, /*#__PURE__*/React.createElement("h3", null, "Tempo de produção por peça"), /*#__PURE__*/React.createElement("table", null, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("th", null, "Etapa"), /*#__PURE__*/React.createElement("th", null, "Equipamentos capazes"), /*#__PURE__*/React.createElement("th", {
       className: "num"
-    }, "Tempo/peça"), /*#__PURE__*/React.createElement("th", {
-      className: "num"
-    }, "Média salarial"), /*#__PURE__*/React.createElement("th", {
-      className: "num"
-    }, "Custo/min"), /*#__PURE__*/React.createElement("th", {
-      className: "num"
-    }, "Custo/peça"))), /*#__PURE__*/React.createElement("tbody", null, linhas.map((l, i) => /*#__PURE__*/React.createElement("tr", {
+    }, "Tempo/peça"))), /*#__PURE__*/React.createElement("tbody", null, linhas.map((l, i) => /*#__PURE__*/React.createElement("tr", {
       key: i
     }, /*#__PURE__*/React.createElement("td", {
       className: "small"
     }, l.et.nome), /*#__PURE__*/React.createElement("td", {
       className: "small muted"
-    }, l.dep ? l.dep.nome : '—'), /*#__PURE__*/React.createElement("td", {
+    }, l.maquinas.length === 0 ? '—' : l.maquinas.map(q => q.codigo).join(', ')), /*#__PURE__*/React.createElement("td", {
       className: "num small"
     }, l.et.modoTempo === 'peca' ? `${l.min.toFixed(2)} min` : /*#__PURE__*/React.createElement("span", {
       className: "muted"
-    }, "variável")), /*#__PURE__*/React.createElement("td", {
-      className: "num small"
-    }, l.media === null ? /*#__PURE__*/React.createElement("span", {
-      className: "muted"
-    }, "sem equipe") : money(l.media)), /*#__PURE__*/React.createElement("td", {
-      className: "num small"
-    }, l.custoMin === null ? '—' : money(l.custoMin)), /*#__PURE__*/React.createElement("td", {
-      className: "num small"
-    }, /*#__PURE__*/React.createElement("strong", null, l.custo === null ? /*#__PURE__*/React.createElement("span", {
-      className: "muted"
-    }, "—") : money(l.custo))))), /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("td", {
-      colSpan: "2",
+    }, "variável")))), /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("td", {
       style: {
         textAlign: 'right'
       }
-    }, /*#__PURE__*/React.createElement("strong", null, "Totais")), /*#__PURE__*/React.createElement("td", {
+    }, /*#__PURE__*/React.createElement("strong", null, "Total")), /*#__PURE__*/React.createElement("td", null), /*#__PURE__*/React.createElement("td", {
       className: "num"
-    }, /*#__PURE__*/React.createElement("strong", null, totalMin.toFixed(2), " min")), /*#__PURE__*/React.createElement("td", {
-      colSpan: "2"
-    }), /*#__PURE__*/React.createElement("td", {
-      className: "num"
-    }, /*#__PURE__*/React.createElement("strong", null, money(total)))))), /*#__PURE__*/React.createElement("div", {
+    }, /*#__PURE__*/React.createElement("strong", null, totalMin.toFixed(2), " min"))))), /*#__PURE__*/React.createElement("div", {
       className: "small muted",
       style: {
         marginTop: 8
       }
-    }, "Base: média salarial dos colaboradores ativos de cada departamento ÷ ", HORAS_MES_PADRAO, "h/mês = custo por minuto, multiplicado pelo tempo da etapa. Total: ", /*#__PURE__*/React.createElement("strong", null, minParaHHMM(totalMin)), " de mão de obra por peça.", variavel && ' Há etapas por lote/equipe cujo custo depende da quantidade da OP.', semBase && ' Há departamentos sem colaboradores cadastrados.'));
-  })())), /*#__PURE__*/React.createElement(Field, {
+    }, "Total: ", /*#__PURE__*/React.createElement("strong", null, minParaHHMM(totalMin)), " por peça.", variavel && ' Há etapas por lote/equipe cujo tempo depende da quantidade da OP.', " O custo de mão de obra é calculado pelo colaborador real apontado em cada produção, não aqui."));
+    })())), /*#__PURE__*/React.createElement(Field, {
     label: "Observações"
   }, /*#__PURE__*/React.createElement("textarea", {
     rows: "3",
@@ -6381,37 +6209,111 @@ function totalPecasPedido(p) {
 }
 
 // monta as etapas de uma OP a partir do produto
-function montarEtapasOP(produto, d) {
+/* ==========================================================
+   PROGRAMAÇÃO AUTOMÁTICA POR EQUIPAMENTO
+   ----------------------------------------------------------
+   As etapas não pertencem mais a um departamento: cada equipamento
+   (Equipamentos → "Etapas que pode executar") declara quais etapas
+   sabe fazer. Ao gerar a OP, cada etapa do produto é distribuída
+   para o equipamento capaz com menor carga no dia, sem passar de
+   LIMITE_CARGA_MIN (528 min = 8h48) por equipamento/dia. Se nenhum
+   equipamento capaz couber dentro da jornada normal em até 30 dias,
+   agenda no menos carregado e sinaliza necessidade de autorização
+   (fica pendente em aprovacoesCarga, tipo "equipamento").
+========================================================== */
+function proximoDiaISO(dataISO) {
+  const d = new Date(dataISO + 'T12:00:00');
+  d.setDate(d.getDate() + 1);
+  const p = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+function minutosOcupadosEquipamentoNoDia(equipamentoId, dataISO, ops) {
+  let total = 0;
+  (ops || []).forEach(op => {
+    (op.etapas || []).forEach(et => {
+      if (et.equipamentoId === equipamentoId && et.dataProgramada === dataISO) {
+        total += cargaEtapaMinutos(et, num(op.quantidade), num(op.quantidade));
+      }
+    });
+  });
+  return total;
+}
+function programarEtapaEmEquipamento(etapaProducaoId, minutosNecessarios, dataMinima, d) {
+  const capazes = (d.equipamentos || []).filter(q => (q.status || 'Operando') !== 'Baixado' && (q.etapaIds || []).includes(etapaProducaoId));
+  if (capazes.length === 0) {
+    return {
+      equipamentoId: '',
+      dataProgramada: dataMinima,
+      semEquipamento: true,
+      precisaAutorizacao: false
+    };
+  }
+  let data = dataMinima;
+  for (let tentativa = 0; tentativa < 30; tentativa++) {
+    const cargas = capazes.map(q => ({
+      q,
+      carga: minutosOcupadosEquipamentoNoDia(q.id, data, d.ops)
+    })).sort((a, b) => a.carga - b.carga);
+    if (cargas[0].carga + minutosNecessarios <= LIMITE_CARGA_MIN) {
+      return {
+        equipamentoId: cargas[0].q.id,
+        dataProgramada: data,
+        precisaAutorizacao: false
+      };
+    }
+    data = proximoDiaISO(data);
+  }
+  // não coube em 30 dias respeitando a jornada normal — agenda no menos
+  // carregado do dia mínimo original e pede autorização de carga extra
+  const cargas = capazes.map(q => ({
+    q,
+    carga: minutosOcupadosEquipamentoNoDia(q.id, dataMinima, d.ops)
+  })).sort((a, b) => a.carga - b.carga);
+  return {
+    equipamentoId: cargas[0].q.id,
+    dataProgramada: dataMinima,
+    precisaAutorizacao: true,
+    excedente: cargas[0].carga + minutosNecessarios - LIMITE_CARGA_MIN
+  };
+}
+function montarEtapasOP(produto, d, quantidade, dataInicioRef) {
   const doProduto = etapasDoProduto(produto);
-  const lista = doProduto.length ? doProduto.map(x => ({
-    def: d.etapasProducao.find(e => e.id === x.etapaId),
-    equipamentoId: x.equipamentoId
-  })).filter(x => x.def) : d.etapasProducao.map(def => ({
-    def,
-    equipamentoId: ''
-  }));
-  return lista.map(({
-    def,
-    equipamentoId
-  }) => ({
-    etapaProducaoId: def.id,
-    departamentoId: def.departamentoId || null,
-    nome: def.nome || '(etapa removida)',
-    modoTempo: def.modoTempo || 'peca',
-    tempoProducao: def.tempoProducao || 0,
-    unidadeTempo: def.unidadeTempo || 'seg',
-    tamanhoEquipe: def.tamanhoEquipe || '',
-    tamanhoLote: def.tamanhoLote || '',
-    equipamentoId: equipamentoId || '',
-    // já vem alocado do cadastro do produto
-    status: 'Não iniciada',
-    qtdRecebida: 0,
-    qtdConcluida: 0,
-    responsaveis: [],
-    dataInicio: '',
-    dataConclusao: '',
-    observacao: ''
-  }));
+  const lista = doProduto.length ? doProduto.map(x => d.etapasProducao.find(e => e.id === x.etapaId)).filter(Boolean) : d.etapasProducao.slice();
+  let dataCorrente = dataInicioRef || todayISO();
+  const precisamAutorizacao = [];
+  const etapas = lista.map(def => {
+    const minutosNecessarios = cargaEtapaMinutos(def, num(quantidade), num(quantidade));
+    const alocacao = programarEtapaEmEquipamento(def.id, minutosNecessarios, dataCorrente, d);
+    dataCorrente = alocacao.dataProgramada; // a próxima etapa não começa antes desta
+    if (alocacao.precisaAutorizacao) precisamAutorizacao.push({
+      etapaNome: def.nome,
+      ...alocacao
+    });
+    return {
+      etapaProducaoId: def.id,
+      nome: def.nome || '(etapa removida)',
+      modoTempo: def.modoTempo || 'peca',
+      tempoProducao: def.tempoProducao || 0,
+      unidadeTempo: def.unidadeTempo || 'seg',
+      tamanhoEquipe: def.tamanhoEquipe || '',
+      tamanhoLote: def.tamanhoLote || '',
+      equipamentoId: alocacao.equipamentoId,
+      dataProgramada: alocacao.dataProgramada,
+      semEquipamento: !!alocacao.semEquipamento,
+      precisaAutorizacao: !!alocacao.precisaAutorizacao,
+      status: 'Não iniciada',
+      qtdRecebida: 0,
+      qtdConcluida: 0,
+      responsaveis: [],
+      dataInicio: '',
+      dataConclusao: '',
+      observacao: ''
+    };
+  });
+  return {
+    etapas,
+    precisamAutorizacao
+  };
 }
 
 /* Gera uma OP por produto do pedido.
@@ -6422,13 +6324,19 @@ function gerarOPsDoPedido(pedido, d) {
   // trava de duplicidade: um item só pode ter uma OP
   const jaExistentes = existentes.length;
   let criadas = 0;
+  const pendentes = [];
   itens.forEach((item, i) => {
     const produto = d.produtos.find(p => p.id === item.produtoId);
     if (!produto) return;
     if (existentes.some(o => o.itemId === item.id)) return; // já tem OP para este item
     const sufixo = itens.length > 1 ? sufixoPorIndice(jaExistentes + criadas) : '';
+    const opId = uid();
+    const {
+      etapas,
+      precisamAutorizacao
+    } = montarEtapasOP(produto, d, item.quantidade, todayISO());
     d.ops.push({
-      id: uid(),
+      id: opId,
       numero: pedido.numero,
       sufixo,
       pedidoId: pedido.id,
@@ -6437,10 +6345,25 @@ function gerarOPsDoPedido(pedido, d) {
       quantidade: item.quantidade,
       entrega: pedido.prazoEntrega,
       observacaoItem: item.observacao || '',
-      etapas: montarEtapasOP(produto, d),
+      etapas,
       anexos: (item.anexos || []).map(a => ({
         ...a
       })) // arquivos do produto no pedido seguem para a OP
+    });
+    precisamAutorizacao.forEach(p => {
+      d.aprovacoesCarga = [...(d.aprovacoesCarga || []), {
+        id: uid(),
+        tipo: 'equipamento',
+        data: p.dataProgramada,
+        opId,
+        equipamentoId: p.equipamentoId,
+        etapaNome: p.etapaNome,
+        excedente: p.excedente,
+        aprovador: '',
+        observacao: 'Gerado automaticamente ao programar a OP — pendente de autorização.',
+        criadoEm: agoraISO()
+      }];
+      pendentes.push(`${p.etapaNome} em ${fmtDate(p.dataProgramada)} (excede ${minParaHHMM(p.excedente)} da jornada)`);
     });
     criadas++;
   });
@@ -6448,7 +6371,10 @@ function gerarOPsDoPedido(pedido, d) {
     ...p,
     status: 'Em produção'
   } : p);
-  return criadas;
+  return {
+    criadas,
+    pendentes
+  };
 }
 function Pedidos({
   db,
@@ -6500,10 +6426,15 @@ function Pedidos({
       alert('Todos os produtos deste pedido já têm OP. Use a aba Produção para visualizar ou editar.');
       return;
     }
+    let pendentes = [];
     update(d => {
-      gerarOPsDoPedido(pedido, d);
+      const r = gerarOPsDoPedido(pedido, d);
+      pendentes = r.pendentes || [];
       return d;
     });
+    if (pendentes.length > 0) {
+      alert(`OP(s) gerada(s). ${pendentes.length} etapa(s) não coube(ram) dentro da jornada normal do equipamento e ficaram pendentes de autorização:\n\n${pendentes.join('\n')}\n\nRevise em Produção → Autorizações de carga.`);
+    }
     if (setTab) setTab('producao');
   }
   return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
@@ -6606,7 +6537,7 @@ function somaDias(dataISO, n) {
 // janelas de trabalho do dia, em minutos desde 00:00
 // máquinas disponíveis para uma etapa: as do departamento dela
 function maquinasDaEtapa(et, db) {
-  return (db.equipamentos || []).filter(q => (q.status || 'Operando') !== 'Baixado' && (!et.departamentoId || q.departamentoId === et.departamentoId));
+  return (db.equipamentos || []).filter(q => (q.status || 'Operando') !== 'Baixado' && (q.etapaIds || []).includes(et.etapaProducaoId));
 }
 
 /* Cronograma alimentado pelos lançamentos de produção.
@@ -7678,7 +7609,11 @@ function Cronograma({
   }, "Cronograma / PCP — programação e realizado"), /*#__PURE__*/React.createElement("button", {
     className: "btn accent sm",
     onClick: () => window.print()
-  }, "🖨️ Imprimir / PDF")), /*#__PURE__*/React.createElement(PainelSobrecarga, {
+  }, "🖨️ Imprimir / PDF")), /*#__PURE__*/React.createElement(PainelSobrecargaEquipamento, {
+    db: db,
+    update: update,
+    usuario: usuario
+  }), /*#__PURE__*/React.createElement(PainelSobrecarga, {
     segs: filtrados,
     db: db,
     update: update,
@@ -7897,6 +7832,58 @@ function Cronograma({
     update: update,
     onClose: () => setDetalhe(null)
   }));
+}
+
+/* Painel equivalente ao de sobrecarga de colaborador, mas para equipamento:
+   aparece quando a distribuição automática das etapas (feita ao gerar a OP)
+   não conseguiu encaixar uma etapa dentro da jornada normal do equipamento
+   no dia programado. */
+function PainelSobrecargaEquipamento({
+  db,
+  update,
+  usuario
+}) {
+  const pendentes = (db.aprovacoesCarga || []).filter(a => a.tipo === 'equipamento' && !a.aprovador);
+  if (pendentes.length === 0) return null;
+  function autorizar(p) {
+    const quem = usuario && usuario.nome || '';
+    if (!podeExecutar(usuario, 'cadastros')) {
+      alert('Somente gestores e administradores podem autorizar carga acima da jornada.');
+      return;
+    }
+    const maq = (db.equipamentos || []).find(q => q.id === p.equipamentoId);
+    if (!confirm(`Autorizar ${maq ? maq.codigo + ' · ' + maq.nome : 'este equipamento'} a produzir além da jornada normal em ${fmtDate(p.data)}?\n\nExcedente: ${minParaHHMM(p.excedente)}.`)) return;
+    update(d => {
+      d.aprovacoesCarga = (d.aprovacoesCarga || []).map(a => a.id === p.id ? {
+        ...a,
+        aprovador: quem,
+        autorizadoEm: agoraISO()
+      } : a);
+      registrarLog(d, usuario, 'Autorizou carga acima da jornada (equipamento)', `${maq ? maq.codigo : ''} · ${fmtDate(p.data)} · excedente ${minParaHHMM(p.excedente)}`);
+      return d;
+    });
+  }
+  return <div className="panel" style={{ borderColor: 'var(--bad)', background: 'var(--bad-bg)' }}>
+    <h3 style={{ color: 'var(--bad)' }}>⚠ Etapas de equipamento além da jornada</h3>
+    <div className="small" style={{ marginBottom: 10 }}>
+      Ao gerar a OP, {pendentes.length} etapa(s) não coube(ram) dentro dos {minParaHHMM(LIMITE_CARGA_MIN)} normais do equipamento no dia programado — precisam de autorização de um superior.
+    </div>
+    <table>
+      <thead><tr><th>Data</th><th>Equipamento</th><th>Etapa</th><th className="num">Excedente</th><th></th></tr></thead>
+      <tbody>
+        {pendentes.map(p => {
+          const maq = (db.equipamentos || []).find(q => q.id === p.equipamentoId);
+          return <tr key={p.id}>
+            <td className="small">{fmtDate(p.data)}</td>
+            <td className="small">{maq ? `${maq.codigo} · ${maq.nome}` : '—'}</td>
+            <td className="small">{p.etapaNome}</td>
+            <td className="num small">{minParaHHMM(p.excedente)}</td>
+            <td><button className="btn accent sm" onClick={() => autorizar(p)}>Autorizar</button></td>
+          </tr>;
+        })}
+      </tbody>
+    </table>
+  </div>;
 }
 
 /* ==========================================================
@@ -9847,11 +9834,11 @@ function criarDadosTesteCamiseta(d) {
     observacoes: 'Com bolso frontal e viés contrastante',
     etapas: [eRisco, eEnfesto, eCorte, eAmarracao, eRevelacao, eMistura, eAmostra, eProdSilk, eSeparacao, eChulearBolso, eDobraBolso, eFixarBolso, eViesBarra, eViesPescoco, ePresponto, eRevisao, eEmbalar].map((et, i) => {
       // já deixa uma máquina do tipo alocada, alternando entre as iguais
-      const doDep = d.equipamentos.filter(q => q.departamentoId === et.departamentoId);
+      const capazes = d.equipamentos.filter(q => (q.etapaIds || []).includes(et.id));
       return {
         id: uid(),
         etapaId: et.id,
-        equipamentoId: doDep.length ? doDep[i % doDep.length].id : ''
+        equipamentoId: capazes.length ? capazes[i % capazes.length].id : ''
       };
     }),
     fichaTecnica: [{
@@ -9971,11 +9958,10 @@ function criarDadosTesteCamiseta(d) {
   const progresso = [P('Concluída', 500, 500, ['Bruno Lima'], iso(d1), iso(d1), 'Risco conferido.'), P('Concluída', 500, 500, ['Bruno Lima'], iso(d1), iso(d1), 'Enfesto sem perdas.'), P('Concluída', 500, 500, ['Ana Souza'], iso(d1), iso(d1), ''), P('Concluída', 500, 500, ['Ana Souza'], iso(d1), iso(d1), ''), P('Concluída', 500, 500, ['Carla Dias'], iso(d2), iso(d2), ''), P('Concluída', 500, 500, ['Diego Alves'], iso(d2), iso(d2), ''), P('Concluída', 500, 500, ['Carla Dias'], iso(d2), iso(d2), 'Amostra aprovada pelo cliente.'), P('Concluída', 500, 498, ['Carla Dias', 'Diego Alves'], iso(d2), iso(d2), '2 peças com falha de gravação.'), P('Concluída', 498, 498, ['Eliane Costa'], iso(d2), iso(d2), ''), P('Em andamento', 498, 400, ['Gabriela Nunes'], iso(d3), '', ''), P('Em andamento', 498, 380, ['Helena Prado'], iso(d3), '', ''), P('Em andamento', 498, 310, ['Fábio Ramos'], iso(d3), '', 'Em produção.'), P('Não iniciada', 0, 0, ['Gabriela Nunes'], '', '', ''), P('Não iniciada', 0, 0, ['Helena Prado'], '', '', ''), P('Não iniciada', 0, 0, ['Fábio Ramos'], '', '', ''), P('Não iniciada', 0, 0, ['Igor Martins'], '', '', ''), P('Não iniciada', 0, 0, ['Julia Freitas'], '', '', '')];
   const etapasOP = defs.map((def, i) => {
     // aloca a primeira máquina disponível do tipo, distribuindo entre as iguais
-    const doDep = d.equipamentos.filter(eq => eq.departamentoId === def.departamentoId);
-    const maquina = doDep.length ? doDep[i % doDep.length] : null;
+    const capazes = d.equipamentos.filter(eq => (eq.etapaIds || []).includes(def.id));
+    const maquina = capazes.length ? capazes[i % capazes.length] : null;
     return {
       etapaProducaoId: def.id,
-      departamentoId: def.departamentoId,
       nome: def.nome,
       modoTempo: def.modoTempo,
       tempoProducao: def.tempoProducao,
@@ -10938,10 +10924,15 @@ function PedidosParaProduzir({
       return;
     }
     if (semOP.length > 1 && !confirm(`Serão geradas ${semOP.length} OPs (sufixos /A, /B, /C…). Continuar?`)) return;
+    let pendentes = [];
     update(d => {
-      gerarOPsDoPedido(pedido, d);
+      const r = gerarOPsDoPedido(pedido, d);
+      pendentes = r.pendentes || [];
       return d;
     });
+    if (pendentes.length > 0) {
+      alert(`OP(s) gerada(s). ${pendentes.length} etapa(s) não coube(ram) dentro da jornada normal do equipamento e ficaram pendentes de autorização:\n\n${pendentes.join('\n')}\n\nRevise em Produção → Autorizações de carga.`);
+    }
     irParaOPs();
   }
   return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
