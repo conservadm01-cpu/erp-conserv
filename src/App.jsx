@@ -203,13 +203,44 @@ const emptyDb = () => ({
   gruposProduto: [],
   subgruposProduto: [],
   orcamentos: [],
+  solicitacoesArte: [],
   seq: {
     pedido: 100,
     op: 100,
     compra: 100,
-    orcamento: 100
+    orcamento: 100,
+    arte: 1
   }
 });
+
+/* Comprime/redimensiona uma imagem antes de guardar como data URL —
+   evita que fotos de celular (vários MB) inflem os registros. */
+function comprimirImagem(file, maxDim = 1400, qualidade = 0.82) {
+  return new Promise((resolve, reject) => {
+    const leitor = new FileReader();
+    leitor.onerror = () => reject(new Error('Falha ao ler a imagem.'));
+    leitor.onload = () => {
+      const img = new Image();
+      img.onerror = () => reject(new Error('Falha ao carregar a imagem.'));
+      img.onload = () => {
+        let { width, height } = img;
+        if (width > maxDim || height > maxDim) {
+          const escala = maxDim / Math.max(width, height);
+          width = Math.round(width * escala);
+          height = Math.round(height * escala);
+        }
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0, width, height);
+        resolve(canvas.toDataURL(file.type === 'image/png' ? 'image/png' : 'image/jpeg', qualidade));
+      };
+      img.src = leitor.result;
+    };
+    leitor.readAsDataURL(file);
+  });
+}
 
 /* --- geração de código sequencial por categoria/grupo --- */
 function proximoSequencial(lista, prefixo) {
@@ -235,6 +266,9 @@ const ABAS_SISTEMA = [{
 }, {
   id: 'producao',
   label: 'Produção'
+}, {
+  id: 'arte',
+  label: 'Criação'
 }, {
   id: 'relatorios',
   label: 'Relatórios'
@@ -267,7 +301,7 @@ const ACOES_SISTEMA = [{
 /* Permissões padrão de cada perfil. Podem ser alteradas em Cadastros → Perfis de acesso. */
 const PERM_PADRAO = {
   'Administrador': {
-    abas: ['painel', 'pessoas', 'estrutura', 'vendas', 'producao', 'relatorios', 'chat'],
+    abas: ['painel', 'pessoas', 'estrutura', 'vendas', 'producao', 'arte', 'relatorios', 'chat'],
     acoes: {
       cadastros: true,
       producao: true,
@@ -277,7 +311,7 @@ const PERM_PADRAO = {
     }
   },
   'Gestor': {
-    abas: ['painel', 'pessoas', 'estrutura', 'vendas', 'producao', 'relatorios', 'chat'],
+    abas: ['painel', 'pessoas', 'estrutura', 'vendas', 'producao', 'arte', 'relatorios', 'chat'],
     acoes: {
       cadastros: true,
       producao: true,
@@ -532,7 +566,7 @@ const LIMITE_ANEXO_BYTES = 400 * 1024;
    mesmo jeito que o resto do sistema já faz. Isso elimina o teto
    de tamanho de um blob único: cada registro é independente.
 ========================================================== */
-const COLECOES_ARRAY = ['materiais', 'produtos', 'pedidos', 'ops', 'compras', 'movimentacoes', 'departamentos', 'etapasProducao', 'aprovacoesCarga', 'colaboradores', 'clientes', 'fornecedores', 'equipamentos', 'logs', 'mensagens', 'apontamentos', 'categoriasMaterial', 'categoriasProduto', 'gruposProduto', 'subgruposProduto', 'orcamentos'];
+const COLECOES_ARRAY = ['materiais', 'produtos', 'pedidos', 'ops', 'compras', 'movimentacoes', 'departamentos', 'etapasProducao', 'aprovacoesCarga', 'colaboradores', 'clientes', 'fornecedores', 'equipamentos', 'logs', 'mensagens', 'apontamentos', 'categoriasMaterial', 'categoriasProduto', 'gruposProduto', 'subgruposProduto', 'orcamentos', 'solicitacoesArte'];
 const CAMPOS_UNICOS = ['permissoes', 'seq'];
 const PREFIXO = 'confeccao-erp';
 
@@ -753,12 +787,16 @@ function App() {
     n: '5',
     label: 'Produção'
   }, {
-    id: 'relatorios',
+    id: 'arte',
     n: '6',
+    label: 'Criação'
+  }, {
+    id: 'relatorios',
+    n: '7',
     label: 'Relatórios'
   }, {
     id: 'chat',
-    n: '7',
+    n: '8',
     label: 'Chat interno'
   }];
   const NAV = NAV_TODOS.filter(n => perm.abas.includes(n.id));
@@ -872,6 +910,10 @@ function App() {
     update: update,
     setTab: setTab
   }), tabAtual === 'producao' && /*#__PURE__*/React.createElement(GrupoProducao, {
+    db: db,
+    update: update,
+    usuario: usuarioAtual
+  }), tabAtual === 'arte' && /*#__PURE__*/React.createElement(Criacao, {
     db: db,
     update: update,
     usuario: usuarioAtual
@@ -11427,6 +11469,420 @@ function Painel({
       onClick: () => setTab('producao')
     }, "Ver OP")));
   })))));
+}
+
+/* ==========================================================
+   MÓDULO 6 — CRIAÇÃO (Solicitação de Arte)
+========================================================== */
+const TIPOS_PERSONALIZACAO = ["Silk", "Bordado", "Sublimação", "Outro"];
+const LOCAIS_PERSONALIZACAO = ["Frente", "Costas", "Manga", "Bolso", "Lateral", "Centralizado", "Canto superior direito", "Canto superior esquerdo", "Outro"];
+
+function resumoItensArte(itens) {
+  return (itens || []).map(it => `${it.produtoNomeSnap} (${it.quantidade})`).join(', ') || '—';
+}
+
+function GaleriaAnexos({ itens, onRemover }) {
+  if (!itens || itens.length === 0) return null;
+  return /*#__PURE__*/React.createElement("div", {
+    style: { display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 8 }
+  }, itens.map(a => /*#__PURE__*/React.createElement("div", {
+    key: a.id,
+    style: { border: '1px solid var(--line)', borderRadius: 6, padding: 4, width: 74, textAlign: 'center' }
+  }, a.tipo === 'imagem' ? /*#__PURE__*/React.createElement("img", {
+    src: a.url,
+    alt: a.nome,
+    style: { width: 64, height: 64, objectFit: 'cover', borderRadius: 4 }
+  }) : /*#__PURE__*/React.createElement("div", {
+    style: { width: 64, height: 64, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 22 }
+  }, "📄"), /*#__PURE__*/React.createElement("div", {
+    className: "small muted",
+    style: { fontSize: 9, wordBreak: 'break-word', maxHeight: 24, overflow: 'hidden' }
+  }, a.nome), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "btn danger sm",
+    style: { marginTop: 4, padding: '2px 6px', fontSize: 10 },
+    onClick: () => onRemover(a.id)
+  }, "Remover"))));
+}
+
+function SolicitacaoArteModal({ sol, db, onClose, onSave }) {
+  const ehEdicao = !!sol.id;
+  const [f, setF] = useState({
+    ehAlteracao: false,
+    clienteId: '',
+    itens: [],
+    tamanhoProduto: '',
+    corProduto: '',
+    tecidoMaterial: '',
+    tipoPersonalizacao: 'Silk',
+    tipoPersonalizacaoOutro: '',
+    localPersonalizacao: 'Frente',
+    localPersonalizacaoOutro: '',
+    tamanhoEstampa: '',
+    corEstampa: '',
+    fotosProduto: [],
+    arquivosLogo: [],
+    textoArte: '',
+    arquivosReferencia: [],
+    observacoesCliente: '',
+    descricaoAlteracao: '',
+    ...sol
+  });
+  const set = (k, v) => setF(prev => ({ ...prev, [k]: v }));
+
+  const [produtoSel, setProdutoSel] = useState('');
+  const [qtdSel, setQtdSel] = useState(1);
+  const produtosDisponiveis = (db.produtos || []).filter(p => !f.itens.some(it => it.produtoId === p.id));
+
+  function addItem() {
+    if (!produtoSel) return;
+    const p = db.produtos.find(x => x.id === produtoSel);
+    if (!p) return;
+    set('itens', [...f.itens, { id: uid(), produtoId: p.id, produtoNomeSnap: p.nome, quantidade: num(qtdSel) || 1 }]);
+    setProdutoSel('');
+    setQtdSel(1);
+  }
+  function rmItem(id) {
+    set('itens', f.itens.filter(i => i.id !== id));
+  }
+
+  async function onArquivo(campo, e) {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = '';
+    if (!file) return;
+    const ehImagem = file.type.startsWith('image/');
+    try {
+      let url;
+      if (ehImagem) {
+        url = await comprimirImagem(file);
+      } else {
+        if (file.size > LIMITE_ANEXO_BYTES) {
+          alert('Arquivo muito grande (máx. 400 KB). Anexe um arquivo menor.');
+          return;
+        }
+        url = await new Promise((res, rej) => {
+          const r = new FileReader();
+          r.onload = () => res(r.result);
+          r.onerror = () => rej(new Error('Falha ao ler o arquivo.'));
+          r.readAsDataURL(file);
+        });
+      }
+      set(campo, [...(f[campo] || []), { id: uid(), nome: file.name, tipo: ehImagem ? 'imagem' : 'documento', url }]);
+    } catch (err) {
+      alert('Não foi possível anexar o arquivo: ' + (err && err.message ? err.message : 'erro desconhecido'));
+    }
+  }
+  function rmArquivo(campo, id) {
+    set(campo, (f[campo] || []).filter(a => a.id !== id));
+  }
+
+  function salvar() {
+    if (!f.clienteId) {
+      alert('Selecione o cliente.');
+      return;
+    }
+    if (f.itens.length === 0) {
+      alert('Adicione ao menos um produto.');
+      return;
+    }
+    if (f.ehAlteracao && !f.descricaoAlteracao.trim()) {
+      alert('Descreva o que precisa ser alterado.');
+      return;
+    }
+    const cliente = db.clientes.find(c => c.id === f.clienteId);
+    onSave({ ...f, clienteNomeSnap: cliente ? cliente.nome : '' });
+  }
+
+  return /*#__PURE__*/React.createElement(Modal, {
+    title: ehEdicao ? 'Editar solicitação de arte' : 'Nova solicitação de arte',
+    onClose: onClose,
+    wide: true
+  },
+    /*#__PURE__*/React.createElement("div", { className: "row-actions", style: { marginBottom: 10 } },
+      /*#__PURE__*/React.createElement("button", {
+        type: "button",
+        className: 'btn sm ' + (!f.ehAlteracao ? 'accent' : 'ghost'),
+        onClick: () => set('ehAlteracao', false)
+      }, "Arte nova"),
+      /*#__PURE__*/React.createElement("button", {
+        type: "button",
+        className: 'btn sm ' + (f.ehAlteracao ? 'accent' : 'ghost'),
+        onClick: () => set('ehAlteracao', true)
+      }, "Alteração de arte")
+    ),
+    /*#__PURE__*/React.createElement("div", { className: "grid2" },
+      /*#__PURE__*/React.createElement(Field, { label: "Cliente" },
+        /*#__PURE__*/React.createElement("select", {
+          value: f.clienteId,
+          onChange: e => set('clienteId', e.target.value)
+        },
+          /*#__PURE__*/React.createElement("option", { value: "" }, "Selecione…"),
+          (db.clientes || []).map(c => /*#__PURE__*/React.createElement("option", { key: c.id, value: c.id }, c.nome))
+        )
+      )
+    ),
+    /*#__PURE__*/React.createElement(Field, { label: "Produtos e quantidades" },
+      /*#__PURE__*/React.createElement("div", { className: "row-actions", style: { flexWrap: 'wrap', alignItems: 'center' } },
+        /*#__PURE__*/React.createElement("select", {
+          value: produtoSel,
+          onChange: e => setProdutoSel(e.target.value),
+          style: { minWidth: 200 }
+        },
+          /*#__PURE__*/React.createElement("option", { value: "" }, "Selecione um produto…"),
+          produtosDisponiveis.map(p => /*#__PURE__*/React.createElement("option", { key: p.id, value: p.id }, p.nome))
+        ),
+        /*#__PURE__*/React.createElement("input", {
+          type: "number",
+          min: "1",
+          value: qtdSel,
+          onChange: e => setQtdSel(e.target.value),
+          style: { width: 80 }
+        }),
+        /*#__PURE__*/React.createElement("button", { type: "button", className: "btn ghost sm", onClick: addItem }, "+ Adicionar")
+      ),
+      f.itens.length > 0 && /*#__PURE__*/React.createElement("div", { style: { display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8 } },
+        f.itens.map(it => /*#__PURE__*/React.createElement("span", {
+          key: it.id,
+          className: "badge idle",
+          style: { cursor: 'default' }
+        }, `${it.produtoNomeSnap} (${it.quantidade})`, /*#__PURE__*/React.createElement("button", {
+          type: "button",
+          onClick: () => rmItem(it.id),
+          style: { marginLeft: 6, border: 'none', background: 'none', cursor: 'pointer', color: 'inherit' }
+        }, "✕")))
+      )
+    ),
+    f.ehAlteracao ? /*#__PURE__*/React.createElement(Field, { label: "O que precisa ser alterado (seja específico)" },
+      /*#__PURE__*/React.createElement("textarea", {
+        rows: 4,
+        value: f.descricaoAlteracao,
+        onChange: e => set('descricaoAlteracao', e.target.value),
+        placeholder: 'Ex: "Alterar a logo do peito de 10 cm para 8 cm e trocar a cor branca por dourada." — evite descrições vagas como "cliente pediu para mudar".'
+      })
+    ) : /*#__PURE__*/React.createElement(React.Fragment, null,
+      /*#__PURE__*/React.createElement("div", { className: "grid3" },
+        /*#__PURE__*/React.createElement(Field, { label: "Tamanho/medida do produto" },
+          /*#__PURE__*/React.createElement("input", { value: f.tamanhoProduto, onChange: e => set('tamanhoProduto', e.target.value) })),
+        /*#__PURE__*/React.createElement(Field, { label: "Cor do produto" },
+          /*#__PURE__*/React.createElement("input", { value: f.corProduto, onChange: e => set('corProduto', e.target.value) })),
+        /*#__PURE__*/React.createElement(Field, { label: "Tecido/material" },
+          /*#__PURE__*/React.createElement("input", { value: f.tecidoMaterial, onChange: e => set('tecidoMaterial', e.target.value) }))
+      ),
+      /*#__PURE__*/React.createElement("div", { className: "grid2" },
+        /*#__PURE__*/React.createElement(Field, { label: "Tipo de personalização" },
+          /*#__PURE__*/React.createElement("select", {
+            value: f.tipoPersonalizacao,
+            onChange: e => set('tipoPersonalizacao', e.target.value)
+          }, TIPOS_PERSONALIZACAO.map(t => /*#__PURE__*/React.createElement("option", { key: t, value: t }, t))),
+          f.tipoPersonalizacao === 'Outro' && /*#__PURE__*/React.createElement("input", {
+            style: { marginTop: 6 },
+            value: f.tipoPersonalizacaoOutro,
+            onChange: e => set('tipoPersonalizacaoOutro', e.target.value),
+            placeholder: "Especifique"
+          })
+        ),
+        /*#__PURE__*/React.createElement(Field, { label: "Local da personalização" },
+          /*#__PURE__*/React.createElement("select", {
+            value: f.localPersonalizacao,
+            onChange: e => set('localPersonalizacao', e.target.value)
+          }, LOCAIS_PERSONALIZACAO.map(t => /*#__PURE__*/React.createElement("option", { key: t, value: t }, t))),
+          f.localPersonalizacao === 'Outro' && /*#__PURE__*/React.createElement("input", {
+            style: { marginTop: 6 },
+            value: f.localPersonalizacaoOutro,
+            onChange: e => set('localPersonalizacaoOutro', e.target.value),
+            placeholder: "Especifique"
+          })
+        )
+      ),
+      /*#__PURE__*/React.createElement("div", { className: "grid2" },
+        /*#__PURE__*/React.createElement(Field, { label: "Tamanho da estampa/logo" },
+          /*#__PURE__*/React.createElement("input", { value: f.tamanhoEstampa, onChange: e => set('tamanhoEstampa', e.target.value), placeholder: "Ex: 10cm x 8cm" })),
+        /*#__PURE__*/React.createElement(Field, { label: "Cor da estampa" },
+          /*#__PURE__*/React.createElement("input", { value: f.corEstampa, onChange: e => set('corEstampa', e.target.value) }))
+      ),
+      /*#__PURE__*/React.createElement(Field, { label: "Foto do produto" },
+        /*#__PURE__*/React.createElement("input", { type: "file", accept: "image/*", onChange: e => onArquivo('fotosProduto', e) }),
+        /*#__PURE__*/React.createElement(GaleriaAnexos, { itens: f.fotosProduto, onRemover: id => rmArquivo('fotosProduto', id) })
+      ),
+      /*#__PURE__*/React.createElement(Field, { label: "Logo/arquivo do cliente" },
+        /*#__PURE__*/React.createElement("input", { type: "file", onChange: e => onArquivo('arquivosLogo', e) }),
+        /*#__PURE__*/React.createElement(GaleriaAnexos, { itens: f.arquivosLogo, onRemover: id => rmArquivo('arquivosLogo', id) })
+      ),
+      /*#__PURE__*/React.createElement(Field, { label: "Texto que deve entrar na arte" },
+        /*#__PURE__*/React.createElement("textarea", { rows: 2, value: f.textoArte, onChange: e => set('textoArte', e.target.value), placeholder: "Escrever exatamente como deverá aparecer." })
+      ),
+      /*#__PURE__*/React.createElement(Field, { label: "Referência (foto, modelo ou exemplo enviado pelo cliente)" },
+        /*#__PURE__*/React.createElement("input", { type: "file", onChange: e => onArquivo('arquivosReferencia', e) }),
+        /*#__PURE__*/React.createElement(GaleriaAnexos, { itens: f.arquivosReferencia, onRemover: id => rmArquivo('arquivosReferencia', id) })
+      ),
+      /*#__PURE__*/React.createElement(Field, { label: "Observações do cliente" },
+        /*#__PURE__*/React.createElement("textarea", { rows: 2, value: f.observacoesCliente, onChange: e => set('observacoesCliente', e.target.value) })
+      )
+    ),
+    /*#__PURE__*/React.createElement("div", { className: "modal-actions" },
+      /*#__PURE__*/React.createElement("button", { className: "btn ghost", onClick: onClose }, "Cancelar"),
+      /*#__PURE__*/React.createElement("button", { className: "btn accent", onClick: salvar }, "Salvar solicitação")
+    )
+  );
+}
+
+function ImprimirSolicitacaoArte({ sol, onClose }) {
+  const linhas = [
+    { k: 'Cliente', v: sol.clienteNomeSnap || '—' },
+    { k: 'Produto(s)', v: resumoItensArte(sol.itens) }
+  ];
+  if (sol.ehAlteracao) {
+    linhas.push({ k: 'O que precisa ser alterado', v: sol.descricaoAlteracao || '—' });
+  } else {
+    linhas.push(
+      { k: 'Tamanho/medida do produto', v: sol.tamanhoProduto || '—' },
+      { k: 'Cor do produto', v: sol.corProduto || '—' },
+      { k: 'Tecido/material', v: sol.tecidoMaterial || '—' },
+      { k: 'Tipo de personalização', v: (sol.tipoPersonalizacao === 'Outro' ? sol.tipoPersonalizacaoOutro : sol.tipoPersonalizacao) || '—' },
+      { k: 'Local da personalização', v: (sol.localPersonalizacao === 'Outro' ? sol.localPersonalizacaoOutro : sol.localPersonalizacao) || '—' },
+      { k: 'Tamanho da estampa/logo', v: sol.tamanhoEstampa || '—' },
+      { k: 'Cor da estampa', v: sol.corEstampa || '—' },
+      { k: 'Texto que deve entrar na arte', v: sol.textoArte || '—' }
+    );
+    if ((sol.observacoesCliente || '').trim()) linhas.push({ k: 'Observações do cliente', v: sol.observacoesCliente });
+  }
+  const anexos = [...(sol.fotosProduto || []), ...(sol.arquivosLogo || []), ...(sol.arquivosReferencia || [])];
+  return /*#__PURE__*/React.createElement(Modal, {
+    title: `${sol.ehAlteracao ? 'Alteração' : 'Solicitação'} de arte #${String(sol.numero).padStart(3, '0')}`,
+    onClose: onClose,
+    wide: true
+  },
+    /*#__PURE__*/React.createElement("div", { style: { marginBottom: 12 } },
+      /*#__PURE__*/React.createElement("button", { className: "btn accent sm", onClick: () => window.print() }, "🖨️ Imprimir / salvar como PDF")
+    ),
+    /*#__PURE__*/React.createElement("div", { className: "report-doc" },
+      /*#__PURE__*/React.createElement("h2", null, sol.ehAlteracao ? 'Alteração de Arte' : 'Solicitação de Arte'),
+      /*#__PURE__*/React.createElement("div", { className: "rep-sub" }, `Confecção ERP · Pedido #${String(sol.numero).padStart(3, '0')} · Emitido em ${fmtDate(todayISO())}`),
+      /*#__PURE__*/React.createElement("div", { className: "rep-grid" },
+        linhas.map(l => /*#__PURE__*/React.createElement("div", { className: "rep-box", key: l.k },
+          /*#__PURE__*/React.createElement("div", { className: "k" }, l.k),
+          /*#__PURE__*/React.createElement("div", { className: "v" }, l.v)
+        ))
+      ),
+      anexos.length > 0 && /*#__PURE__*/React.createElement("div", { style: { marginTop: 16 } },
+        /*#__PURE__*/React.createElement("div", { className: "rep-sub", style: { marginBottom: 8 } }, "Anexos"),
+        /*#__PURE__*/React.createElement("div", { style: { display: 'flex', flexWrap: 'wrap', gap: 10 } },
+          anexos.map(a => a.tipo === 'imagem' ? /*#__PURE__*/React.createElement("img", {
+            key: a.id,
+            src: a.url,
+            alt: a.nome,
+            style: { width: 160, height: 160, objectFit: 'contain', border: '1px solid var(--line)', borderRadius: 6, background: '#fff' }
+          }) : /*#__PURE__*/React.createElement("div", {
+            key: a.id,
+            className: "small",
+            style: { border: '1px solid var(--line)', borderRadius: 6, padding: 8 }
+          }, "📄 ", a.nome))
+        )
+      )
+    )
+  );
+}
+
+function Criacao({ db, update, usuario }) {
+  const [modal, setModal] = useState(null);
+  const [imprimir, setImprimir] = useState(null);
+  const [q, setQ] = useState('');
+  const [mostrarConcluidas, setMostrarConcluidas] = useState(false);
+
+  const lista = (db.solicitacoesArte || [])
+    .filter(s => mostrarConcluidas ? s.status === 'concluida' : s.status !== 'concluida')
+    .filter(s => {
+      const t = q.toLowerCase();
+      return !t || (s.clienteNomeSnap || '').toLowerCase().includes(t) || resumoItensArte(s.itens).toLowerCase().includes(t);
+    })
+    .slice().reverse();
+
+  function salvar(s) {
+    update(d => {
+      d.solicitacoesArte = d.solicitacoesArte || [];
+      if (s.id) {
+        d.solicitacoesArte = d.solicitacoesArte.map(x => x.id === s.id ? s : x);
+      } else {
+        const numero = (d.seq && d.seq.arte) || 1;
+        d.seq = { ...(d.seq || {}), arte: numero + 1 };
+        d.solicitacoesArte.push({ ...s, id: uid(), numero, status: 'pendente', criadaEm: agoraISO() });
+      }
+      registrarLog(d, usuario, s.id ? 'Editou solicitação de arte' : 'Criou solicitação de arte', s.clienteNomeSnap || '');
+      return d;
+    });
+    setModal(null);
+  }
+  function alternarStatus(s) {
+    update(d => {
+      d.solicitacoesArte = (d.solicitacoesArte || []).map(x => x.id === s.id ? {
+        ...x,
+        status: x.status === 'concluida' ? 'pendente' : 'concluida',
+        concluidaEm: x.status === 'concluida' ? null : agoraISO()
+      } : x);
+      return d;
+    });
+  }
+  function excluir(id) {
+    if (!confirm('Excluir esta solicitação de arte?')) return;
+    update(d => {
+      d.solicitacoesArte = (d.solicitacoesArte || []).filter(x => x.id !== id);
+      return d;
+    });
+  }
+
+  return /*#__PURE__*/React.createElement("div", null,
+    /*#__PURE__*/React.createElement("div", { className: "page-head" },
+      /*#__PURE__*/React.createElement("div", null,
+        /*#__PURE__*/React.createElement("div", { className: "eyebrow" }, "Módulo 6"),
+        /*#__PURE__*/React.createElement("h2", null, "Criação — Solicitação de Arte")
+      ),
+      /*#__PURE__*/React.createElement("button", { className: "btn accent", onClick: () => setModal({}) }, "+ Nova solicitação")
+    ),
+    /*#__PURE__*/React.createElement("div", { className: "searchbar" },
+      /*#__PURE__*/React.createElement("input", { placeholder: "Buscar por cliente ou produto…", value: q, onChange: e => setQ(e.target.value) })
+    ),
+    /*#__PURE__*/React.createElement("div", { className: "row-actions", style: { marginBottom: 10 } },
+      /*#__PURE__*/React.createElement("button", {
+        className: 'btn sm ' + (!mostrarConcluidas ? 'accent' : 'ghost'),
+        onClick: () => setMostrarConcluidas(false)
+      }, "Pendentes"),
+      /*#__PURE__*/React.createElement("button", {
+        className: 'btn sm ' + (mostrarConcluidas ? 'accent' : 'ghost'),
+        onClick: () => setMostrarConcluidas(true)
+      }, "Concluídas")
+    ),
+    /*#__PURE__*/React.createElement("div", { className: "panel", style: { padding: 0 } },
+      lista.length === 0 ? /*#__PURE__*/React.createElement("div", { style: { padding: 20 } },
+        /*#__PURE__*/React.createElement(Empty, { text: "Nenhuma solicitação de arte encontrada." })
+      ) : /*#__PURE__*/React.createElement("table", null,
+        /*#__PURE__*/React.createElement("thead", null,
+          /*#__PURE__*/React.createElement("tr", null,
+            /*#__PURE__*/React.createElement("th", null, "#"),
+            /*#__PURE__*/React.createElement("th", null, "Cliente"),
+            /*#__PURE__*/React.createElement("th", null, "Produto(s)"),
+            /*#__PURE__*/React.createElement("th", null, "Tipo"),
+            /*#__PURE__*/React.createElement("th", null)
+          )
+        ),
+        /*#__PURE__*/React.createElement("tbody", null,
+          lista.map(s => /*#__PURE__*/React.createElement("tr", { key: s.id },
+            /*#__PURE__*/React.createElement("td", { className: "small muted" }, String(s.numero).padStart(3, '0')),
+            /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement("strong", null, s.clienteNomeSnap || '—')),
+            /*#__PURE__*/React.createElement("td", { className: "small" }, resumoItensArte(s.itens)),
+            /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement(Badge, { tone: s.ehAlteracao ? 'warn' : 'ok' }, s.ehAlteracao ? 'Alteração' : 'Arte nova')),
+            /*#__PURE__*/React.createElement("td", { className: "row-actions" },
+              /*#__PURE__*/React.createElement("button", { className: "btn ghost sm", onClick: () => setModal(s) }, "Editar"),
+              /*#__PURE__*/React.createElement("button", { className: "btn ghost sm", onClick: () => setImprimir(s) }, "Imprimir"),
+              /*#__PURE__*/React.createElement("button", { className: "btn ghost sm", onClick: () => alternarStatus(s) }, s.status === 'concluida' ? 'Reabrir' : 'Concluir'),
+              /*#__PURE__*/React.createElement("button", { className: "btn danger sm", onClick: () => excluir(s.id) }, "Excluir")
+            )
+          ))
+        )
+      )
+    ),
+    modal !== null && /*#__PURE__*/React.createElement(SolicitacaoArteModal, { sol: modal, db: db, onClose: () => setModal(null), onSave: salvar }),
+    imprimir !== null && /*#__PURE__*/React.createElement(ImprimirSolicitacaoArte, { sol: imprimir, onClose: () => setImprimir(null) })
+  );
 }
 
 export default App;
