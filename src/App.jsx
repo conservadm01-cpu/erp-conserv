@@ -1,8196 +1,11432 @@
-import React, { useState, useEffect, useMemo, useRef } from "react";
-import { Clock, Users, Package, BarChart3, Plus, Trash2, X, Play, Loader2, ClipboardList, Paperclip, Check, ChevronUp, ChevronDown, ListOrdered, Scissors, Printer, MessageCircle, Send, Pin, Smartphone, Palette } from "lucide-react";
+import React from "react";
+import "./artefato.css";
 
-// ---------- Identidade visual (tema de confecção) ----------
-// Fonte de destaque "Fraunces" (serifada, com entalhes que lembram costura)
-// para títulos e momentos de maior peso; "Inter" segue como fonte de
-// trabalho para o restante da interface — leve e legível no chão de fábrica.
-const FONT_DISPLAY = "'Fraunces', 'Georgia', serif";
-const FONT_BODY = "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
+const {
+  useState,
+  useEffect,
+  useMemo,
+  useCallback
+} = React;
 
-// Adicionado: carrega as fontes e define uma textura sutil de "tecido"
-// (trama cruzada) no fundo da aplicação — o pano de fundo de uma
-// confecção, sem competir com o conteúdo.
-function IdentidadeVisualGlobal() {
-  return (
-    <style>{`
-      @import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,700;9..144,800&family=Inter:wght@400;500;600;700;800&display=swap');
-      * { box-sizing: border-box; }
-      body { -webkit-font-smoothing: antialiased; }
-      .textura-tecido {
-        background-image:
-          repeating-linear-gradient(45deg, rgba(47,74,99,0.035) 0, rgba(47,74,99,0.035) 1px, transparent 1px, transparent 10px),
-          repeating-linear-gradient(-45deg, rgba(47,74,99,0.035) 0, rgba(47,74,99,0.035) 1px, transparent 1px, transparent 10px);
-      }
-      .costura-topo {
-        border-top: 1px dashed rgba(42,32,21,0.22);
-      }
-      .costura-base {
-        border-bottom: 1px dashed rgba(205,185,138,0.4);
-      }
-    `}</style>
-  );
-}
-
-// ---------- Helpers ----------
-const uid = () => Math.random().toString(36).slice(2, 10);
-
-// Adicionado: ordena listas de registros dos relatórios do mais recente
-// para o mais antigo (hora decrescente); quando duas linhas têm a mesma
-// hora, desempata por etapa e depois por operador, para a ordem ficar
-// estável em vez de mudar a cada atualização da tela.
-function ordenarRegistrosRelatorio(regs, { hora, etapa, operador }) {
-  return [...regs].sort((a, b) => {
-    const diffHora = new Date(hora(b)) - new Date(hora(a));
-    if (diffHora !== 0) return diffHora;
-    const diffEtapa = (etapa(a) || "").localeCompare(etapa(b) || "");
-    if (diffEtapa !== 0) return diffEtapa;
-    return (operador(a) || "").localeCompare(operador(b) || "");
-  });
-}
-
-// Classificação: A = 95-100% (ou melhor que o previsto) | B = 80-94% | C = abaixo de 80%
-const CLASS_INFO = {
-  A: { label: "A", desc: "95–100% da meta (ou melhor)", color: "#1a7a4c", bg: "#e6f4ec" },
-  B: { label: "B", desc: "80–94% da meta", color: "#1d6fa5", bg: "#e7f1f8" },
-  C: { label: "C", desc: "< 80% da meta", color: "#b13232", bg: "#f8e6e6" },
+/* ---------------- helpers ---------------- */
+const uid = () => Math.random().toString(36).slice(2, 9);
+const todayISO = () => new Date().toISOString().slice(0, 10);
+const fmtDate = iso => {
+  if (!iso) return '—';
+  const [y, m, d] = iso.split('-');
+  return `${d}/${m}/${y}`;
 };
-function classify(eficiencia) {
-  if (eficiencia >= 95) return "A";
-  if (eficiencia >= 80) return "B";
-  return "C";
-}
-function mediaEficiencia(regs) {
-  if (!regs.length) return 0;
-  const soma = regs.reduce((s, r) => s + Math.min(100, r.eficiencia), 0);
-  return Math.round((soma / regs.length) * 10) / 10;
-}
-
-// Cor do status da etapa: laranja = em aberto, verde = concluída dentro da meta, vermelho = concluída com atraso/perda
-const COR_INFO = {
-  laranja: { label: "Em aberto", color: "#b5820a", bg: "#fdf3e0", dot: "#e0a72a" },
-  verde: { label: "Concluída", color: "#1a7a4c", bg: "#e6f4ec", dot: "#2fa968" },
-  vermelho: { label: "Atraso/perda", color: "#b13232", bg: "#f8e6e6", dot: "#d04a4a" },
+const num = v => {
+  const n = parseFloat(v);
+  return isNaN(n) ? 0 : n;
 };
-function corDoRegistro(status, classificacao) {
-  if (status === "aberto") return "laranja";
-  return classificacao === "C" ? "vermelho" : "verde";
-}
-
-// Adicionado: dimensiona o tempo estimado de uma etapa dentro de uma
-// Ordem de Produção — "por lote" é um tempo fixo (não multiplica pela
-// quantidade), "por peça" multiplica pela quantidade daquele produto no
-// lote (uma OP pode reunir mais de um produto, cada um com sua própria
-// quantidade).
-function duracaoEtapaOP(passo, quantidade) {
-  const tempo = passo?.tempoEstimadoSeg || 0;
-  return passo?.tipoCalculo === "lote" ? tempo : tempo * quantidade;
-}
-
-// Adicionado: limites de jornada usados na liberação de produção —
-// 9h/dia é a carga diária considerada saudável por colaborador (220h
-// no mês, mesma base usada no cálculo de custo de mão de obra), 12h/dia
-// é o teto absoluto, e entre os dois só um Gestor ou Administrador pode
-// autorizar a programação.
-const JORNADA_DIARIA_HORAS = 8;
-const JORNADA_MAXIMA_HORAS = 12;
-// Adicionado: base usada para converter salário mensal em valor-hora ao
-// estimar custo de mão de obra (jornada padrão CLT) — reaproveitada nos
-// relatórios de custo por período/OP e no custo estimado por peça do
-// cadastro de produtos.
-const HORAS_MES_PADRAO = 220;
-const fmtMoeda = (v) => (v || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
-
-// Adicionado: jornada produtiva usada para projetar datas de entrega —
-// cada 9h de trabalho acumulado (por departamento) equivale a mais um
-// dia de calendário, em vez de tratar a produção como se rodasse 24h
-// por dia sem parar.
-const HORAS_PRODUTIVAS_DIA = 9;
-
-// Adicionado: projeta a data/hora em que um total de segundos de
-// trabalho fica pronto, considerando a jornada produtiva por dia a
-// partir de uma data de início — cada bloco cheio de 9h empurra a
-// previsão em mais um dia de calendário (mesmo horário), e o restante
-// (menos de 9h) soma direto em cima disso.
-function projetarDataUtil(segundosTrabalho, dataInicio) {
-  const segPorDia = HORAS_PRODUTIVAS_DIA * 3600;
-  const seg = Math.max(0, segundosTrabalho);
-  const dias = Math.floor(seg / segPorDia);
-  const restoSeg = seg % segPorDia;
-  const data = new Date(dataInicio);
-  data.setDate(data.getDate() + dias);
-  return new Date(data.getTime() + restoSeg * 1000);
-}
-
-// Adicionado: estima quantas horas um registro (aberto ou concluído)
-// ocupa do dia do colaborador — usa o tempo já apurado quando a etapa
-// foi concluída, ou a meta dimensionada (por peça ou por lote) enquanto
-// ainda está em aberto.
-function duracaoRegistroSeg(r) {
-  if (r.tempoEstimadoSeg != null) return r.tempoEstimadoSeg;
-  if (r.tempoEstimadoBaseSeg != null) {
-    return r.tipoCalculoEtapa === "lote" ? r.tempoEstimadoBaseSeg : r.tempoEstimadoBaseSeg * (r.quantidade || 1);
-  }
-  return r.tempoRealSeg || 0;
-}
-
-// Adicionado: monta o cronograma planejado da OP (início/fim previstos de
-// cada etapa a partir da abertura, incluindo etapas de todos os produtos
-// da OP), usado para exibir o dimensionamento total assim que a OP é
-// criada. Cada departamento (setor) tem seu próprio cursor de tempo —
-// Corte e Silk, por exemplo, não disputam a mesma linha do tempo, já que
-// rodam com equipes diferentes em paralelo; só as etapas de um MESMO
-// departamento se encadeiam uma depois da outra. Dentro de cada
-// departamento, o tempo avança à razão de uma jornada produtiva de 9h
-// por dia (não 24h corridas).
-function cronogramaEstaticoOP(op) {
-  const cursoresPorSetor = new Map();
-  return (op.etapas || []).map(passo => {
-    const duracaoSeg = passo.duracaoEstimadaSeg ?? duracaoEtapaOP(passo, passo.quantidade || 1);
-    const chaveSetor = passo.setorId || passo.setorNomeSnap || "—";
-    const inicioPlanejado = cursoresPorSetor.get(chaveSetor) || new Date(op.criadaEm);
-    const fimPlanejado = projetarDataUtil(duracaoSeg, inicioPlanejado);
-    cursoresPorSetor.set(chaveSetor, fimPlanejado);
-    return { ...passo, duracaoEstimadaSeg: duracaoSeg, inicioPlanejado, fimPlanejado };
-  });
-}
-
-// Adicionado: soma, por departamento (setor), o tempo estimado das
-// etapas ainda não concluídas de uma OP — base para projetar o prazo
-// considerando que cada departamento tem sua própria fila.
-function segundosRestantesPorSetor(etapas) {
-  const mapa = new Map();
-  (etapas || []).filter(p => !p.concluida).forEach(p => {
-    const chave = p.setorId || p.setorNomeSnap || "—";
-    const atual = mapa.get(chave) || 0;
-    mapa.set(chave, atual + (p.duracaoEstimadaSeg ?? duracaoEtapaOP(p, p.quantidade || 1)));
-  });
-  return mapa;
-}
-
-// Adicionado: classifica o andamento da OP frente à data de entrega —
-// para OPs em aberto, projeta a conclusão por departamento (etapas
-// ainda não concluídas daquele setor, a 9h produtivas por dia a partir
-// de agora) e usa o departamento mais carregado (o gargalo) como
-// previsão da OP inteira — departamentos diferentes rodam em paralelo,
-// então a OP só termina quando o mais lento deles terminar; para OPs
-// concluídas, compara a data real de conclusão com a data de entrega.
-function avaliarPrazoOP(op) {
-  if (!op.dataEntrega) return null;
-  const entrega = new Date(op.dataEntrega + "T23:59:59");
-  if (op.status === "concluida") {
-    if (!op.concluidaEm) return null;
-    const concluida = new Date(op.concluidaEm);
-    return concluida <= entrega
-      ? { label: "Entregue no prazo", color: "#1a7a4c", bg: "#e6f4ec" }
-      : { label: "Entregue com atraso", color: "#b13232", bg: "#f8e6e6" };
-  }
-  const agora = new Date();
-  let previsao = agora;
-  segundosRestantesPorSetor(op.etapas).forEach(segundos => {
-    const fimSetor = projetarDataUtil(segundos, agora);
-    if (fimSetor > previsao) previsao = fimSetor;
-  });
-  return previsao <= entrega
-    ? { label: "Dentro do prazo", color: "#1a7a4c", bg: "#e6f4ec", previsao }
-    : { label: "Fora do prazo", color: "#b13232", bg: "#f8e6e6", previsao };
-}
-
-const FALTA_TIPOS = [
-  { key: "horas", label: "Horas", unidade: "hora(s)", pesoPorUnidade: 1 },
-  { key: "dias", label: "Dias (dispensa)", unidade: "dia(s)", pesoPorUnidade: 5 },
-  { key: "falta_justificada", label: "Falta justificada (atestado)", unidade: "dia(s)", pesoPorUnidade: 4 },
-  { key: "falta_injustificada", label: "Falta sem justificativa", unidade: "dia(s)", pesoPorUnidade: 10 },
-];
-const faltaInfo = (key) => FALTA_TIPOS.find(t => t.key === key) || FALTA_TIPOS[0];
-
-const COMPORTAMENTO_OPCOES = [
-  { key: "ruim", label: "Ruim", color: "#b13232", bg: "#f8e6e6" },
-  { key: "regular", label: "Regular", color: "#b5820a", bg: "#faf1dc" },
-  { key: "bom", label: "Bom", color: "#1d6fa5", bg: "#e7f1f8" },
-  { key: "acima_media", label: "Acima da média", color: "#1a7a4c", bg: "#e6f4ec" },
-];
-const comportamentoInfo = (key) => COMPORTAMENTO_OPCOES.find(c => c.key === key) || null;
-
-function fmtSec(totalSec) {
-  const s = Math.round(totalSec);
-  const h = Math.floor(s / 3600);
-  const m = Math.floor((s % 3600) / 60);
-  const sec = s % 60;
-  if (h > 0) return `${h}h ${m}min`;
-  if (m > 0) return `${m}min ${sec}s`;
-  return `${sec}s`;
-}
-function todayStr() {
-  const d = new Date();
-  return d.toISOString().slice(0, 10);
-}
-function nowLocalInput() {
-  const d = new Date();
-  d.setSeconds(0, 0);
-  return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
-}
-function toLocalInput(date) {
-  return new Date(date.getTime() - date.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
-}
-
-function startOfWeek(d) {
-  const date = new Date(d);
-  const day = date.getDay();
-  const diff = (day === 0 ? -6 : 1) - day;
-  date.setDate(date.getDate() + diff);
-  date.setHours(0, 0, 0, 0);
-  return date;
-}
-
-function getPeriodRange(preset, customStart, customEnd) {
-  const now = new Date();
-  let start, end;
-  if (preset === "dia") {
-    start = new Date(now); start.setHours(0, 0, 0, 0);
-    end = new Date(now); end.setHours(23, 59, 59, 999);
-  } else if (preset === "semana") {
-    start = startOfWeek(now);
-    end = new Date(start); end.setDate(end.getDate() + 6); end.setHours(23, 59, 59, 999);
-  } else if (preset === "quinzena") {
-    const day = now.getDate();
-    if (day <= 15) {
-      start = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0);
-      end = new Date(now.getFullYear(), now.getMonth(), 15, 23, 59, 59);
-    } else {
-      start = new Date(now.getFullYear(), now.getMonth(), 16, 0, 0, 0);
-      end = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59);
-    }
-  } else if (preset === "mes") {
-    start = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0);
-    end = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59);
-  } else if (preset === "bimestre") {
-    const startMonth = Math.floor(now.getMonth() / 2) * 2;
-    start = new Date(now.getFullYear(), startMonth, 1, 0, 0, 0);
-    end = new Date(now.getFullYear(), startMonth + 2, 0, 23, 59, 59);
-  } else if (preset === "trimestre") {
-    const startMonth = Math.floor(now.getMonth() / 3) * 3;
-    start = new Date(now.getFullYear(), startMonth, 1, 0, 0, 0);
-    end = new Date(now.getFullYear(), startMonth + 3, 0, 23, 59, 59);
-  } else if (preset === "ano") {
-    start = new Date(now.getFullYear(), 0, 1, 0, 0, 0);
-    end = new Date(now.getFullYear(), 11, 31, 23, 59, 59);
-  } else {
-    start = customStart ? new Date(customStart + "T00:00:00") : new Date(0);
-    end = customEnd ? new Date(customEnd + "T23:59:59") : new Date();
-  }
-  return { start, end };
-}
-
-// ---------- Dados iniciais ----------
-const SEED_SETORES = [
-  { key: "costura", nome: "Costura" },
-  { key: "corte", nome: "Corte" },
-  { key: "silk", nome: "Silk" },
-  { key: "preparacao", nome: "Preparação" },
-];
-
-
-// ---------- Storage hooks ----------
-// Corrigido: os cadastros (setores, etapas, produtos, vínculos, colaboradores,
-// equipes) antes eram salvos como um único array dentro de uma única chave.
-// Se duas pessoas editassem cadastros ao mesmo tempo em celulares
-// diferentes, a última a salvar sobrescrevia por completo o trabalho da
-// outra. Agora cada item vive em sua própria chave (mesmo padrão já usado
-// para registros de produção), mas o hook continua expondo a mesma
-// interface [itens, definirTodos, carregado] para não exigir mudanças nos
-// componentes que já usavam useCollection. Também migra automaticamente
-// dados salvos no formato antigo (uma chave só), preservando cadastros
-// já feitos antes desta correção.
-function useRecordCollectionArray(prefix, legacyKey) {
-  const [items, setItemsState] = useState([]);
-  const [loaded, setLoaded] = useState(false);
-
-  useEffect(() => {
-    let alive = true;
-    (async () => {
-      try {
-        const listRes = await window.storage.list(prefix + ":", true);
-        const keys = (listRes && listRes.keys) || [];
-        let values = (await Promise.all(keys.map(async (k) => {
-          try {
-            const r = await window.storage.get(k, true);
-            return r && r.value ? JSON.parse(r.value) : null;
-          } catch (e) { return null; }
-        }))).filter(Boolean);
-
-        if (values.length === 0 && legacyKey) {
-          try {
-            const legado = await window.storage.get(legacyKey, true);
-            if (legado && legado.value) {
-              const antigos = JSON.parse(legado.value);
-              if (Array.isArray(antigos) && antigos.length > 0) {
-                await Promise.all(antigos.map(item => window.storage.set(`${prefix}:${item.id}`, JSON.stringify(item), true)));
-                await window.storage.delete(legacyKey, true).catch(() => {});
-                values = antigos;
-              }
-            }
-          } catch (e) {
-            // sem dado no formato antigo
-          }
-        }
-
-        if (alive) setItemsState(values);
-      } catch (e) {
-        // prefixo ainda sem nenhum item
-      } finally {
-        if (alive) setLoaded(true);
-      }
-    })();
-    return () => { alive = false; };
-  }, [prefix, legacyKey]);
-
-  async function setAll(next) {
-    const nextIds = new Set(next.map(x => x.id));
-    const toRemove = items.filter(x => !nextIds.has(x.id));
-    const toSave = next.filter(x => {
-      const antigo = items.find(p => p.id === x.id);
-      return !antigo || JSON.stringify(antigo) !== JSON.stringify(x);
-    });
-    setItemsState(next);
-    try {
-      await Promise.all([
-        ...toRemove.map(x => window.storage.delete(`${prefix}:${x.id}`, true)),
-        ...toSave.map(x => window.storage.set(`${prefix}:${x.id}`, JSON.stringify(x), true)),
-      ]);
-    } catch (e) {
-      console.error("Falha ao salvar", prefix, e);
-    }
-  }
-
-  return [items, setAll, loaded];
-}
-
-// Coleção onde cada item vive em sua própria chave — evita que dois usuários
-// gravando ao mesmo tempo sobrescrevam um ao outro (o que acontece quando a
-// coleção inteira é salva como um único array em uma única chave).
-function useRecordCollection(prefix) {
-  const [items, setItemsState] = useState([]);
-  const [loaded, setLoaded] = useState(false);
-
-  useEffect(() => {
-    let alive = true;
-    (async () => {
-      try {
-        const listRes = await window.storage.list(prefix + ":", true);
-        const keys = (listRes && listRes.keys) || [];
-        const values = await Promise.all(keys.map(async (k) => {
-          try {
-            const r = await window.storage.get(k, true);
-            return r && r.value ? JSON.parse(r.value) : null;
-          } catch (e) { return null; }
-        }));
-        if (alive) setItemsState(values.filter(Boolean));
-      } catch (e) {
-        // prefixo ainda sem nenhum item
-      } finally {
-        if (alive) setLoaded(true);
-      }
-    })();
-    return () => { alive = false; };
-  }, [prefix]);
-
-  async function salvar(record) {
-    setItemsState(prev => {
-      const existe = prev.some(x => x.id === record.id);
-      return existe ? prev.map(x => x.id === record.id ? record : x) : [record, ...prev];
-    });
-    try { await window.storage.set(`${prefix}:${record.id}`, JSON.stringify(record), true); } catch (e) { console.error("Falha ao salvar", prefix, e); }
-  }
-  async function salvarVarios(records) {
-    setItemsState(prev => [...records, ...prev]);
-    try { await Promise.all(records.map(r => window.storage.set(`${prefix}:${r.id}`, JSON.stringify(r), true))); } catch (e) { console.error("Falha ao salvar", prefix, e); }
-  }
-  async function remover(id) {
-    setItemsState(prev => prev.filter(x => x.id !== id));
-    try { await window.storage.delete(`${prefix}:${id}`, true); } catch (e) { console.error("Falha ao remover", prefix, e); }
-  }
-
-  return { items, loaded, salvar, salvarVarios, remover };
-}
-
-// ---------- UI atoms ----------
-function Field({ label, children }) {
-  return (
-    <label style={{ display: "block", marginBottom: 14 }}>
-      <span style={{ display: "block", fontSize: 12, fontWeight: 600, color: "#6b5d49", marginBottom: 5, letterSpacing: 0.2 }}>{label}</span>
-      {children}
-    </label>
-  );
-}
-const inputStyle = {
-  width: "100%", boxSizing: "border-box", padding: "10px 12px", borderRadius: 8,
-  border: "1.5px solid #d9cfb7", fontSize: 15, background: "#fff", color: "#2a2015", outline: "none",
+const money = v => num(v).toLocaleString('pt-BR', {
+  style: 'currency',
+  currency: 'BRL'
+});
+const STATUS_ETAPA = ["Não iniciada", "Em andamento", "Concluída"];
+/* Fluxo do pedido: Aberto → Liberado para produção → Em produção → Concluído → Expedição → Encerrado */
+const STATUS_PEDIDO = ["Aberto", "Liberado para produção", "Em produção", "Concluído", "Expedição", "Encerrado", "Cancelado"];
+const FLUXO_PEDIDO = {
+  'Aberto': ['Liberado para produção', 'Cancelado'],
+  'Liberado para produção': ['Em produção', 'Aberto', 'Cancelado'],
+  'Em produção': ['Concluído', 'Cancelado'],
+  'Concluído': ['Expedição'],
+  'Expedição': ['Encerrado'],
+  'Encerrado': [],
+  'Cancelado': ['Aberto']
 };
-// Adicionado: botão-link discreto para ações secundárias de "abrir formulário
-// inline" (ex.: cadastro rápido de material/fornecedor sem sair da tela).
-const linkButtonStyle = {
-  background: "none", border: "none", padding: "6px 0 0", margin: 0,
-  fontSize: 12.5, fontWeight: 700, color: "#2f4a63", cursor: "pointer", textDecoration: "underline",
+function proximoStatusPedido(atual) {
+  return FLUXO_PEDIDO[atual] || [];
+}
+// só gera OP a partir daqui
+function podeGerarOP(pedido) {
+  const st = pedido.status || 'Aberto';
+  return st === 'Aberto' || st === 'Liberado para produção';
+}
+const STATUS_COMPRA = ["Solicitado", "Comprado", "Recebido"];
+/* --- Jornada de trabalho da fábrica ---
+   Seg a sex: 06:00–12:00 e 13:00–15:48  (8h48 = 528 min)
+   Extensão até 18:00 com autorização de superior (+2h12 = 132 min → 660 min)
+   Sábado: 06:00–12:00 (360 min), somente com autorização de superior */
+const JORNADA = {
+  inicioManha: '06:00',
+  fimManha: '12:00',
+  inicioTarde: '13:00',
+  fimTarde: '15:48',
+  extensaoAte: '18:00',
+  sabadoInicio: '06:00',
+  sabadoFim: '12:00'
 };
-function Select({ value, onChange, children, ...rest }) {
-  return <select value={value} onChange={onChange} style={{ ...inputStyle, appearance: "auto" }} {...rest}>{children}</select>;
+const LIMITE_CARGA_MIN = 8 * 60 + 48; // 528 min — jornada normal seg-sex
+const LIMITE_CARGA_APROVACAO_MAX_MIN = 11 * 60; // 660 min — até as 18:00 com autorização
+const LIMITE_SABADO_MIN = 6 * 60; // 360 min — sábado só com autorização
+const HORAS_MES_PADRAO = 220; // referência de horas trabalhadas por mês para converter salário em custo/hora
+
+function diaSemana(dataISO) {
+  if (!dataISO) return null;
+  return new Date(dataISO + 'T12:00:00').getDay(); // 0=dom … 6=sáb
 }
-// Adicionado: Badge e StatusDot ganharam a forma de uma etiqueta de roupa
-// (die-cut tag) — borda pontilhada como uma costura e um pequeno "furo" de
-// pingente — reaproveitada nos dois lugares onde a classificação aparece,
-// para virar um elemento reconhecível da identidade visual do app.
-function Badge({ cls }) {
-  const info = CLASS_INFO[cls];
-  if (!info) return null;
-  return (
-    <span style={{
-      display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 4,
-      padding: "2px 8px 2px 5px", borderRadius: "3px 9px 9px 3px", fontSize: 12, fontWeight: 700,
-      color: info.color, background: info.bg, border: `1px dashed ${info.color}`, minWidth: 24, lineHeight: 1.5,
-    }}>
-      <span style={{ width: 4, height: 4, borderRadius: "50%", background: info.color, opacity: 0.5, display: "inline-block" }} />
-      {info.label}
-    </span>
-  );
+function ehSabado(dataISO) {
+  return diaSemana(dataISO) === 6;
 }
-function StatusDot({ cor }) {
-  const info = COR_INFO[cor];
-  if (!info) return null;
-  return (
-    <span style={{
-      display: "inline-flex", alignItems: "center", gap: 5, fontSize: 11.5, fontWeight: 700,
-      color: info.color, background: info.bg, padding: "2px 9px 2px 8px", borderRadius: "3px 9px 9px 3px",
-      border: `1px dashed ${info.color}`, lineHeight: 1.6,
-    }}>
-      <span style={{ width: 7, height: 7, borderRadius: "50%", background: info.dot, display: "inline-block" }} />
-      {info.label}
-    </span>
-  );
-}
-function PrimaryButton({ children, onClick, disabled, style }) {
-  return (
-    <button onClick={onClick} disabled={disabled} style={{
-      background: disabled ? "#c7b89a" : "#2f4a63", color: "#fff", border: "none",
-      borderRadius: 9, padding: "11px 16px", fontSize: 14.5, fontWeight: 700,
-      cursor: disabled ? "not-allowed" : "pointer", display: "inline-flex",
-      alignItems: "center", gap: 6, justifyContent: "center", ...style,
-    }}>{children}</button>
-  );
-}
-function IconButton({ onClick, children, title, danger, disabled }) {
-  return (
-    <button onClick={onClick} title={title} disabled={disabled} style={{
-      border: "none", background: "transparent", cursor: disabled ? "not-allowed" : "pointer",
-      color: disabled ? "#b8ab92" : (danger ? "#b13232" : "#6b5d49"), padding: 6, borderRadius: 6,
-      display: "inline-flex", alignItems: "center", opacity: disabled ? 0.6 : 1,
-    }}>{children}</button>
-  );
-}
-function Card({ children, style }) {
-  return <div style={{ background: "#fffdf9", border: "1px solid #e6ddc8", borderRadius: 12, padding: 16, boxShadow: "0 1px 2px rgba(28,43,57,0.05)", ...style }}>{children}</div>;
-}
-function ToggleChip({ ativo, onClick, children, colorAtivo }) {
-  return (
-    <button type="button" onClick={onClick} style={{
-      padding: "7px 11px", borderRadius: 999, fontSize: 12.5, fontWeight: 700, cursor: "pointer",
-      border: "1.5px solid " + (ativo ? (colorAtivo || "#2f4a63") : "#d9cfb7"),
-      background: ativo ? (colorAtivo || "#2f4a63") : "#fff",
-      color: ativo ? "#fff" : "#6b5d49",
-    }}>{children}</button>
-  );
+function ehDomingo(dataISO) {
+  return diaSemana(dataISO) === 0;
 }
 
-// ---------- App principal ----------
-export default function App() {
-  const [tab, setTab] = useState("producao");
-  const [relatorioImpressao, setRelatorioImpressao] = useState(null);
-  // Adicionado: relatório de itens em aberto por departamento (agrupado
-  // por etapa, colaborador ou função), com ação de imprimir.
-  const [relatorioAbertosImpressao, setRelatorioAbertosImpressao] = useState(null);
-  // Adicionado: impressão em grade (tabela) reaproveitada em três telas —
-  // a própria Ordem de Produção (todas as etapas), a lista de operações
-  // em aberto e o histórico de produção.
-  const [relatorioGradeImpressao, setRelatorioGradeImpressao] = useState(null);
-
-  const [setores, setSetores, setoresLoaded] = useRecordCollectionArray("setor", "setores_v2");
-  const [etapas, setEtapas, etapasLoaded] = useRecordCollectionArray("etapa", "etapas_v2");
-  const [produtos, setProdutos, produtosLoaded] = useRecordCollectionArray("produto", "produtos_v2");
-  // Adicionado: grupo de produto e tamanho são cadastros próprios do
-  // produto — cada um com um código numérico sequencial atribuído na
-  // ordem em que é criado (ex.: "AVENTAL" = grupo 001), usado para
-  // montar o código do produto (grupo.tipo.tamanho).
-  //
-  // Corrigido: o produto busca o tecido direto na base de Materiais, e o
-  // segmento "tipo" do código do produto é o próprio código de cadastro
-  // do material escolhido (cada material tem o seu, sequencial, igual
-  // grupo/tamanho). "Cor" e "Tipo de material" foram removidos.
-  //
-  // Corrigido: grupo de produto (categoria do produto, ex.: AVENTAL) e
-  // grupo de materiais (categoria do material, ex.: TECIDO) eram o mesmo
-  // cadastro compartilhado — agora são dois cadastros independentes,
-  // cada um com sua própria sequência numérica.
-  const [gruposProduto, setGruposProduto, gruposProdutoLoaded] = useRecordCollectionArray("grupo_produto", null);
-  const [gruposMaterial, setGruposMaterial, gruposMaterialLoaded] = useRecordCollectionArray("grupo_material", null);
-  const [tamanhos, setTamanhos, tamanhosLoaded] = useRecordCollectionArray("tamanho", null);
-  const [vinculos, setVinculos, vinculosLoaded] = useRecordCollectionArray("vinculo", "vinculos_v2");
-  const [colaboradores, setColaboradores, colabLoaded] = useRecordCollectionArray("colaborador", "colaboradores_v2");
-  const [equipes, setEquipes, equipesLoaded] = useRecordCollectionArray("equipe", "equipes_v2");
-  // Adicionado: cadastro simples de clientes, para amarrar a Ordem de
-  // Produção a quem encomendou o lote.
-  const [clientes, setClientes, clientesLoaded] = useRecordCollectionArray("cliente", null);
-  // Adicionado: cadastro de materiais (com estoque) e ficha de consumo por
-  // produto (quanto de cada material uma peça consome), para alimentar a
-  // aba de Consumo e permitir baixa automática de estoque quando uma OP é
-  // concluída.
-  const [materiais, setMateriais, materiaisLoaded] = useRecordCollectionArray("material", null);
-  const [consumosMaterial, setConsumosMaterial, consumosMaterialLoaded] = useRecordCollectionArray("consumo_material", null);
-  const { items: movimentacoesMaterial, loaded: movimentacoesMaterialLoaded, salvarVarios: salvarMovimentacoesMaterial } = useRecordCollection("movimentacao_material");
-  // Adicionado: livro de movimentações de estoque — entradas manuais (ex.:
-  // conferência, doação) e entradas de compras aprovadas. Fica separado
-  // de "movimentacao_material" (que registra só as baixas automáticas de
-  // produção) para não misturar semânticas, mas as duas alimentam juntas
-  // o relatório de controle de materiais.
-  const { items: movimentacoesEstoque, loaded: movimentacoesEstoqueLoaded, salvar: salvarMovimentacaoEstoque } = useRecordCollection("movimentacao_estoque");
-  // Adicionado: solicitação de compras (o que precisa comprar) e cotações
-  // recebidas de fornecedores para cada solicitação (negociação) — ao
-  // escolher a cotação vencedora, o pedido é fechado e o estoque do
-  // material recebe entrada automática pelo valor negociado.
-  const { items: solicitacoesCompra, loaded: solicitacoesCompraLoaded, salvar: salvarSolicitacaoCompra, remover: removerSolicitacaoCompra } = useRecordCollection("solicitacao_compra");
-  const { items: cotacoesCompra, loaded: cotacoesCompraLoaded, salvar: salvarCotacaoCompra, remover: removerCotacaoCompra } = useRecordCollection("cotacao_compra");
-  // Adicionado: cadastro de fornecedores (usado nas cotações de compra,
-  // com histórico das últimas compras fechadas com cada um) e de
-  // equipamentos/máquinas por departamento (usado ao iniciar uma etapa
-  // de produção, para registrar em qual máquina o trabalho foi feito).
-  const [fornecedores, setFornecedores, fornecedoresLoaded] = useRecordCollectionArray("fornecedor", null);
-  const [equipamentos, setEquipamentos, equipamentosLoaded] = useRecordCollectionArray("equipamento", null);
-  // Adicionado: feriados cadastrados pela fábrica — usados na liberação
-  // de produção para impedir programar domingos e feriados, e para
-  // exigir autorização de Gestor/Administrador aos sábados.
-  const [feriados, setFeriados, feriadosLoaded] = useRecordCollectionArray("feriado", null);
-  const { items: registros, loaded: registrosLoaded, salvar: salvarRegistro, remover: removerRegistro } = useRecordCollection("registro");
-  const { items: avaliacoes, loaded: avaliacoesLoaded, salvar: salvarAvaliacao, remover: removerAvaliacao } = useRecordCollection("avaliacao");
-  const { items: anexos, loaded: anexosLoaded, salvarVarios: salvarAnexos, remover: removerAnexo } = useRecordCollection("anexo");
-  const { items: acessos, loaded: acessosLoaded, salvar: salvarAcesso } = useRecordCollection("acesso");
-  // Adicionado: Ordens de Produção (OP) — controle sequencial de um lote
-  // desde a primeira etapa (normalmente Corte) até a última do produto.
-  const { items: ordensProducao, loaded: ordensLoaded, salvar: salvarOrdemProducao, remover: removerOrdemProducao } = useRecordCollection("ordem_producao");
-  // Adicionado: fila de solicitações de arte para o(a) arte-finalista —
-  // pedidos que precisam ser resolvidos antes da produção começar.
-  const { items: solicitacoesArte, loaded: solicitacoesArteLoaded, salvar: salvarSolicitacaoArte, remover: removerSolicitacaoArte } = useRecordCollection("solicitacao_arte");
-  const [usuarioAtual, setUsuarioAtual] = useState(null);
-
-  // Adicionado: alerta de mensagens novas do chat interno — contador no
-  // ícone do Chat no menu inferior, e um aviso rápido na tela quando
-  // chega mensagem nova e a pessoa não está na aba de Chat. A "última
-  // leitura" fica salva no localStorage do aparelho (não por pessoa,
-  // já que o login aqui é só escolher o nome, sem sessão própria).
-  const [mensagensChat, setMensagensChat] = useState([]);
-  const [avisoNovaMensagem, setAvisoNovaMensagem] = useState(null);
-  const ultimaMensagemIdRef = useRef(null);
-  const [ultimaLeituraChat, setUltimaLeituraChat] = useState(() => {
-    try { return localStorage.getItem("chat_ultima_leitura"); } catch (e) { return null; }
-  });
-
-  useEffect(() => {
-    let ativo = true;
-    async function verificarMensagens() {
-      try {
-        const listaRes = await window.storage.list("mensagem:", true);
-        const chaves = (listaRes && listaRes.keys) || [];
-        const valores = (await Promise.all(chaves.map(async (k) => {
-          try { const r = await window.storage.get(k, true); return r && r.value ? JSON.parse(r.value) : null; } catch (e) { return null; }
-        }))).filter(Boolean);
-        valores.sort((a, b) => new Date(a.criadoEm) - new Date(b.criadoEm));
-        if (ativo) setMensagensChat(valores);
-      } catch (e) {
-        // sem mensagens ainda, ou falha momentânea — tenta de novo no próximo ciclo
-      }
-    }
-    verificarMensagens();
-    const intervalo = setInterval(verificarMensagens, 6000);
-    return () => { ativo = false; clearInterval(intervalo); };
-  }, []);
-
-  // Mostra o aviso rápido só quando chega uma mensagem realmente nova
-  // (diferente da última vista), de outra pessoa, e a tela de Chat não
-  // está aberta no momento.
-  useEffect(() => {
-    if (mensagensChat.length === 0) return;
-    const ultima = mensagensChat[mensagensChat.length - 1];
-    if (ultimaMensagemIdRef.current === null) {
-      ultimaMensagemIdRef.current = ultima.id;
-      return;
-    }
-    if (ultima.id === ultimaMensagemIdRef.current) return;
-    ultimaMensagemIdRef.current = ultima.id;
-    if (tab !== "chat" && ultima.autorNome !== usuarioAtual?.nome) {
-      setAvisoNovaMensagem(ultima);
-      const t = setTimeout(() => setAvisoNovaMensagem(atual => (atual && atual.id === ultima.id ? null : atual)), 5000);
-      return () => clearTimeout(t);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mensagensChat]);
-
-  // Abrir a aba de Chat marca tudo como lido.
-  useEffect(() => {
-    if (tab !== "chat") return;
-    const agora = new Date().toISOString();
-    try { localStorage.setItem("chat_ultima_leitura", agora); } catch (e) {}
-    setUltimaLeituraChat(agora);
-    setAvisoNovaMensagem(null);
-  }, [tab]);
-
-  const mensagensNaoLidas = mensagensChat.filter(m =>
-    m.autorNome !== usuarioAtual?.nome && (!ultimaLeituraChat || new Date(m.criadoEm) > new Date(ultimaLeituraChat))
-  ).length;
-
-  const allLoaded = setoresLoaded && etapasLoaded && produtosLoaded && vinculosLoaded && colabLoaded
-    && equipesLoaded && registrosLoaded && avaliacoesLoaded && anexosLoaded && acessosLoaded && ordensLoaded && clientesLoaded
-    && materiaisLoaded && consumosMaterialLoaded && movimentacoesMaterialLoaded && solicitacoesCompraLoaded && cotacoesCompraLoaded
-    && fornecedoresLoaded && equipamentosLoaded && movimentacoesEstoqueLoaded && feriadosLoaded && solicitacoesArteLoaded
-    && gruposProdutoLoaded && gruposMaterialLoaded && tamanhosLoaded;
-  const [seedChecked, setSeedChecked] = useState(false);
-
-  // Adicionado: os três perfis de acesso definem quais abas o usuário
-  // logado enxerga no menu inferior. Colaborador só acompanha a própria
-  // produção (e agora também o chat interno); Gestor toca a operação do
-  // dia a dia; Administrador tem acesso completo, incluindo compras,
-  // cadastros e dados sensíveis (salário, senha e perfil dos
-  // colaboradores). O chat interno fica liberado pros três perfis, já
-  // que é um canal de conversa entre todo mundo que usa o sistema.
-  const PERFIS_ACESSO = {
-    administrador: { label: "Administrador", abas: ["producao", "arte", "avaliacao", "consumo", "relatorios", "cadastros", "chat"] },
-    gestor: { label: "Gestor", abas: ["producao", "arte", "avaliacao", "consumo", "relatorios", "cadastros", "chat"] },
-    colaborador: { label: "Colaborador", abas: ["producao", "chat"] },
+// capacidade do dia em minutos: {normal, maximo, exigeAutorizacao, rotulo}
+function capacidadeDoDia(dataISO) {
+  if (ehDomingo(dataISO)) return {
+    normal: 0,
+    maximo: 0,
+    sempreAutoriza: true,
+    rotulo: 'Domingo — sem expediente'
   };
-  const perfilAtual = PERFIS_ACESSO[usuarioAtual?.perfil] || PERFIS_ACESSO.colaborador;
-
-  // Adicionado: dá baixa no estoque dos materiais consumidos por uma OP
-  // assim que ela é concluída (todas as etapas de todos os produtos do
-  // pedido). O consumo é calculado a partir da ficha de consumo de cada
-  // produto (Cadastros → Produtos → Consumo de materiais) multiplicada
-  // pela quantidade daquele produto na OP. Cada baixa gera um registro de
-  // movimentação para consulta na aba Consumo.
-  async function darBaixaMateriaisDaOP(op) {
-    const itens = op.itens && op.itens.length ? op.itens : (op.produtoId ? [{ produtoId: op.produtoId, quantidade: op.quantidade }] : []);
-    const ajustesPorMaterial = new Map(); // materialId -> quantidade a subtrair
-    const movimentacoes = [];
-    itens.forEach(item => {
-      const consumosDoProduto = consumosMaterial.filter(c => c.produtoId === item.produtoId);
-      consumosDoProduto.forEach(c => {
-        const qtdConsumida = Math.round((c.quantidadePorPeca || 0) * item.quantidade * 1000) / 1000;
-        if (qtdConsumida <= 0) return;
-        ajustesPorMaterial.set(c.materialId, (ajustesPorMaterial.get(c.materialId) || 0) + qtdConsumida);
-        movimentacoes.push({
-          id: uid(), materialId: c.materialId, produtoId: item.produtoId, produtoNomeSnap: item.produtoNomeSnap,
-          ordemProducaoId: op.id, ordemProducaoNumero: op.numero,
-          quantidadeProduzida: item.quantidade, quantidadeConsumida: qtdConsumida,
-          criadoEm: new Date().toISOString(),
-        });
-      });
-    });
-    if (ajustesPorMaterial.size === 0) return;
-    const materiaisAtualizados = materiais.map(m => ajustesPorMaterial.has(m.id)
-      ? { ...m, quantidadeEstoque: Math.round((m.quantidadeEstoque - ajustesPorMaterial.get(m.id)) * 1000) / 1000 }
-      : m);
-    // Preenche o nome do material (snapshot) nas movimentações antes de salvar.
-    const movimentacoesComSnap = movimentacoes.map(mv => ({
-      ...mv,
-      materialNomeSnap: materiaisAtualizados.find(m => m.id === mv.materialId)?.nome || "—",
-      materialUnidadeSnap: materiaisAtualizados.find(m => m.id === mv.materialId)?.unidade || "",
-      // Preço unitário no momento da baixa — guardado no snapshot para o
-      // relatório de custos não mudar retroativamente se o preço do
-      // material for reajustado depois.
-      precoUnitarioSnap: materiaisAtualizados.find(m => m.id === mv.materialId)?.preco ?? null,
-      saldoResultante: materiaisAtualizados.find(m => m.id === mv.materialId)?.quantidadeEstoque ?? null,
-    }));
-    await setMateriais(materiaisAtualizados);
-    await salvarMovimentacoesMaterial(movimentacoesComSnap);
+  if (ehSabado(dataISO)) return {
+    normal: 0,
+    maximo: LIMITE_SABADO_MIN,
+    sempreAutoriza: true,
+    rotulo: `Sábado ${JORNADA.sabadoInicio}–${JORNADA.sabadoFim} (só com autorização)`
+  };
+  return {
+    normal: LIMITE_CARGA_MIN,
+    maximo: LIMITE_CARGA_APROVACAO_MAX_MIN,
+    sempreAutoriza: false,
+    rotulo: `${JORNADA.inicioManha}–${JORNADA.fimManha} e ${JORNADA.inicioTarde}–${JORNADA.fimTarde} (extensão até ${JORNADA.extensaoAte} com autorização)`
+  };
+}
+function minParaHHMM(min) {
+  const m = Math.round(num(min));
+  const h = Math.floor(m / 60),
+    r = m % 60;
+  return `${h}:${String(r).padStart(2, '0')}`;
+}
+/* A etapa dentro da OP guarda uma cópia dos tempos feita quando a OP foi criada.
+   Esta função devolve a etapa com os tempos ATUAIS do cadastro (Departamentos → Etapas). */
+function etapaAtual(et, db) {
+  if (!et || !db) return et;
+  const def = (db.etapasProducao || []).find(e => e.id === et.etapaProducaoId);
+  if (!def) return et;
+  return {
+    ...et,
+    nome: def.nome || et.nome,
+    departamentoId: def.departamentoId || et.departamentoId,
+    modoTempo: def.modoTempo || 'peca',
+    tempoProducao: def.tempoProducao,
+    unidadeTempo: def.unidadeTempo,
+    tamanhoLote: def.tamanhoLote,
+    tamanhoEquipe: def.tamanhoEquipe
+  };
+}
+function cargaEtapaOP(et, qtdBase, qtdTotalOP, db) {
+  return cargaEtapaMinutos(etapaAtual(et, db), qtdBase, qtdTotalOP);
+}
+function cargaEtapaMinutos(etapa, qtdBase, qtdTotalOP) {
+  const t = num(etapa.tempoProducao);
+  let baseMin = t;
+  if (etapa.unidadeTempo === 'seg') baseMin = t / 60;else if (etapa.unidadeTempo === 'hora') baseMin = t * 60;
+  if (etapa.modoTempo === 'lote' || etapa.modoTempo === 'equipe') {
+    // o tempo cadastrado é o ciclo para produzir um lote de N peças.
+    // Se a quantidade do lote não estiver informada, assume a quantidade da própria OP.
+    const lote = num(etapa.tamanhoLote) > 0 ? num(etapa.tamanhoLote) : num(qtdTotalOP) > 0 ? num(qtdTotalOP) : 1;
+    const lotesNecessarios = num(qtdBase) / lote;
+    return baseMin * lotesNecessarios;
   }
-
-  // Corrigido/reorganizado: departamentos (Corte, Silk, Preparação etc.)
-  // agora podem ser iniciados em qualquer ordem pelo gestor — não é mais
-  // obrigatório concluir um para "liberar" o próximo. Uma etapa "por
-  // peça" pode agora ser dividida em mais de um registro (outro
-  // colaborador ou outro dia assume o restante da quantidade) — por
-  // isso a etapa não fica vinculada a um único registro; ela é marcada
-  // "concluída" quando a SOMA das peças boas dos registros concluídos
-  // vinculados a ela atinge a quantidade total da etapa.
-  async function salvarRegistroComOrdem(registro) {
-    await salvarRegistro(registro);
-    if (registro.ordemProducaoId && registro.ordemEtapaIndex != null) {
-      const op = ordensProducao.find(o => o.id === registro.ordemProducaoId);
-      if (op) {
-        // Mescla o registro recém-salvo com os já existentes, já que o
-        // estado "registros" do React pode ainda não refletir esta
-        // gravação no mesmo instante.
-        const registrosAtualizados = registros.some(r => r.id === registro.id)
-          ? registros.map(r => r.id === registro.id ? registro : r)
-          : [...registros, registro];
-        const etapasAtualizadas = op.etapas.map((e, i) => {
-          if (i !== registro.ordemEtapaIndex) return e;
-          const ligados = registrosAtualizados.filter(r => r.ordemProducaoId === op.id && r.ordemEtapaIndex === i && r.status === "concluido");
-          const quantidadeConcluida = ligados.reduce((s, r) => s + (r.quantidadeBoa ?? r.quantidade ?? 0), 0);
-          return { ...e, concluida: quantidadeConcluida >= e.quantidade };
-        });
-        const todasConcluidas = etapasAtualizadas.every(e => e.concluida);
-        const opAtualizada = {
-          ...op,
-          etapas: etapasAtualizadas,
-          status: todasConcluidas ? "concluida" : "aberta",
-          concluidaEm: todasConcluidas ? new Date().toISOString() : (op.concluidaEm || null),
-        };
-        await salvarOrdemProducao(opAtualizada);
-        if (todasConcluidas && op.status !== "concluida") {
-          await darBaixaMateriaisDaOP(opAtualizada);
-        }
-      }
-    }
+  return baseMin * num(qtdBase); // 'peca': tempo por unidade × quantidade
+}
+function labelUnidadeTempo(u) {
+  return u === 'seg' ? 'seg' : u === 'hora' ? 'h' : 'min';
+}
+function labelModoTempo(etapa) {
+  if (etapa.tempoProducao === undefined || etapa.tempoProducao === null || etapa.tempoProducao === '' || num(etapa.tempoProducao) <= 0) {
+    return 'sem tempo cadastrado';
   }
-
-  // Adicionado: como a etapa não depende mais de um único registro
-  // vinculado, cancelar um registro em aberto não precisa mais tocar na
-  // OP — a quantidade em aberto dele simplesmente deixa de contar na
-  // soma assim que ele é removido, liberando aquele saldo para ser
-  // reprogramado.
-  async function removerRegistroComOrdem(id) {
-    await removerRegistro(id);
+  const lote = num(etapa.tamanhoLote);
+  if (etapa.modoTempo === 'lote') {
+    return lote > 0 ? `${etapa.tempoProducao} ${labelUnidadeTempo(etapa.unidadeTempo)} / lote de ${lote} peças` : `${etapa.tempoProducao} ${labelUnidadeTempo(etapa.unidadeTempo)} do início ao fim da OP`;
   }
-
-  // Adicionado: ao excluir uma Ordem de Produção, os registros de
-  // lançamento vinculados a ela (as atividades já iniciadas/concluídas
-  // em cada departamento) ficariam órfãos apontando para uma OP que não
-  // existe mais — em vez disso, excluir a OP também excluir todos esses
-  // registros junto. Essa exclusão é restrita a administrador (gating
-  // feito na tela, em OrdensProducao.cancelarOP).
-  async function removerOrdemComRegistros(id) {
-    const registrosDaOP = registros.filter(r => r.ordemProducaoId === id);
-    await Promise.all(registrosDaOP.map(r => removerRegistro(r.id)));
-    await removerOrdemProducao(id);
+  if (etapa.modoTempo === 'equipe') {
+    const eq = num(etapa.tamanhoEquipe) || '?';
+    return lote > 0 ? `${etapa.tempoProducao} ${labelUnidadeTempo(etapa.unidadeTempo)} / lote de ${lote} peças (equipe de ${eq})` : `${etapa.tempoProducao} ${labelUnidadeTempo(etapa.unidadeTempo)} do início ao fim da OP (equipe de ${eq})`;
   }
-
-  useEffect(() => {
-    if (!allLoaded || seedChecked) return;
-    setSeedChecked(true);
-    if (setores.length === 0) {
-      // Corrigido: o app deixou de ser uma prévia/demonstração e passou a
-      // ser usado de verdade — por isso a semente não cria mais produto,
-      // etapas, vínculos, colaborador nem histórico de produção fictícios
-      // (isso só confundia quem está configurando os dados reais da
-      // fábrica). Só os departamentos (Corte, Silk, Costura, Preparação)
-      // continuam sendo criados, por serem um ponto de partida útil de
-      // verdade — o resto (produtos, materiais, colaboradores) fica por
-      // conta do cadastro de cada confecção.
-      const TIPO_POR_SETOR_KEY = { costura: "padrao", corte: "corte", silk: "silk", preparacao: "padrao" };
-      const novosSetores = SEED_SETORES.map(s => ({ id: uid(), nome: s.nome, tipo: TIPO_POR_SETOR_KEY[s.key] || "padrao", _key: s.key }));
-      setSetores(novosSetores.map(({ _key, ...s }) => s));
-    }
-    // Adicionado: garante um colaborador Administrador por padrão sempre
-    // que não existir nenhum — independente do restante dos dados, tanto
-    // num banco totalmente vazio quanto num banco que já tinha outros
-    // dados cadastrados (ex.: publicado e usado antes desse recurso
-    // existir). Sem isso não haveria como acessar Cadastros, Compras nem
-    // os relatórios restritos depois de publicado.
-    if (!colaboradores.some(c => c.perfil === "administrador")) {
-      setColaboradores([...colaboradores, { id: uid(), nome: "Renato Monteiro", funcao: "Administrador", perfil: "administrador" }]);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [allLoaded]);
-
-  if (!allLoaded) {
-    return (
-      <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: "#f4efe2" }}>
-        <Loader2 size={26} style={{ animation: "spin 1s linear infinite", color: "#2f4a63" }} />
-        <style>{`@keyframes spin{from{transform:rotate(0)}to{transform:rotate(360deg)}}`}</style>
-      </div>
-    );
-  }
-
-  if (relatorioImpressao) {
-    return <RelatorioImpressao payload={relatorioImpressao} onFechar={() => { setRelatorioImpressao(null); setTab("producao"); }} />;
-  }
-
-  if (relatorioAbertosImpressao) {
-    return <RelatorioAbertosImpressao payload={relatorioAbertosImpressao} onFechar={() => { setRelatorioAbertosImpressao(null); setTab("relatorios"); }} />;
-  }
-
-  if (relatorioGradeImpressao) {
-    return <RelatorioGradeImpressao payload={relatorioGradeImpressao} onFechar={() => { setRelatorioGradeImpressao(null); setTab("producao"); }} />;
-  }
-
-  if (!usuarioAtual) {
-    return (
-      <LoginGate
-        colaboradores={colaboradores}
-        onEntrar={async (colaboradorId, nome, perfil) => {
-          const entrada = { id: uid(), colaboradorId: colaboradorId || null, nome, dataHora: new Date().toISOString() };
-          await salvarAcesso(entrada);
-          setUsuarioAtual({ colaboradorId, nome, perfil: perfil || "colaborador" });
-          const abasPermitidas = (PERFIS_ACESSO[perfil] || PERFIS_ACESSO.colaborador).abas;
-          if (!abasPermitidas.includes(tab)) setTab(abasPermitidas[0]);
-        }}
-      />
-    );
-  }
-
-  const ehAdministrador = perfilAtual === PERFIS_ACESSO.administrador;
-
-  return (
-    <div className="textura-tecido" style={{ minHeight: "100vh", background: "#f4efe2", fontFamily: FONT_BODY, paddingBottom: 78 }}>
-      <IdentidadeVisualGlobal />
-      <header className="costura-base" style={{ background: "linear-gradient(160deg, #1c2b39 0%, #2f4a63 100%)", color: "#fff", padding: "18px 18px 16px", display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
-        <div style={{ display: "flex", alignItems: "flex-start", gap: 10 }}>
-          <div style={{
-            width: 34, height: 34, borderRadius: 9, background: "rgba(205,185,138,0.16)",
-            border: "1px dashed rgba(205,185,138,0.55)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, marginTop: 1,
-          }}>
-            <Scissors size={17} color="#cdb98a" />
-          </div>
-          <div>
-            <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: 1.8, color: "#cdb98a", textTransform: "uppercase" }}>Chão de fábrica</div>
-            <div style={{ fontSize: 21, fontWeight: 700, marginTop: 2, fontFamily: FONT_DISPLAY }}>Controle de Produção</div>
-          </div>
-        </div>
-        <div style={{ textAlign: "right" }}>
-          <div style={{ fontSize: 12, color: "#cdb98a" }}>{usuarioAtual.nome}</div>
-          <div style={{ fontSize: 10, color: "rgba(255,255,255,0.6)", marginTop: 1 }}>{perfilAtual.label}</div>
-          <button onClick={() => setUsuarioAtual(null)} style={{ background: "transparent", border: "none", color: "#fff", fontSize: 11, textDecoration: "underline", cursor: "pointer", padding: 0, marginTop: 2 }}>trocar usuário</button>
-        </div>
-      </header>
-
-      {avisoNovaMensagem && (
-        <div
-          onClick={() => { setTab("chat"); setAvisoNovaMensagem(null); }}
-          style={{
-            position: "fixed", top: 10, left: 12, right: 12, zIndex: 20, maxWidth: 616, margin: "0 auto",
-            background: "#1c2b39", color: "#fff", borderRadius: 10, padding: "10px 14px", cursor: "pointer",
-            display: "flex", alignItems: "center", gap: 10, boxShadow: "0 6px 18px rgba(0,0,0,0.25)",
-            border: "1px dashed #cdb98a",
-          }}
-        >
-          <MessageCircle size={17} color="#cdb98a" style={{ flexShrink: 0 }} />
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontSize: 12, fontWeight: 700, color: "#cdb98a" }}>Nova mensagem de {avisoNovaMensagem.autorNome}</div>
-            <div style={{ fontSize: 12.5, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-              {avisoNovaMensagem.texto || ((avisoNovaMensagem.anexos || []).length > 0 ? "📎 anexo" : "")}
-            </div>
-          </div>
-          <button onClick={(e) => { e.stopPropagation(); setAvisoNovaMensagem(null); }} style={{ background: "transparent", border: "none", color: "#fff", cursor: "pointer", padding: 4, flexShrink: 0 }}>
-            <X size={15} />
-          </button>
-        </div>
-      )}
-
-      <main style={{ padding: 16, maxWidth: 640, margin: "0 auto" }}>
-        {tab === "producao" && perfilAtual.abas.includes("producao") && (
-          <Producao
-            setores={setores} produtos={produtos} etapas={etapas} vinculos={vinculos}
-            colaboradores={colaboradores} equipes={equipes} equipamentos={equipamentos}
-            registros={registros} onSalvarRegistro={salvarRegistroComOrdem} onRemoverRegistro={removerRegistroComOrdem}
-            ordensProducao={ordensProducao} onSalvarOrdem={salvarOrdemProducao} onRemoverOrdem={removerOrdemComRegistros}
-            clientes={clientes} onImprimirGrade={setRelatorioGradeImpressao} feriados={feriados}
-            podeAutorizarCargaExtra={usuarioAtual.perfil === "administrador" || usuarioAtual.perfil === "gestor"}
-            consumosMaterial={consumosMaterial} materiais={materiais} ehAdministrador={ehAdministrador}
-          />
-        )}
-        {tab === "arte" && perfilAtual.abas.includes("arte") && (
-          <Criacao
-            solicitacoes={solicitacoesArte} onSalvarSolicitacao={salvarSolicitacaoArte} onRemoverSolicitacao={removerSolicitacaoArte}
-            produtos={produtos} setProdutos={setProdutos}
-            clientes={clientes} setClientes={setClientes}
-            onImprimirGrade={setRelatorioGradeImpressao}
-          />
-        )}
-        {tab === "avaliacao" && perfilAtual.abas.includes("avaliacao") && (
-          <Avaliacao colaboradores={colaboradores} avaliacoes={avaliacoes} onSalvarAvaliacao={salvarAvaliacao} onRemoverAvaliacao={removerAvaliacao} />
-        )}
-        {tab === "consumo" && perfilAtual.abas.includes("consumo") && (
-          <ConsumoProdutos
-            materiais={materiais} setMateriais={setMateriais} produtos={produtos} consumosMaterial={consumosMaterial}
-            movimentacoesMaterial={movimentacoesMaterial}
-            movimentacoesEstoque={movimentacoesEstoque} onSalvarMovimentacaoEstoque={salvarMovimentacaoEstoque}
-            solicitacoesCompra={solicitacoesCompra} onSalvarSolicitacaoCompra={salvarSolicitacaoCompra} onRemoverSolicitacaoCompra={removerSolicitacaoCompra}
-            cotacoesCompra={cotacoesCompra} onSalvarCotacaoCompra={salvarCotacaoCompra} onRemoverCotacaoCompra={removerCotacaoCompra}
-            fornecedores={fornecedores} setFornecedores={setFornecedores} ehAdministrador={ehAdministrador}
-          />
-        )}
-        {tab === "relatorios" && perfilAtual.abas.includes("relatorios") && (
-          <Relatorios
-            registros={registros} produtos={produtos} etapas={etapas} colaboradores={colaboradores} setores={setores}
-            avaliacoes={avaliacoes} onGerarRelatorio={setRelatorioImpressao} onGerarRelatorioAbertos={setRelatorioAbertosImpressao}
-            movimentacoesMaterial={movimentacoesMaterial} movimentacoesEstoque={movimentacoesEstoque}
-            materiais={materiais} solicitacoesCompra={solicitacoesCompra} cotacoesCompra={cotacoesCompra}
-            ehAdministrador={ehAdministrador} ordensProducao={ordensProducao} consumosMaterial={consumosMaterial}
-            onImprimirGrade={setRelatorioGradeImpressao}
-          />
-        )}
-        {tab === "cadastros" && perfilAtual.abas.includes("cadastros") && (
-          <Cadastros
-            produtos={produtos} setProdutos={setProdutos}
-            etapas={etapas} setEtapas={setEtapas}
-            vinculos={vinculos} setVinculos={setVinculos}
-            colaboradores={colaboradores} setColaboradores={setColaboradores}
-            setores={setores} setSetores={setSetores}
-            equipes={equipes} setEquipes={setEquipes}
-            anexos={anexos} onSalvarAnexos={salvarAnexos} onRemoverAnexo={removerAnexo}
-            acessos={acessos}
-            clientes={clientes} setClientes={setClientes}
-            materiais={materiais} setMateriais={setMateriais}
-            consumosMaterial={consumosMaterial} setConsumosMaterial={setConsumosMaterial}
-            fornecedores={fornecedores} setFornecedores={setFornecedores}
-            equipamentos={equipamentos} setEquipamentos={setEquipamentos}
-            solicitacoesCompra={solicitacoesCompra} cotacoesCompra={cotacoesCompra}
-            feriados={feriados} setFeriados={setFeriados}
-            gruposProduto={gruposProduto} setGruposProduto={setGruposProduto}
-            gruposMaterial={gruposMaterial} setGruposMaterial={setGruposMaterial}
-            tamanhos={tamanhos} setTamanhos={setTamanhos}
-            ehAdministrador={ehAdministrador}
-          />
-        )}
-        {tab === "chat" && perfilAtual.abas.includes("chat") && (
-          <ChatInterno usuarioAtual={usuarioAtual} ehAdministrador={ehAdministrador} colaboradores={colaboradores} />
-        )}
-      </main>
-
-      <nav style={{
-        position: "fixed", bottom: 0, left: 0, right: 0, background: "#fffdf7",
-        borderTop: "1px dashed #cdb98a", display: "flex", padding: "6px 8px calc(env(safe-area-inset-bottom,0px) + 6px)",
-        boxShadow: "0 -2px 10px rgba(28,43,57,0.06)",
-      }}>
-        {[
-          { key: "producao", label: "Produção", icon: Clock },
-          { key: "arte", label: "Criação", icon: Palette },
-          { key: "avaliacao", label: "Avaliação", icon: Users },
-          { key: "consumo", label: "Materiais", icon: Package },
-          { key: "chat", label: "Chat", icon: MessageCircle, badge: mensagensNaoLidas },
-          { key: "relatorios", label: "Relatórios", icon: BarChart3 },
-          { key: "cadastros", label: "Cadastros", icon: ClipboardList },
-        ].filter(({ key }) => perfilAtual.abas.includes(key)).map(({ key, label, icon: Icon, badge }) => (
-          <button key={key} onClick={() => setTab(key)} style={{
-            flex: 1, background: "transparent", border: "none", cursor: "pointer",
-            display: "flex", flexDirection: "column", alignItems: "center", gap: 3,
-            padding: "6px 4px", color: tab === key ? "#2f4a63" : "#a3937a",
-          }}>
-            <span style={{
-              position: "relative", display: "flex", alignItems: "center", justifyContent: "center", width: 40, height: 26, borderRadius: 7,
-              background: tab === key ? "#f4ecd8" : "transparent",
-              border: tab === key ? "1px dashed #cdb98a" : "1px solid transparent",
-            }}>
-              <Icon size={19} strokeWidth={tab === key ? 2.4 : 2} />
-              {badge > 0 && (
-                <span style={{
-                  position: "absolute", top: -4, right: -2, minWidth: 15, height: 15, padding: "0 3px", borderRadius: 999,
-                  background: "#b13232", color: "#fff", fontSize: 9.5, fontWeight: 800, lineHeight: "15px", textAlign: "center",
-                  border: "1.5px solid #fffdf7",
-                }}>{badge > 9 ? "9+" : badge}</span>
-              )}
-            </span>
-            <span style={{ fontSize: 10.5, fontWeight: tab === key ? 700 : 500 }}>{label}</span>
-          </button>
-        ))}
-      </nav>
-    </div>
-  );
+  return `${etapa.tempoProducao} ${labelUnidadeTempo(etapa.unidadeTempo)} / peça`;
 }
 
-// ---------- Produção (iniciar, acompanhar em aberto, concluir) ----------
-// ---------- Portão de identificação (log de acesso) ----------
-function LoginGate({ colaboradores, onEntrar }) {
-  const [colaboradorId, setColaboradorId] = useState("");
-  const [nomeLivre, setNomeLivre] = useState("");
-  // Corrigido: antes desse controle de perfil existir, qualquer pessoa que
-  // digitasse o nome via "acesso" no login e via tudo no app. Deixar
-  // "Colaborador" como padrão aqui quebrava esse fluxo silenciosamente
-  // (a pessoa digitava o nome, apertava Entrar, e via só a aba Produção
-  // sem entender por quê). Agora o padrão é Administrador — continua
-  // funcionando como antes — e a restrição só se aplica quando alguém
-  // escolhe deliberadamente "Colaborador" aqui, ou quando entra por um
-  // cadastro de colaborador que tenha esse perfil definido.
-  const [perfilLivre, setPerfilLivre] = useState("administrador");
-  const [senhaDigitada, setSenhaDigitada] = useState("");
-  const [erroSenha, setErroSenha] = useState(false);
-  // Adicionado: opção de fixar um atalho do sistema na área de trabalho
-  // (ou tela inicial, no celular) direto pela tela de login, antes de
-  // escolher usuário/senha. Quando o navegador suporta a instalação
-  // automática (Chrome/Edge/Android), um clique já resolve; nos demais
-  // (Safari/iOS, Firefox), mostramos o passo a passo manual.
-  const [podeInstalar, setPodeInstalar] = useState(!!window.__deferredInstallPrompt);
-  const [jaInstalado] = useState(() => window.matchMedia?.("(display-mode: standalone)").matches || window.navigator.standalone === true);
-  const [mostrarInstrucoesAtalho, setMostrarInstrucoesAtalho] = useState(false);
-  useEffect(() => {
-    function atualizar() { setPodeInstalar(!!window.__deferredInstallPrompt); }
-    window.addEventListener("pwa-install-available", atualizar);
-    return () => window.removeEventListener("pwa-install-available", atualizar);
-  }, []);
-  async function fixarAtalho() {
-    const evento = window.__deferredInstallPrompt;
-    if (!evento) { setMostrarInstrucoesAtalho(v => !v); return; }
-    evento.prompt();
-    await evento.userChoice;
-    window.__deferredInstallPrompt = null;
-    setPodeInstalar(false);
+/* --- custo de mão de obra baseado na média salarial dos colaboradores de cada departamento --- */
+function mediaSalarialDepartamento(db, departamentoId) {
+  const grupo = db.colaboradores.filter(c => c.departamentoId === departamentoId && c.status !== 'Inativo' && num(c.salario) > 0);
+  if (grupo.length === 0) return null;
+  const soma = grupo.reduce((s, c) => s + num(c.salario), 0);
+  return soma / grupo.length;
+}
+function custoPorMinutoDepartamento(db, departamentoId) {
+  const media = mediaSalarialDepartamento(db, departamentoId);
+  if (media === null) return null;
+  return media / HORAS_MES_PADRAO / 60;
+}
+// custo de mão de obra por peça de uma etapa cadastrada — só é um valor fixo no modo "por peça";
+// nos modos "lote"/"equipe" o tempo por peça depende da quantidade de cada OP, então retorna null (variável)
+/* Custo de mão de obra diluído por peça.
+   - modo "peça": tempo da peça × custo/min
+   - modo "lote": (tempo do lote ÷ peças do lote) × custo/min
+   - modo "equipe": idem, multiplicado pelo nº de pessoas que trabalham no ciclo */
+function custoMaoDeObraPorPeca(etapaDef, db) {
+  if (!etapaDef) return null;
+  // por lote/equipe só é fixo por peça quando a quantidade do lote está informada
+  if (etapaDef.modoTempo !== 'peca' && !(num(etapaDef.tamanhoLote) > 0)) return null;
+  const custoMin = custoPorMinutoDepartamento(db, etapaDef.departamentoId);
+  if (custoMin === null) return null;
+  const minutosPorPeca = cargaEtapaMinutos(etapaDef, 1, 1); // já diluído pelo tamanho do lote
+  const pessoas = etapaDef.modoTempo === 'equipe' ? Math.max(num(etapaDef.tamanhoEquipe), 1) : 1;
+  return custoMin * minutosPorPeca * pessoas;
+}
+const emptyDb = () => ({
+  materiais: [],
+  produtos: [],
+  pedidos: [],
+  ops: [],
+  compras: [],
+  movimentacoes: [],
+  departamentos: [],
+  etapasProducao: [],
+  aprovacoesCarga: [],
+  colaboradores: [],
+  clientes: [],
+  fornecedores: [],
+  equipamentos: [],
+  logs: [],
+  mensagens: [],
+  apontamentos: [],
+  permissoes: null,
+  categoriasMaterial: [],
+  categoriasProduto: [],
+  gruposProduto: [],
+  subgruposProduto: [],
+  orcamentos: [],
+  seq: {
+    pedido: 100,
+    op: 100,
+    compra: 100,
+    orcamento: 100
   }
-  // Adicionado: no celular o atalho vai para a "tela inicial", não para
-  // uma "área de trabalho" — o rótulo e o ícone do botão se adaptam ao
-  // aparelho pra fazer sentido em cada um.
-  const noCelular = /android|iphone|ipad|ipod/i.test(navigator.userAgent || "");
-  const instrucoesAtalho = (() => {
-    const ua = navigator.userAgent || "";
-    if (/iphone|ipad|ipod/i.test(ua)) return "No Safari, toque no ícone de compartilhar (□↑) e depois em \"Adicionar à Tela de Início\".";
-    if (/android/i.test(ua)) return "Toque no menu (⋮) do navegador e depois em \"Adicionar à tela inicial\" ou \"Instalar app\".";
-    return "Clique no ícone de instalação (⊕) na barra de endereço do navegador, ou abra o menu (⋮) → \"Instalar Controle de Produção\".";
-  })();
-  const usandoNomeLivre = !colaboradorId;
-  const colaboradorSelecionado = colaboradorId ? colaboradores.find(x => x.id === colaboradorId) : null;
-  const precisaSenha = !!(colaboradorSelecionado && colaboradorSelecionado.senha);
+});
 
-  function entrar() {
-    if (colaboradorId) {
-      if (precisaSenha && senhaDigitada !== colaboradorSelecionado.senha) {
-        setErroSenha(true);
+/* --- geração de código sequencial por categoria/grupo --- */
+function proximoSequencial(lista, prefixo) {
+  const usados = lista.map(x => String(x.codigo || '')).filter(c => c.startsWith(prefixo + '-')).map(c => parseInt(c.slice(prefixo.length + 1), 10)).filter(n => !isNaN(n));
+  const max = usados.length ? Math.max(...usados) : 0;
+  return `${prefixo}-${String(max + 1).padStart(4, '0')}`;
+}
+const PERFIS = ['Administrador', 'Gestor', 'Colaborador'];
+// permissões por perfil
+/* Áreas do sistema — usadas na tela de Perfis de acesso */
+const ABAS_SISTEMA = [{
+  id: 'painel',
+  label: 'Painel'
+}, {
+  id: 'pessoas',
+  label: 'Cadastros'
+}, {
+  id: 'estrutura',
+  label: 'Departamentos'
+}, {
+  id: 'vendas',
+  label: 'Pedidos'
+}, {
+  id: 'producao',
+  label: 'Produção'
+}, {
+  id: 'relatorios',
+  label: 'Relatórios'
+}, {
+  id: 'chat',
+  label: 'Chat interno'
+}];
+const ACOES_SISTEMA = [{
+  id: 'cadastros',
+  label: 'Criar e editar cadastros',
+  ajuda: 'clientes, fornecedores, materiais, produtos, equipamentos'
+}, {
+  id: 'producao',
+  label: 'Lançar produção',
+  ajuda: 'iniciar e concluir etapas nas OPs'
+}, {
+  id: 'pessoas',
+  label: 'Gerenciar colaboradores',
+  ajuda: 'cadastrar, editar e excluir pessoas'
+}, {
+  id: 'financeiro',
+  label: 'Ver valores financeiros',
+  ajuda: 'salários, custos, preços e margens'
+}, {
+  id: 'admin',
+  label: 'Administrar o sistema',
+  ajuda: 'perfis de acesso, exclusões críticas e backup'
+}];
+
+/* Permissões padrão de cada perfil. Podem ser alteradas em Cadastros → Perfis de acesso. */
+const PERM_PADRAO = {
+  'Administrador': {
+    abas: ['painel', 'pessoas', 'estrutura', 'vendas', 'producao', 'relatorios', 'chat'],
+    acoes: {
+      cadastros: true,
+      producao: true,
+      pessoas: true,
+      financeiro: true,
+      admin: true
+    }
+  },
+  'Gestor': {
+    abas: ['painel', 'pessoas', 'estrutura', 'vendas', 'producao', 'relatorios', 'chat'],
+    acoes: {
+      cadastros: true,
+      producao: true,
+      pessoas: false,
+      financeiro: false,
+      admin: false
+    }
+  },
+  'Colaborador': {
+    abas: ['producao', 'chat'],
+    acoes: {
+      cadastros: false,
+      producao: true,
+      pessoas: false,
+      financeiro: false,
+      admin: false
+    }
+  }
+};
+const PERM = {
+  'Administrador': {
+    ...PERM_PADRAO['Administrador'],
+    financeiro: true,
+    pessoas: true
+  },
+  'Gestor': {
+    ...PERM_PADRAO['Gestor'],
+    financeiro: false,
+    pessoas: false
+  },
+  'Colaborador': {
+    ...PERM_PADRAO['Colaborador'],
+    financeiro: false,
+    pessoas: false
+  }
+};
+
+/* Resolve as permissões efetivas: padrão do perfil → configuração salva → exceção do colaborador. */
+function resolverPermissoes(colab, db) {
+  const perfil = colab && colab.perfil || 'Colaborador';
+  const base = db && db.permissoes && db.permissoes[perfil] || PERM_PADRAO[perfil] || PERM_PADRAO['Colaborador'];
+  const excecao = colab && colab.permissoes || null; // exceção individual
+  const abas = excecao && Array.isArray(excecao.abas) ? excecao.abas : base.abas || [];
+  const acoes = {
+    ...(base.acoes || {}),
+    ...(excecao && excecao.acoes || {})
+  };
+  return {
+    abas,
+    acoes,
+    financeiro: !!acoes.financeiro,
+    pessoas: !!acoes.pessoas,
+    perfil
+  };
+}
+/* --- validação de duplicidade de cadastro --- */
+function normaliza(v) {
+  return String(v || '').trim().toLowerCase().replace(/[.\-\/\s]/g, '');
+}
+// campos: [{key:'nome', label:'Nome', soDigitos:false}, ...]
+// retorna mensagem de erro se encontrar duplicado, ou null
+function checarDuplicidade(lista, registro, campos) {
+  for (const campo of campos) {
+    const valor = normaliza(registro[campo.key]);
+    if (!valor) continue; // campo vazio não bloqueia
+    const conflito = lista.find(item => item.id !== registro.id && normaliza(item[campo.key]) === valor);
+    if (conflito) {
+      return `Já existe um cadastro com o mesmo ${campo.label}: "${conflito.nome || conflito[campo.key]}". Não é permitido cadastro duplicado.`;
+    }
+  }
+  return null;
+}
+function permDe(usuario) {
+  if (usuario && usuario._perm) return usuario._perm; // resolvidas no login
+  return usuario && PERM[usuario.perfil] || PERM['Colaborador'];
+}
+
+/* Autorização aplicada na ação, não só na tela.
+   area: 'pessoas' | 'financeiro' | 'cadastros' | 'producao' | 'admin' */
+function podeExecutar(usuario, area) {
+  const perm = permDe(usuario);
+  if (perm && perm.acoes && Object.prototype.hasOwnProperty.call(perm.acoes, area)) return !!perm.acoes[area];
+  // segurança: se a área não foi configurada, só administrador passa
+  return (usuario && usuario.perfil) === 'Administrador';
+}
+// usada dentro das funções de salvar/excluir; bloqueia e registra a tentativa
+function exigirPermissao(usuario, area, update, oQue) {
+  if (podeExecutar(usuario, area)) return true;
+  alert(`Seu perfil (${usuario && usuario.perfil || 'Colaborador'}) não tem permissão para ${oQue}.`);
+  if (update) update(d => {
+    registrarLog(d, usuario, 'Ação bloqueada por permissão', oQue);
+    return d;
+  });
+  return false;
+}
+function agoraISO() {
+  const d = new Date();
+  const p = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+// registra uma entrada no log; recebe o objeto db já em modo de escrita
+function registrarLog(d, usuario, acao, detalhe) {
+  if (!d.logs) d.logs = [];
+  d.logs.push({
+    id: uid(),
+    quando: agoraISO(),
+    data: todayISO(),
+    quem: usuario ? usuario.nome : 'Sistema',
+    perfil: usuario ? usuario.perfil : '—',
+    acao,
+    detalhe: detalhe || ''
+  });
+  if (d.logs.length > 500) d.logs = d.logs.slice(-500);
+}
+
+/* ---------------- persistence ---------------- */
+/* ==========================================================
+   SEGURANÇA — senhas com hash, primeiro acesso e sessão
+   Nenhuma senha fica no código nem é gravada em texto puro.
+========================================================== */
+const ADMIN_PADRAO_NOME = 'Administrador';
+const SESSAO_INATIVIDADE_MIN = 30; // desconecta após 30 min sem uso
+const MAX_TENTATIVAS = 5; // bloqueio temporário após 5 erros
+const BLOQUEIO_MIN = 10;
+function gerarSalt() {
+  const a = new Uint8Array(16);
+  (window.crypto || window.msCrypto).getRandomValues(a);
+  return Array.from(a).map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+/* Hash SHA-256 com salt. Sem crypto.subtle (contexto não seguro),
+   cai para um hash local — mais fraco, mas ainda não guarda texto puro. */
+async function hashSenha(senha, salt) {
+  const dado = salt + '::' + senha;
+  try {
+    if (window.crypto && window.crypto.subtle) {
+      const buf = await window.crypto.subtle.digest('SHA-256', new TextEncoder().encode(dado));
+      return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('');
+    }
+  } catch (e) {/* segue para o alternativo */}
+  let h1 = 0x811c9dc5,
+    h2 = 0x01000193;
+  for (let i = 0; i < dado.length; i++) {
+    h1 = (h1 ^ dado.charCodeAt(i)) * 16777619 >>> 0;
+    h2 = (h2 + dado.charCodeAt(i) * (i + 7)) * 2654435761 >>> 0;
+  }
+  return 'fb' + h1.toString(16).padStart(8, '0') + h2.toString(16).padStart(8, '0');
+}
+async function definirSenha(colab, senha) {
+  const salt = gerarSalt();
+  const hash = await hashSenha(senha, salt);
+  return {
+    ...colab,
+    senhaSalt: salt,
+    senhaHash: hash,
+    senha: undefined,
+    precisaTrocarSenha: false,
+    senhaDefinidaEm: agoraISO()
+  };
+}
+
+/* Confere a senha. Cadastros antigos guardavam texto puro: nesse caso
+   valida uma única vez e sinaliza para migrar para hash. */
+async function conferirSenha(colab, senha) {
+  if (colab.senhaHash && colab.senhaSalt) {
+    const h = await hashSenha(senha, colab.senhaSalt);
+    return {
+      ok: h === colab.senhaHash,
+      migrar: false
+    };
+  }
+  if (colab.senha && String(colab.senha).length > 0) {
+    return {
+      ok: String(colab.senha) === senha,
+      migrar: true
+    }; // legado
+  }
+  return {
+    ok: false,
+    semSenha: true
+  };
+}
+function temSenhaDefinida(c) {
+  return !!(c.senhaHash && c.senhaSalt || c.senha && String(c.senha).length > 0);
+}
+function forcaSenha(s) {
+  const t = String(s || '');
+  if (t.length < 6) return {
+    ok: false,
+    msg: 'A senha precisa ter ao menos 6 caracteres.'
+  };
+  if (!/[A-Za-z]/.test(t) || !/[0-9]/.test(t)) return {
+    ok: false,
+    msg: 'Use ao menos uma letra e um número.'
+  };
+  return {
+    ok: true,
+    msg: 'Senha válida.'
+  };
+}
+
+/* Garante que sempre exista UM administrador para não travar o acesso.
+   Se não houver nenhum, cria um sem senha — que será definida no primeiro acesso.
+   Nunca sobrescreve a senha de um administrador existente. */
+function garantirAdminPadrao(db) {
+  const temAdmin = db.colaboradores.some(c => c.perfil === 'Administrador' && c.status !== 'Inativo');
+  if (temAdmin) return db;
+  const legado = db.colaboradores.find(c => (c.nome || '').trim().toLowerCase() === 'renato monteiro');
+  if (legado) {
+    legado.perfil = 'Administrador';
+    legado.status = 'Ativo';
+    if (!temSenhaDefinida(legado)) legado.precisaTrocarSenha = true;
+    return db;
+  }
+  db.colaboradores.unshift({
+    id: uid(),
+    nome: ADMIN_PADRAO_NOME,
+    cpf: '',
+    rg: '',
+    dataNascimento: '',
+    telefone: '',
+    celular: '',
+    email: '',
+    cargo: '',
+    funcoes: ['Administrador do sistema'],
+    departamentoId: '',
+    dataAdmissao: todayISO(),
+    salario: 0,
+    status: 'Ativo',
+    perfil: 'Administrador',
+    precisaTrocarSenha: true,
+    cep: '',
+    endereco: '',
+    numero: '',
+    complemento: '',
+    bairro: '',
+    cidade: '',
+    uf: '',
+    observacoes: ''
+  });
+  return db;
+}
+const LIMITE_ANEXO_BYTES = 400 * 1024;
+
+/* ==========================================================
+   PERSISTÊNCIA — um registro por chave (não mais um blob único)
+   ----------------------------------------------------------
+   O window.storage aqui é sempre o Supabase (instalado por
+   storage.js antes deste app montar — se a conexão falhar, o app
+   nem chega a subir). Cada item de cada coleção vira uma linha
+   própria na tabela app_storage, na chave `<colecao>:<id>`, do
+   mesmo jeito que o resto do sistema já faz. Isso elimina o teto
+   de tamanho de um blob único: cada registro é independente.
+========================================================== */
+const COLECOES_ARRAY = ['materiais', 'produtos', 'pedidos', 'ops', 'compras', 'movimentacoes', 'departamentos', 'etapasProducao', 'aprovacoesCarga', 'colaboradores', 'clientes', 'fornecedores', 'equipamentos', 'logs', 'mensagens', 'apontamentos', 'categoriasMaterial', 'categoriasProduto', 'gruposProduto', 'subgruposProduto', 'orcamentos'];
+const CAMPOS_UNICOS = ['permissoes', 'seq'];
+const PREFIXO = 'confeccao-erp';
+
+function tamanhoBase(db) {
+  try {
+    return JSON.stringify(db).length;
+  } catch (e) {
+    return 0;
+  }
+}
+
+async function loadDb() {
+  const base = emptyDb();
+  try {
+    await Promise.all(COLECOES_ARRAY.map(async (colecao) => {
+      const { keys } = await window.storage.list(`${PREFIXO}:${colecao}:`);
+      const itens = await Promise.all((keys || []).map(async (chave) => {
+        try {
+          const r = await window.storage.get(chave);
+          return r && r.value ? JSON.parse(r.value) : null;
+        } catch (e) {
+          return null;
+        }
+      }));
+      base[colecao] = itens.filter(Boolean);
+    }));
+    await Promise.all(CAMPOS_UNICOS.map(async (campo) => {
+      try {
+        const r = await window.storage.get(`${PREFIXO}:${campo}`);
+        if (r && r.value) base[campo] = JSON.parse(r.value);
+      } catch (e) {/* mantém o padrão de emptyDb() */}
+    }));
+  } catch (e) {/* base parcialmente carregada — segue com o que veio */}
+  return garantirAdminPadrao(base);
+}
+
+async function persistDb(next, prev) {
+  const anterior = prev || emptyDb();
+  const falhas = [];
+  await Promise.all(COLECOES_ARRAY.map(async (colecao) => {
+    const antigos = new Map((anterior[colecao] || []).map(it => [it.id, it]));
+    const novos = new Map((next[colecao] || []).map(it => [it.id, it]));
+    const tarefas = [];
+    for (const [id, item] of novos) {
+      const anteriorItem = antigos.get(id);
+      if (!anteriorItem || JSON.stringify(anteriorItem) !== JSON.stringify(item)) {
+        tarefas.push(window.storage.set(`${PREFIXO}:${colecao}:${id}`, JSON.stringify(item)));
+      }
+    }
+    for (const id of antigos.keys()) {
+      if (!novos.has(id)) tarefas.push(window.storage.delete(`${PREFIXO}:${colecao}:${id}`));
+    }
+    if (tarefas.length) {
+      try {
+        await Promise.all(tarefas);
+      } catch (e) {
+        falhas.push(colecao);
+      }
+    }
+  }));
+  await Promise.all(CAMPOS_UNICOS.map(async (campo) => {
+    if (JSON.stringify(anterior[campo]) !== JSON.stringify(next[campo])) {
+      try {
+        await window.storage.set(`${PREFIXO}:${campo}`, JSON.stringify(next[campo]));
+      } catch (e) {
+        falhas.push(campo);
+      }
+    }
+  }));
+  if (falhas.length) {
+    return `Não foi possível salvar: ${falhas.join(', ')}. Verifique a conexão e tente novamente.`;
+  }
+  return null;
+}
+
+function rotuloArmazenamento() {
+  return { texto: 'Salvo no banco de dados compartilhado', tone: 'ok' };
+}
+
+/* ---------------- small UI atoms ---------------- */
+function Field({
+  label,
+  children
+}) {
+  return /*#__PURE__*/React.createElement("div", {
+    className: "field"
+  }, /*#__PURE__*/React.createElement("label", null, label), children);
+}
+function Badge({
+  tone,
+  children
+}) {
+  return /*#__PURE__*/React.createElement("span", {
+    className: "badge " + tone
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "dot"
+  }), children);
+}
+function Modal({
+  title,
+  onClose,
+  children,
+  wide
+}) {
+  return /*#__PURE__*/React.createElement("div", {
+    className: "modal-backdrop",
+    onMouseDown: e => {
+      if (e.target === e.currentTarget) onClose();
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "modal",
+    style: wide ? {
+      maxWidth: 820
+    } : {}
+  }, /*#__PURE__*/React.createElement("h3", null, title), children));
+}
+function Empty({
+  text
+}) {
+  return /*#__PURE__*/React.createElement("div", {
+    className: "empty"
+  }, text);
+}
+
+/* ==========================================================
+   APP
+========================================================== */
+function App() {
+  const [db, setDb] = useState(null);
+  const [tab, setTab] = useState('painel');
+  const [ready, setReady] = useState(false);
+  const [usuario, setUsuario] = useState(null);
+  const [erroSalvar, setErroSalvar] = useState(null);
+  const [trocarSenha, setTrocarSenha] = useState(false);
+  const [ultimaAtividade, setUltimaAtividade] = useState(Date.now());
+
+  // controle de sessão: encerra após inatividade
+  useEffect(() => {
+    if (!usuario) return;
+    const marcar = () => setUltimaAtividade(Date.now());
+    ['click', 'keydown', 'mousemove', 'touchstart'].forEach(ev => window.addEventListener(ev, marcar));
+    const timer = setInterval(() => {
+      if (Date.now() - ultimaAtividade > SESSAO_INATIVIDADE_MIN * 60000) {
+        setUsuario(null);
+        alert(`Sessão encerrada após ${SESSAO_INATIVIDADE_MIN} minutos sem uso. Entre novamente.`);
+      }
+    }, 30000);
+    return () => {
+      ['click', 'keydown', 'mousemove', 'touchstart'].forEach(ev => window.removeEventListener(ev, marcar));
+      clearInterval(timer);
+    };
+  }, [usuario, ultimaAtividade]);
+  useEffect(() => {
+    loadDb().then(d => {
+      setDb(d);
+      setReady(true);
+    });
+  }, []);
+  const update = useCallback(mutator => {
+    setDb(prev => {
+      const next = mutator(JSON.parse(JSON.stringify(prev)));
+      persistDb(next, prev).then(erro => setErroSalvar(erro));
+      return next;
+    });
+  }, []);
+  if (!ready || !db) {
+    return /*#__PURE__*/React.createElement("div", {
+      style: {
+        padding: 60,
+        fontFamily: 'var(--mono)',
+        color: '#8a8577'
+      }
+    }, "Carregando ERP…");
+  }
+
+  // acesso sempre autenticado — não há mais entrada livre
+  if (!usuario) {
+    return /*#__PURE__*/React.createElement(Login, {
+      db: db,
+      update: update,
+      onEntrar: u => {
+        setUsuario(u);
+        setUltimaAtividade(Date.now());
+        setTab(permDe(u).abas[0]);
+      }
+    });
+  }
+  const usuarioAtual = db.colaboradores.find(c => c.id === usuario.id) || usuario;
+  // usuário desativado durante a sessão perde o acesso na hora
+  if (usuarioAtual.status === 'Inativo') {
+    setTimeout(() => setUsuario(null), 0);
+    return /*#__PURE__*/React.createElement("div", {
+      style: {
+        padding: 60,
+        fontFamily: 'var(--mono)'
+      }
+    }, "Acesso revogado. Recarregando…");
+  }
+  const perm = permDe(usuarioAtual);
+  const NAV_TODOS = [{
+    id: 'painel',
+    n: '1',
+    label: 'Painel'
+  }, {
+    id: 'pessoas',
+    n: '2',
+    label: 'Cadastros'
+  }, {
+    id: 'estrutura',
+    n: '3',
+    label: 'Departamentos'
+  }, {
+    id: 'vendas',
+    n: '4',
+    label: 'Pedidos'
+  }, {
+    id: 'producao',
+    n: '5',
+    label: 'Produção'
+  }, {
+    id: 'relatorios',
+    n: '6',
+    label: 'Relatórios'
+  }, {
+    id: 'chat',
+    n: '7',
+    label: 'Chat interno'
+  }];
+  const NAV = NAV_TODOS.filter(n => perm.abas.includes(n.id));
+  const tabAtual = perm.abas.includes(tab) ? tab : perm.abas[0];
+  const curLabel = (NAV.find(n => n.id === tabAtual) || {}).label || '';
+  function sair() {
+    if (!confirm('Sair do sistema?')) return;
+    update(d => {
+      registrarLog(d, usuarioAtual, 'Saiu do sistema', '');
+      return d;
+    });
+    setUsuario(null);
+  }
+  return /*#__PURE__*/React.createElement("div", {
+    className: "app"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "sidebar"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "brand"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "tag"
+  }, "Sistema Interno"), /*#__PURE__*/React.createElement("h1", null, "Confecção ERP")), /*#__PURE__*/React.createElement("div", {
+    className: "nav"
+  }, NAV.map(item => /*#__PURE__*/React.createElement("button", {
+    key: item.id,
+    className: tabAtual === item.id ? 'active' : '',
+    onClick: () => setTab(item.id)
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "num"
+  }, item.n), item.label))), /*#__PURE__*/React.createElement("div", {
+    className: "sidebar-foot"
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      color: '#EDEAE4',
+      fontFamily: 'var(--body)',
+      fontSize: 12,
+      fontWeight: 600
+    }
+  }, usuarioAtual.nome), /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginBottom: 8
+    }
+  }, usuarioAtual.perfil), /*#__PURE__*/React.createElement("div", {
+    className: "row-actions"
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "btn ghost sm",
+    style: {
+      color: '#EDEAE4',
+      borderColor: 'rgba(255,255,255,0.25)'
+    },
+    onClick: () => setTrocarSenha(true)
+  }, "Senha"), /*#__PURE__*/React.createElement("button", {
+    className: "btn ghost sm",
+    style: {
+      color: '#EDEAE4',
+      borderColor: 'rgba(255,255,255,0.25)'
+    },
+    onClick: sair
+  }, "Sair")))), /*#__PURE__*/React.createElement("div", {
+    className: "mobile-header"
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    className: "tag"
+  }, "Confecção ERP · ", usuarioAtual.perfil), /*#__PURE__*/React.createElement("div", {
+    className: "cur"
+  }, curLabel)), usuario && /*#__PURE__*/React.createElement("button", {
+    className: "btn ghost sm",
+    style: {
+      color: '#EDEAE4',
+      borderColor: 'rgba(255,255,255,0.25)'
+    },
+    onClick: sair
+  }, "Sair")), /*#__PURE__*/React.createElement("div", {
+    className: "main"
+  }, erroSalvar && /*#__PURE__*/React.createElement("div", {
+    className: "panel",
+    style: {
+      borderColor: 'var(--bad)',
+      background: 'var(--bad-bg)'
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 10
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "small",
+    style: {
+      color: 'var(--bad)',
+      fontWeight: 600,
+      flex: 1
+    }
+  }, "⚠ ", erroSalvar), /*#__PURE__*/React.createElement("button", {
+    className: "btn ghost sm",
+    onClick: () => setErroSalvar(null)
+  }, "Dispensar"))), tabAtual === 'painel' && /*#__PURE__*/React.createElement(Painel, {
+    db: db,
+    update: update,
+    setTab: setTab
+  }), tabAtual === 'pessoas' && /*#__PURE__*/React.createElement(GrupoCadastros, {
+    db: db,
+    update: update,
+    usuario: usuarioAtual,
+    perm: perm
+  }), tabAtual === 'estrutura' && /*#__PURE__*/React.createElement(GrupoEstrutura, {
+    db: db,
+    update: update,
+    perm: perm
+  }), tabAtual === 'vendas' && /*#__PURE__*/React.createElement(GrupoVendas, {
+    db: db,
+    update: update,
+    setTab: setTab
+  }), tabAtual === 'producao' && /*#__PURE__*/React.createElement(GrupoProducao, {
+    db: db,
+    update: update,
+    usuario: usuarioAtual
+  }), tabAtual === 'relatorios' && /*#__PURE__*/React.createElement(GrupoRelatorios, {
+    db: db,
+    perm: perm
+  }), tabAtual === 'chat' && /*#__PURE__*/React.createElement(ChatInterno, {
+    db: db,
+    update: update,
+    usuario: usuarioAtual
+  })), trocarSenha && /*#__PURE__*/React.createElement(TrocarSenhaModal, {
+    usuario: usuarioAtual,
+    update: update,
+    onClose: () => setTrocarSenha(false)
+  }), /*#__PURE__*/React.createElement("div", {
+    className: "bottom-nav"
+  }, NAV.map(item => /*#__PURE__*/React.createElement("button", {
+    key: item.id,
+    className: tabAtual === item.id ? 'active' : '',
+    onClick: () => setTab(item.id)
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "num"
+  }, item.n), item.label.split(' ')[0]))));
+}
+function TrocarSenhaModal({
+  usuario,
+  update,
+  onClose
+}) {
+  const [atual, setAtual] = useState('');
+  const [nova1, setNova1] = useState('');
+  const [nova2, setNova2] = useState('');
+  const [erro, setErro] = useState('');
+  const [ok, setOk] = useState(false);
+  const [ocupado, setOcupado] = useState(false);
+  async function salvar() {
+    setErro('');
+    if (temSenhaDefinida(usuario)) {
+      const r = await conferirSenha(usuario, atual);
+      if (!r.ok) {
+        setErro('Senha atual incorreta.');
         return;
       }
-      // Corrigido: colaboradores cadastrados antes de existir o campo
-      // "perfil" não têm esse valor salvo — cair para "colaborador" aqui
-      // os trancaria de repente fora de tudo que viam antes. O padrão
-      // seguro é manter acesso completo até um administrador definir um
-      // perfil específico para esse colaborador em Cadastros.
-      onEntrar(colaboradorId, colaboradorSelecionado.nome, colaboradorSelecionado.perfil || "administrador");
-    } else if (nomeLivre.trim()) {
-      onEntrar(null, nomeLivre.trim(), perfilLivre);
     }
-  }
-  const podeEntrar = (colaboradorId && (!precisaSenha || senhaDigitada.length > 0)) || nomeLivre.trim().length > 0;
-
-  return (
-    <div className="textura-tecido" style={{ minHeight: "100vh", background: "linear-gradient(160deg, #1c2b39 0%, #2f4a63 100%)", display: "flex", alignItems: "center", justifyContent: "center", padding: 20, fontFamily: FONT_BODY }}>
-      <IdentidadeVisualGlobal />
-      <div style={{ background: "#fffdf7", borderRadius: 14, padding: 24, width: "100%", maxWidth: 360, border: "1px dashed #cdb98a", boxShadow: "0 12px 30px rgba(0,0,0,0.25)" }}>
-        <div style={{
-          width: 40, height: 40, borderRadius: 10, background: "#f4ecd8", border: "1px dashed #cdb98a",
-          display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 14,
-        }}>
-          <Scissors size={19} color="#2f4a63" />
-        </div>
-        <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 1.2, color: "#6b5d49", textTransform: "uppercase" }}>Controle de Produção</div>
-        <div style={{ fontSize: 19, fontWeight: 700, color: "#1c2b39", marginTop: 2, marginBottom: 16, fontFamily: FONT_DISPLAY }}>Quem está usando o sistema agora?</div>
-
-        {!jaInstalado && (
-          <div style={{ marginBottom: 16 }}>
-            <button type="button" onClick={fixarAtalho} style={{
-              width: "100%", display: "flex", alignItems: "center", justifyContent: "center", gap: 7,
-              background: "#f4ecd8", border: "1px dashed #cdb98a", borderRadius: 9, padding: "9px 12px",
-              fontSize: 12.5, fontWeight: 700, color: "#6b5d49", cursor: "pointer",
-            }}>
-              {noCelular ? <Smartphone size={14} /> : <Pin size={14} />} {noCelular ? "Fixar atalho na tela inicial" : "Fixar atalho na área de trabalho"}
-            </button>
-            {mostrarInstrucoesAtalho && !podeInstalar && (
-              <div style={{ fontSize: 11.5, color: "#a3937a", marginTop: 6, lineHeight: 1.4 }}>{instrucoesAtalho}</div>
-            )}
-          </div>
-        )}
-
-        {colaboradores.length > 0 && (
-          <Field label="Sou um colaborador cadastrado">
-            <Select value={colaboradorId} onChange={e => { setColaboradorId(e.target.value); if (e.target.value) setNomeLivre(""); setSenhaDigitada(""); setErroSenha(false); }}>
-              <option value="">Selecione…</option>
-              {colaboradores.map(c => <option key={c.id} value={c.id}>{c.nome}</option>)}
-            </Select>
-          </Field>
-        )}
-
-        {precisaSenha && (
-          <Field label="Senha">
-            <input type="password" value={senhaDigitada} onChange={e => { setSenhaDigitada(e.target.value); setErroSenha(false); }} placeholder="Digite sua senha" style={inputStyle} onKeyDown={e => e.key === "Enter" && entrar()} />
-            {erroSenha && <div style={{ fontSize: 12, color: "#b13232", marginTop: 5 }}>Senha incorreta.</div>}
-          </Field>
-        )}
-
-        {usandoNomeLivre && (
-          <Field label={colaboradores.length > 0 ? "Ou digite seu nome" : "Seu nome"}>
-            <input value={nomeLivre} onChange={e => setNomeLivre(e.target.value)} placeholder="Digite seu nome" style={inputStyle} />
-          </Field>
-        )}
-        {usandoNomeLivre && nomeLivre.trim() && (
-          <Field label="Perfil de acesso">
-            <Select value={perfilLivre} onChange={e => setPerfilLivre(e.target.value)}>
-              <option value="colaborador">Colaborador</option>
-              <option value="gestor">Gestor</option>
-              <option value="administrador">Administrador</option>
-            </Select>
-            <div style={{ fontSize: 11.5, color: "#a3937a", marginTop: 5 }}>Colaborador só vê a aba Produção. Gestor e Administrador veem tudo.</div>
-          </Field>
-        )}
-
-        <PrimaryButton onClick={entrar} disabled={!podeEntrar} style={{ width: "100%" }}>Entrar</PrimaryButton>
-      </div>
-    </div>
-  );
-}
-
-
-// ---------- Produção (iniciar, acompanhar em aberto, concluir) ----------
-function Producao({ setores, produtos, etapas, vinculos, colaboradores, equipes, equipamentos, registros, onSalvarRegistro, onRemoverRegistro, ordensProducao, onSalvarOrdem, onRemoverOrdem, clientes, onImprimirGrade, podeAutorizarCargaExtra, feriados, consumosMaterial, materiais, ehAdministrador }) {
-  const [sub, setSub] = useState("ordens");
-  const abertos = registros.filter(r => r.status === "aberto");
-  const concluidos = registros.filter(r => r.status === "concluido");
-
-  return (
-    <div>
-      <div style={{ display: "flex", gap: 6, marginBottom: 16, flexWrap: "wrap" }}>
-        {[
-          { key: "ordens", label: "Ordens" },
-          { key: "aberto", label: `Em aberto${abertos.length ? ` (${abertos.length})` : ""}` },
-          { key: "historico", label: "Histórico" },
-        ].map(s => (
-          <button key={s.key} onClick={() => setSub(s.key)} style={{
-            flex: "1 1 30%", border: "1.5px solid " + (sub === s.key ? "#2f4a63" : "#d9cfb7"),
-            background: sub === s.key ? "#2f4a63" : "#fff",
-            color: sub === s.key ? "#fff" : "#6b5d49",
-            borderRadius: 9, padding: "9px 4px", fontSize: 12.5, fontWeight: 700, cursor: "pointer",
-          }}>{s.label}</button>
-        ))}
-      </div>
-
-      {sub === "aberto" && (
-        <EmAberto
-          abertos={abertos} produtos={produtos} etapas={etapas} setores={setores} colaboradores={colaboradores}
-          onSalvarRegistro={onSalvarRegistro} onRemoverRegistro={onRemoverRegistro} onImprimirGrade={onImprimirGrade}
-          consumosMaterial={consumosMaterial} materiais={materiais}
-          ordensProducao={ordensProducao} onSalvarOrdem={onSalvarOrdem}
-        />
-      )}
-      {sub === "historico" && (
-        <HistoricoConcluidos concluidos={concluidos} produtos={produtos} etapas={etapas} setores={setores} colaboradores={colaboradores} onImprimirGrade={onImprimirGrade} ordensProducao={ordensProducao} />
-      )}
-      {sub === "ordens" && (
-        <OrdensProducao
-          ordensProducao={ordensProducao} produtos={produtos} etapas={etapas} setores={setores} vinculos={vinculos}
-          colaboradores={colaboradores} equipes={equipes} equipamentos={equipamentos} registros={registros} onSalvarOrdem={onSalvarOrdem} onRemoverOrdem={onRemoverOrdem}
-          onSalvarRegistro={onSalvarRegistro} onImprimirGrade={onImprimirGrade} podeAutorizarCargaExtra={podeAutorizarCargaExtra} feriados={feriados}
-          clientes={clientes} consumosMaterial={consumosMaterial} materiais={materiais} ehAdministrador={ehAdministrador}
-        />
-      )}
-    </div>
-  );
-}
-
-// ---------- Em aberto (lista de processos abertos + concluir) ----------
-function EmAberto({ abertos, produtos, etapas, setores, colaboradores, onSalvarRegistro, onRemoverRegistro, onImprimirGrade, consumosMaterial, materiais, ordensProducao, onSalvarOrdem }) {
-  // Adicionado: monta a lista de materiais necessários de um item em
-  // aberto — mesma conta usada na Ordem de Produção (consumo por peça ×
-  // quantidade do item), pra quem está executando ver aqui na tela de
-  // trabalho o que precisa separar, sem ter que voltar na OP.
-  function materiaisDoRegistro(r) {
-    return (consumosMaterial || [])
-      .filter(c => c.produtoId === r.produtoId)
-      .map(c => {
-        const material = (materiais || []).find(m => m.id === c.materialId);
-        return {
-          id: c.id, nome: material?.nome || "—", unidade: material?.unidade || "",
-          quantidade: Math.round((c.quantidadePorPeca || 0) * (r.quantidade || 0) * 1000) / 1000,
-          estoque: material?.quantidadeEstoque ?? null,
-        };
-      })
-      .sort((a, b) => a.nome.localeCompare(b.nome));
-  }
-  // A marcação de "separado" continua guardada na etapa da OP — assim o
-  // que for marcado aqui aparece igual na Ordem de Produção e vice-versa.
-  function separadosDoRegistro(r) {
-    const op = (ordensProducao || []).find(o => o.id === r.ordemProducaoId);
-    const etapa = op && r.ordemEtapaIndex != null ? op.etapas[r.ordemEtapaIndex] : null;
-    return etapa?.materiaisSeparados || [];
-  }
-  async function alternarSeparado(r, consumoId) {
-    const op = (ordensProducao || []).find(o => o.id === r.ordemProducaoId);
-    if (!op || r.ordemEtapaIndex == null) return;
-    const etapasAtualizadas = op.etapas.map((e, i) => {
-      if (i !== r.ordemEtapaIndex) return e;
-      const atuais = e.materiaisSeparados || [];
-      return { ...e, materiaisSeparados: atuais.includes(consumoId) ? atuais.filter(id => id !== consumoId) : [...atuais, consumoId] };
+    const v = forcaSenha(nova1);
+    if (!v.ok) {
+      setErro(v.msg);
+      return;
+    }
+    if (nova1 !== nova2) {
+      setErro('As senhas não conferem.');
+      return;
+    }
+    setOcupado(true);
+    const atualizado = await definirSenha(usuario, nova1);
+    setOcupado(false);
+    update(d => {
+      d.colaboradores = d.colaboradores.map(x => x.id === usuario.id ? {
+        ...x,
+        ...atualizado
+      } : x);
+      registrarLog(d, usuario, 'Alterou a própria senha', '');
+      return d;
     });
-    await onSalvarOrdem({ ...op, etapas: etapasAtualizadas });
+    setOk(true);
   }
-
-  const [concluindoId, setConcluindoId] = useState(null);
-  // Adicionado: comentários por item em aberto — quem está executando
-  // pode registrar uma ocorrência (ex.: "tecido veio com falha no rolo 3")
-  // e anexar foto/arquivo como evidência. Fica gravado no próprio
-  // registro, então aparece pra qualquer pessoa que abrir esse item.
-  const [comentandoId, setComentandoId] = useState(null);
-  const [textoComentario, setTextoComentario] = useState("");
-  const [anexosComentario, setAnexosComentario] = useState([]);
-  const anexoComentarioRef = useRef(null);
-
-  async function lerArquivos(fileList) {
-    const arquivos = Array.from(fileList || []);
-    const novos = [];
-    for (const file of arquivos) {
-      if (file.size > 4.5 * 1024 * 1024) { alert(`"${file.name}" é maior que 4,5MB e não pode ser anexado.`); continue; }
-      const dataUrl = await new Promise((res, rej) => {
-        const rd = new FileReader();
-        rd.onload = () => res(rd.result); rd.onerror = rej; rd.readAsDataURL(file);
-      });
-      novos.push({ id: uid(), nome: file.name, tipo: file.type, dataUrl });
+  return /*#__PURE__*/React.createElement(Modal, {
+    title: "Alterar senha",
+    onClose: onClose
+  }, ok ? /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+    className: "small",
+    style: {
+      color: 'var(--ok)',
+      fontWeight: 600,
+      marginBottom: 12
     }
-    return novos;
+  }, "✓ Senha alterada com sucesso."), /*#__PURE__*/React.createElement("div", {
+    className: "modal-actions"
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "btn accent",
+    onClick: onClose
+  }, "Fechar"))) : /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+    className: "small muted",
+    style: {
+      marginBottom: 12
+    }
+  }, "Usuário: ", /*#__PURE__*/React.createElement("strong", null, usuario.nome)), temSenhaDefinida(usuario) && /*#__PURE__*/React.createElement(Field, {
+    label: "Senha atual"
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "password",
+    value: atual,
+    onChange: e => {
+      setAtual(e.target.value);
+      setErro('');
+    }
+  })), /*#__PURE__*/React.createElement(Field, {
+    label: "Nova senha"
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "password",
+    value: nova1,
+    onChange: e => {
+      setNova1(e.target.value);
+      setErro('');
+    }
+  })), /*#__PURE__*/React.createElement(Field, {
+    label: "Repita a nova senha"
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "password",
+    value: nova2,
+    onChange: e => {
+      setNova2(e.target.value);
+      setErro('');
+    },
+    onKeyDown: e => {
+      if (e.key === 'Enter') salvar();
+    }
+  })), nova1 && /*#__PURE__*/React.createElement("div", {
+    className: "small",
+    style: {
+      color: forcaSenha(nova1).ok ? 'var(--ok)' : 'var(--warn)',
+      marginBottom: 8
+    }
+  }, forcaSenha(nova1).msg), erro && /*#__PURE__*/React.createElement("div", {
+    className: "small",
+    style: {
+      color: 'var(--bad)',
+      marginBottom: 10,
+      fontWeight: 600
+    }
+  }, erro), /*#__PURE__*/React.createElement("div", {
+    className: "modal-actions"
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "btn ghost",
+    onClick: onClose
+  }, "Cancelar"), /*#__PURE__*/React.createElement("button", {
+    className: "btn accent",
+    onClick: salvar,
+    disabled: ocupado
+  }, ocupado ? 'Salvando…' : 'Alterar senha'))));
+}
+
+/* ==========================================================
+   LOGIN
+========================================================== */
+function Login({
+  db,
+  update,
+  onEntrar
+}) {
+  const [nomeId, setNomeId] = useState('');
+  const [senha, setSenha] = useState('');
+  const [erro, setErro] = useState('');
+  const [ocupado, setOcupado] = useState(false);
+  // primeiro acesso / troca obrigatória
+  const [definindo, setDefinindo] = useState(null); // colaborador
+  const [nova1, setNova1] = useState('');
+  const [nova2, setNova2] = useState('');
+  const ativos = db.colaboradores.filter(c => c.status !== 'Inativo');
+  const selecionado = db.colaboradores.find(x => x.id === nomeId);
+  function registrar(colab, acao, detalhe) {
+    update(d => {
+      registrarLog(d, colab ? {
+        nome: colab.nome,
+        perfil: colab.perfil
+      } : null, acao, detalhe);
+      return d;
+    });
   }
-  async function anexarNoComentario(fileList) {
-    const novos = await lerArquivos(fileList);
-    if (novos.length) setAnexosComentario(a => [...a, ...novos]);
+
+  // bloqueio temporário por tentativas seguidas
+  function bloqueioAtivo(c) {
+    if (!c || !c.bloqueadoAte) return null;
+    const agora = new Date();
+    const ate = new Date(c.bloqueadoAte);
+    return ate > agora ? ate : null;
   }
-  function abrirComentario(id) {
-    setComentandoId(comentandoId === id ? null : id);
-    setTextoComentario(""); setAnexosComentario([]);
+  async function entrar() {
+    setErro('');
+    const c = selecionado;
+    if (!c) {
+      setErro('Selecione um usuário.');
+      return;
+    }
+    if (c.status === 'Inativo') {
+      setErro('Usuário inativo — acesso bloqueado. Procure um administrador.');
+      registrar(c, 'Acesso negado', 'usuário inativo');
+      return;
+    }
+    const ate = bloqueioAtivo(c);
+    if (ate) {
+      setErro(`Muitas tentativas. Tente novamente após ${ate.toLocaleTimeString('pt-BR').slice(0, 5)}.`);
+      return;
+    }
+    if (!temSenhaDefinida(c)) {
+      setDefinindo(c); // primeiro acesso: define a senha agora
+      return;
+    }
+    setOcupado(true);
+    const r = await conferirSenha(c, senha);
+    setOcupado(false);
+    if (!r.ok) {
+      const tentativas = num(c.tentativasFalhas) + 1;
+      update(d => {
+        d.colaboradores = d.colaboradores.map(x => {
+          if (x.id !== c.id) return x;
+          const bloq = tentativas >= MAX_TENTATIVAS ? new Date(Date.now() + BLOQUEIO_MIN * 60000).toISOString() : x.bloqueadoAte;
+          return {
+            ...x,
+            tentativasFalhas: tentativas,
+            bloqueadoAte: bloq
+          };
+        });
+        registrarLog(d, {
+          nome: c.nome,
+          perfil: c.perfil
+        }, 'Acesso negado', `senha incorreta (tentativa ${tentativas} de ${MAX_TENTATIVAS})`);
+        return d;
+      });
+      setErro(tentativas >= MAX_TENTATIVAS ? `Senha incorreta. Usuário bloqueado por ${BLOQUEIO_MIN} minutos.` : `Senha incorreta. Restam ${MAX_TENTATIVAS - tentativas} tentativa(s).`);
+      return;
+    }
+    if (c.precisaTrocarSenha) {
+      setDefinindo(c);
+      return;
+    }
+    update(d => {
+      d.colaboradores = d.colaboradores.map(x => x.id === c.id ? {
+        ...x,
+        tentativasFalhas: 0,
+        bloqueadoAte: null,
+        ultimoAcesso: agoraISO(),
+        ...(r.migrar ? {} : {})
+      } : x);
+      registrarLog(d, c, 'Entrou no sistema', `perfil ${c.perfil || 'Colaborador'}`);
+      return d;
+    });
+
+    // migra senha legada em texto puro para hash
+    if (r.migrar) {
+      const atualizado = await definirSenha(c, senha);
+      update(d => {
+        d.colaboradores = d.colaboradores.map(x => x.id === c.id ? {
+          ...x,
+          ...atualizado
+        } : x);
+        registrarLog(d, c, 'Senha migrada', 'senha antiga convertida para hash');
+        return d;
+      });
+    }
+    onEntrar(c);
   }
-  async function salvarComentario(r) {
-    if (!textoComentario.trim() && anexosComentario.length === 0) return;
-    const comentario = {
-      id: uid(), texto: textoComentario.trim(), anexos: anexosComentario,
-      autor: (r.colaboradorIds || []).map(nomeColab).join(", ") || "—",
-      criadoEm: new Date().toISOString(),
+  async function salvarNovaSenha() {
+    const v = forcaSenha(nova1);
+    if (!v.ok) {
+      setErro(v.msg);
+      return;
+    }
+    if (nova1 !== nova2) {
+      setErro('As senhas não conferem.');
+      return;
+    }
+    setOcupado(true);
+    const atualizado = await definirSenha(definindo, nova1);
+    setOcupado(false);
+    update(d => {
+      d.colaboradores = d.colaboradores.map(x => x.id === definindo.id ? {
+        ...x,
+        ...atualizado,
+        tentativasFalhas: 0,
+        bloqueadoAte: null,
+        ultimoAcesso: agoraISO()
+      } : x);
+      registrarLog(d, definindo, 'Senha definida', 'primeiro acesso ou troca obrigatória');
+      registrarLog(d, definindo, 'Entrou no sistema', `perfil ${definindo.perfil || 'Colaborador'}`);
+      return d;
+    });
+    onEntrar({
+      ...definindo,
+      ...atualizado
+    });
+  }
+  const semSenhaAinda = selecionado && !temSenhaDefinida(selecionado);
+  return /*#__PURE__*/React.createElement("div", {
+    style: {
+      minHeight: '100vh',
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      padding: 20
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      width: '100%',
+      maxWidth: 420
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      textAlign: 'center',
+      marginBottom: 22
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontFamily: 'var(--mono)',
+      fontSize: 10,
+      letterSpacing: '.16em',
+      color: 'var(--thread-dark)',
+      textTransform: 'uppercase'
+    }
+  }, "Sistema Interno"), /*#__PURE__*/React.createElement("h1", {
+    style: {
+      fontFamily: 'var(--display)',
+      fontSize: 30,
+      margin: '4px 0 0 0'
+    }
+  }, "Confecção ERP")), definindo ? /*#__PURE__*/React.createElement("div", {
+    className: "panel",
+    style: {
+      background: '#fff'
+    }
+  }, /*#__PURE__*/React.createElement("h3", null, "Definir senha — ", definindo.nome), /*#__PURE__*/React.createElement("div", {
+    className: "small muted",
+    style: {
+      marginBottom: 12
+    }
+  }, temSenhaDefinida(definindo) ? 'É necessário trocar a senha para continuar.' : 'Primeiro acesso: crie sua senha para entrar no sistema.', ' ', "Mínimo de 6 caracteres, com letras e números."), /*#__PURE__*/React.createElement(Field, {
+    label: "Nova senha"
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "password",
+    value: nova1,
+    onChange: e => {
+      setNova1(e.target.value);
+      setErro('');
+    }
+  })), /*#__PURE__*/React.createElement(Field, {
+    label: "Repita a nova senha"
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "password",
+    value: nova2,
+    onChange: e => {
+      setNova2(e.target.value);
+      setErro('');
+    },
+    onKeyDown: e => {
+      if (e.key === 'Enter') salvarNovaSenha();
+    }
+  })), nova1 && /*#__PURE__*/React.createElement("div", {
+    className: "small",
+    style: {
+      color: forcaSenha(nova1).ok ? 'var(--ok)' : 'var(--warn)',
+      marginBottom: 8
+    }
+  }, forcaSenha(nova1).msg), erro && /*#__PURE__*/React.createElement("div", {
+    className: "small",
+    style: {
+      color: 'var(--bad)',
+      marginBottom: 10,
+      fontWeight: 600
+    }
+  }, erro), /*#__PURE__*/React.createElement("div", {
+    className: "row-actions"
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "btn ghost",
+    onClick: () => {
+      setDefinindo(null);
+      setNova1('');
+      setNova2('');
+      setErro('');
+    }
+  }, "Cancelar"), /*#__PURE__*/React.createElement("button", {
+    className: "btn accent",
+    style: {
+      flex: 1,
+      justifyContent: 'center'
+    },
+    onClick: salvarNovaSenha,
+    disabled: ocupado
+  }, ocupado ? 'Salvando…' : 'Salvar e entrar'))) : /*#__PURE__*/React.createElement("div", {
+    className: "panel",
+    style: {
+      background: '#fff'
+    }
+  }, /*#__PURE__*/React.createElement("h3", null, "Entrar"), /*#__PURE__*/React.createElement(Field, {
+    label: "Usuário"
+  }, /*#__PURE__*/React.createElement("select", {
+    value: nomeId,
+    onChange: e => {
+      setNomeId(e.target.value);
+      setErro('');
+      setSenha('');
+    }
+  }, /*#__PURE__*/React.createElement("option", {
+    value: ""
+  }, "Selecione…"), ativos.map(c => /*#__PURE__*/React.createElement("option", {
+    key: c.id,
+    value: c.id
+  }, c.nome, " — ", c.perfil || 'Colaborador')))), semSenhaAinda ? /*#__PURE__*/React.createElement("div", {
+    className: "small",
+    style: {
+      background: 'var(--warn-bg)',
+      color: 'var(--warn)',
+      padding: '8px 10px',
+      borderRadius: 6,
+      marginBottom: 10,
+      fontWeight: 600
+    }
+  }, "Este usuário ainda não tem senha. Clique em “Definir senha” para criar a sua no primeiro acesso.") : /*#__PURE__*/React.createElement(Field, {
+    label: "Senha"
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "password",
+    value: senha,
+    onChange: e => {
+      setSenha(e.target.value);
+      setErro('');
+    },
+    onKeyDown: e => {
+      if (e.key === 'Enter') entrar();
+    },
+    placeholder: "••••••"
+  })), erro && /*#__PURE__*/React.createElement("div", {
+    className: "small",
+    style: {
+      color: 'var(--bad)',
+      marginBottom: 10,
+      fontWeight: 600
+    }
+  }, erro), /*#__PURE__*/React.createElement("button", {
+    className: "btn accent",
+    style: {
+      width: '100%',
+      justifyContent: 'center'
+    },
+    onClick: entrar,
+    disabled: ocupado || !nomeId
+  }, ocupado ? 'Verificando…' : semSenhaAinda ? 'Definir senha' : 'Entrar')), /*#__PURE__*/React.createElement("div", {
+    className: "small muted",
+    style: {
+      textAlign: 'center',
+      marginTop: 12
+    }
+  }, "Senhas são guardadas com hash, nunca em texto puro. Após ", MAX_TENTATIVAS, " tentativas o usuário fica bloqueado por ", BLOQUEIO_MIN, " minutos.")));
+}
+function SubTabs({
+  tabs,
+  active,
+  onChange
+}) {
+  return /*#__PURE__*/React.createElement("div", {
+    className: "tabs-strip",
+    style: {
+      marginBottom: 18
+    }
+  }, tabs.map(t => /*#__PURE__*/React.createElement("button", {
+    key: t.id,
+    className: active === t.id ? 'active' : '',
+    onClick: () => onChange(t.id)
+  }, t.label)));
+}
+
+/* ---- Grupo 2: Cadastros (pessoas) ---- */
+function GrupoCadastros({
+  db,
+  update,
+  usuario,
+  perm
+}) {
+  const [sub, setSub] = useState('clientes');
+  const podeFin = !perm || perm.financeiro;
+  return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    className: "page-head"
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    className: "eyebrow"
+  }, "Grupo 2"), /*#__PURE__*/React.createElement("h2", null, "Cadastros"))), /*#__PURE__*/React.createElement(SubTabs, {
+    active: sub,
+    onChange: setSub,
+    tabs: [{
+      id: 'clientes',
+      label: 'Clientes'
+    }, {
+      id: 'fornecedores',
+      label: 'Fornecedores'
+    }, {
+      id: 'colaboradores',
+      label: 'Colaboradores'
+    }, {
+      id: 'equipamentos',
+      label: 'Equipamentos'
+    }, {
+      id: 'materiais',
+      label: 'Materiais'
+    }, {
+      id: 'estoque',
+      label: 'Estoque'
+    }, {
+      id: 'orcamentos',
+      label: 'Orçamentos'
+    }, {
+      id: 'compras',
+      label: 'Compras'
+    }, {
+      id: 'produtos',
+      label: podeFin ? 'Produtos & Custo' : 'Produtos'
+    }, {
+      id: 'log',
+      label: 'Log de acesso'
+    }]
+  }), sub === 'clientes' && /*#__PURE__*/React.createElement(Clientes, {
+    db: db,
+    update: update
+  }), sub === 'fornecedores' && /*#__PURE__*/React.createElement(Fornecedores, {
+    db: db,
+    update: update
+  }), sub === 'colaboradores' && /*#__PURE__*/React.createElement(Colaboradores, {
+    db: db,
+    update: update,
+    usuario: usuario
+  }), sub === 'equipamentos' && /*#__PURE__*/React.createElement(Equipamentos, {
+    db: db,
+    update: update
+  }), sub === 'materiais' && /*#__PURE__*/React.createElement(Materiais, {
+    db: db,
+    update: update
+  }), sub === 'estoque' && /*#__PURE__*/React.createElement(Estoque, {
+    db: db,
+    update: update
+  }), sub === 'orcamentos' && /*#__PURE__*/React.createElement(Orcamentos, {
+    db: db,
+    update: update
+  }), sub === 'compras' && /*#__PURE__*/React.createElement(Compras, {
+    db: db,
+    update: update
+  }), sub === 'produtos' && /*#__PURE__*/React.createElement(Produtos, {
+    db: db,
+    update: update,
+    podeFin: podeFin
+  }), sub === 'log' && /*#__PURE__*/React.createElement(LogColaboradores, {
+    db: db
+  }));
+}
+
+/* ---- Log de acesso e alterações ---- */
+function LogColaboradores({
+  db
+}) {
+  const [ini, setIni] = useState('');
+  const [fim, setFim] = useState('');
+  const [quem, setQuem] = useState('');
+  const logs = (db.logs || []).filter(l => {
+    if (ini && l.data < ini) return false;
+    if (fim && l.data > fim) return false;
+    if (quem && l.quem !== quem) return false;
+    return true;
+  }).slice().reverse();
+  const pessoas = Array.from(new Set((db.logs || []).map(l => l.quem))).sort();
+  return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    className: "panel"
+  }, /*#__PURE__*/React.createElement("h3", null, "Filtros"), /*#__PURE__*/React.createElement("div", {
+    className: "grid3"
+  }, /*#__PURE__*/React.createElement(Field, {
+    label: "Data início"
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "date",
+    value: ini,
+    onChange: e => setIni(e.target.value)
+  })), /*#__PURE__*/React.createElement(Field, {
+    label: "Data fim"
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "date",
+    value: fim,
+    onChange: e => setFim(e.target.value)
+  })), /*#__PURE__*/React.createElement(Field, {
+    label: "Usuário"
+  }, /*#__PURE__*/React.createElement("select", {
+    value: quem,
+    onChange: e => setQuem(e.target.value)
+  }, /*#__PURE__*/React.createElement("option", {
+    value: ""
+  }, "Todos"), pessoas.map(p => /*#__PURE__*/React.createElement("option", {
+    key: p,
+    value: p
+  }, p))))), /*#__PURE__*/React.createElement("button", {
+    className: "btn ghost sm",
+    onClick: () => {
+      setIni('');
+      setFim('');
+      setQuem('');
+    }
+  }, "Limpar")), /*#__PURE__*/React.createElement("div", {
+    className: "panel",
+    style: {
+      padding: 0
+    }
+  }, logs.length === 0 ? /*#__PURE__*/React.createElement("div", {
+    style: {
+      padding: 20
+    }
+  }, /*#__PURE__*/React.createElement(Empty, {
+    text: "Nenhum registro de log no período."
+  })) : /*#__PURE__*/React.createElement("table", null, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("th", null, "Quando"), /*#__PURE__*/React.createElement("th", null, "Quem"), /*#__PURE__*/React.createElement("th", null, "Perfil"), /*#__PURE__*/React.createElement("th", null, "Ação"), /*#__PURE__*/React.createElement("th", null, "Detalhe"))), /*#__PURE__*/React.createElement("tbody", null, logs.map(l => /*#__PURE__*/React.createElement("tr", {
+    key: l.id
+  }, /*#__PURE__*/React.createElement("td", {
+    className: "small muted"
+  }, l.quando), /*#__PURE__*/React.createElement("td", {
+    className: "small"
+  }, /*#__PURE__*/React.createElement("strong", null, l.quem)), /*#__PURE__*/React.createElement("td", {
+    className: "small"
+  }, l.perfil), /*#__PURE__*/React.createElement("td", {
+    className: "small"
+  }, l.acao), /*#__PURE__*/React.createElement("td", {
+    className: "small muted"
+  }, l.detalhe)))))));
+}
+
+/* ---- Grupo 6: Relatórios consolidados ---- */
+function GrupoRelatorios({
+  db,
+  perm
+}) {
+  const [sub, setSub] = useState('vendas');
+  const podeFin = !perm || perm.financeiro;
+  return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    className: "page-head"
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    className: "eyebrow"
+  }, "Grupo 6"), /*#__PURE__*/React.createElement("h2", null, "Relatórios"))), /*#__PURE__*/React.createElement(SubTabs, {
+    active: sub,
+    onChange: setSub,
+    tabs: [{
+      id: 'producao',
+      label: 'Produção & Produtividade'
+    }, {
+      id: 'vendas',
+      label: 'Vendas'
+    }, {
+      id: 'materiais',
+      label: 'Materiais & Custos'
+    }, {
+      id: 'cadastros',
+      label: 'Cadastros'
+    }]
+  }), sub === 'producao' && /*#__PURE__*/React.createElement(RelatoriosProducao, {
+    db: db
+  }), sub === 'vendas' && /*#__PURE__*/React.createElement(RelatoriosVendas, {
+    db: db
+  }), sub === 'materiais' && /*#__PURE__*/React.createElement(RelatoriosMateriais, {
+    db: db,
+    podeFin: podeFin
+  }), sub === 'cadastros' && /*#__PURE__*/React.createElement(RelatoriosPessoas, {
+    db: db
+  }));
+}
+
+/* ==========================================================
+   CHAT INTERNO — mensagens particulares entre colaboradores
+========================================================== */
+function ChatInterno({
+  db,
+  update,
+  usuario
+}) {
+  const [aba, setAba] = useState('colaboradores');
+  const [comQuem, setComQuem] = useState(''); // chave: 'col:<nome>' ou 'cli:<id>'
+  const [texto, setTexto] = useState('');
+  const [anexo, setAnexo] = useState(null);
+  const eu = usuario ? usuario.nome : '';
+
+  // só administrador e vendedor enxergam a aba de clientes
+  const meuCadastro = db.colaboradores.find(c => c.nome === eu);
+  const podeClientes = usuario && usuario.perfil === 'Administrador' || ehVendedor(meuCadastro || usuario);
+  const contatosColab = db.colaboradores.filter(c => c.status !== 'Inativo' && c.nome !== eu).map(c => ({
+    chave: 'col:' + c.nome,
+    nome: c.nome,
+    sub: (db.departamentos.find(d => d.id === c.departamentoId) || {}).nome || funcoesColaborador(c).join(', ') || '—'
+  }));
+  const contatosCliente = (podeClientes ? db.clientes : []).map(c => ({
+    chave: 'cli:' + c.id,
+    nome: c.nome,
+    sub: [c.responsavel, c.cidade].filter(Boolean).join(' · ') || 'cliente'
+  }));
+  const contatos = aba === 'clientes' ? contatosCliente : contatosColab;
+  const atual = contatos.find(c => c.chave === comQuem);
+  const mensagens = db.mensagens || [];
+  const conversa = mensagens.filter(m => m.de === eu && m.paraChave === comQuem || m.deChave === comQuem && m.para === eu || !m.paraChave && (m.de === eu && 'col:' + m.para === comQuem || 'col:' + m.de === comQuem && m.para === eu)).sort((a, b) => (a.quando || '').localeCompare(b.quando || ''));
+  function chaveDe(m) {
+    return m.paraChave || 'col:' + m.para;
+  }
+  function naoLidasDe(chave) {
+    return mensagens.filter(m => m.para === eu && !m.lido && (m.deChave === chave || 'col:' + m.de === chave)).length;
+  }
+  function ultimaCom(chave) {
+    const list = mensagens.filter(m => m.de === eu && chaveDe(m) === chave || m.para === eu && (m.deChave === chave || 'col:' + m.de === chave));
+    return list.length ? list[list.length - 1] : null;
+  }
+  function abrir(chave) {
+    setComQuem(chave);
+    update(d => {
+      d.mensagens = (d.mensagens || []).map(m => m.para === eu && !m.lido && (m.deChave === chave || 'col:' + m.de === chave) ? {
+        ...m,
+        lido: true
+      } : m);
+      return d;
+    });
+  }
+  async function onArquivo(e) {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = '';
+    if (!file) return;
+    const ehImagem = file.type.startsWith('image/');
+    try {
+      let url;
+      if (ehImagem) url = await comprimirImagem(file, 900, 0.7);else {
+        if (file.size > 300 * 1024) {
+          alert('Arquivo muito grande (máx. 300 KB).');
+          return;
+        }
+        url = await new Promise((res, rej) => {
+          const r = new FileReader();
+          r.onload = () => res(r.result);
+          r.onerror = () => rej(new Error('Falha ao ler o arquivo.'));
+          r.readAsDataURL(file);
+        });
+      }
+      setAnexo({
+        nome: file.name,
+        tipo: ehImagem ? 'imagem' : 'documento',
+        url
+      });
+    } catch (err) {
+      alert('Não foi possível anexar: ' + (err && err.message));
+    }
+  }
+  function enviar() {
+    const t = texto.trim();
+    if (!t && !anexo || !atual) return;
+    update(d => {
+      d.mensagens = [...(d.mensagens || []), {
+        id: uid(),
+        de: eu,
+        deChave: 'col:' + eu,
+        para: atual.nome,
+        paraChave: atual.chave,
+        tipoContato: aba === 'clientes' ? 'cliente' : 'colaborador',
+        texto: t,
+        anexo: anexo || null,
+        quando: agoraISO(),
+        lido: false
+      }];
+      if (d.mensagens.length > 500) d.mensagens = d.mensagens.slice(-500);
+      return d;
+    });
+    setTexto('');
+    setAnexo(null);
+  }
+  function apagar(id) {
+    if (!confirm('Apagar esta mensagem?')) return;
+    update(d => {
+      d.mensagens = (d.mensagens || []).filter(m => m.id !== id);
+      return d;
+    });
+  }
+  return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    className: "page-head"
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    className: "eyebrow"
+  }, "Grupo 7"), /*#__PURE__*/React.createElement("h2", null, "Chat interno"))), podeClientes && /*#__PURE__*/React.createElement(SubTabs, {
+    active: aba,
+    onChange: a => {
+      setAba(a);
+      setComQuem('');
+    },
+    tabs: [{
+      id: 'colaboradores',
+      label: 'Colaboradores'
+    }, {
+      id: 'clientes',
+      label: 'Clientes'
+    }]
+  }), /*#__PURE__*/React.createElement("div", {
+    className: "chat-wrap"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "chat-lista panel",
+    style: {
+      padding: 0
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      padding: '12px 14px',
+      borderBottom: '1px solid var(--line)'
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "small muted"
+  }, "Conversando como"), /*#__PURE__*/React.createElement("strong", null, eu || '—')), contatos.length === 0 ? /*#__PURE__*/React.createElement("div", {
+    style: {
+      padding: 16
+    }
+  }, /*#__PURE__*/React.createElement(Empty, {
+    text: aba === 'clientes' ? 'Nenhum cliente cadastrado.' : 'Nenhum outro colaborador cadastrado.'
+  })) : contatos.map(c => {
+    const n = naoLidasDe(c.chave);
+    const ult = ultimaCom(c.chave);
+    return /*#__PURE__*/React.createElement("button", {
+      key: c.chave,
+      className: "chat-contato" + (comQuem === c.chave ? ' ativo' : ''),
+      onClick: () => abrir(c.chave)
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 6
+      }
+    }, /*#__PURE__*/React.createElement("strong", {
+      style: {
+        flex: 1
+      }
+    }, c.nome), n > 0 && /*#__PURE__*/React.createElement("span", {
+      className: "chat-badge"
+    }, n)), /*#__PURE__*/React.createElement("div", {
+      className: "small muted"
+    }, c.sub), ult && /*#__PURE__*/React.createElement("div", {
+      className: "small muted chat-previa"
+    }, ult.de === eu ? 'você: ' : '', ult.anexo ? ult.anexo.tipo === 'imagem' ? '📷 foto ' : '📎 arquivo ' : '', ult.texto));
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "chat-conversa panel",
+    style: {
+      padding: 0
+    }
+  }, !atual ? /*#__PURE__*/React.createElement("div", {
+    style: {
+      padding: 30
+    }
+  }, /*#__PURE__*/React.createElement(Empty, {
+    text: "Selecione um contato para conversar."
+  })) : /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+    style: {
+      padding: '12px 16px',
+      borderBottom: '1px solid var(--line)'
+    }
+  }, /*#__PURE__*/React.createElement("strong", null, atual.nome), /*#__PURE__*/React.createElement("div", {
+    className: "small muted"
+  }, aba === 'clientes' ? 'Contato de cliente' : 'Conversa particular', " — visível apenas dentro do sistema")), /*#__PURE__*/React.createElement("div", {
+    className: "chat-mensagens"
+  }, conversa.length === 0 && /*#__PURE__*/React.createElement("div", {
+    className: "small muted",
+    style: {
+      textAlign: 'center',
+      padding: 20
+    }
+  }, "Nenhuma mensagem ainda."), conversa.map(m => /*#__PURE__*/React.createElement("div", {
+    key: m.id,
+    className: "chat-msg" + (m.de === eu ? ' minha' : '')
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "bolha"
+  }, m.anexo && (m.anexo.tipo === 'imagem' ? /*#__PURE__*/React.createElement("a", {
+    href: m.anexo.url,
+    target: "_blank",
+    rel: "noopener noreferrer"
+  }, /*#__PURE__*/React.createElement("img", {
+    className: "chat-img",
+    src: m.anexo.url,
+    alt: m.anexo.nome
+  })) : /*#__PURE__*/React.createElement("a", {
+    className: "chat-arq",
+    href: m.anexo.url,
+    download: m.anexo.nome
+  }, "📄 ", m.anexo.nome)), m.texto, /*#__PURE__*/React.createElement("div", {
+    className: "hora"
+  }, m.quando, m.de === eu && (m.lido ? ' · lida' : ' · enviada'))), m.de === eu && /*#__PURE__*/React.createElement("button", {
+    className: "chat-del",
+    onClick: () => apagar(m.id),
+    title: "Apagar"
+  }, "×")))), anexo && /*#__PURE__*/React.createElement("div", {
+    className: "chat-previa-anexo"
+  }, anexo.tipo === 'imagem' ? /*#__PURE__*/React.createElement("img", {
+    src: anexo.url,
+    alt: anexo.nome
+  }) : /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 22
+    }
+  }, "📄"), /*#__PURE__*/React.createElement("span", {
+    className: "small",
+    style: {
+      flex: 1,
+      wordBreak: 'break-word'
+    }
+  }, anexo.nome), /*#__PURE__*/React.createElement("button", {
+    className: "btn danger sm",
+    onClick: () => setAnexo(null)
+  }, "Remover")), /*#__PURE__*/React.createElement("div", {
+    className: "chat-envio"
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "btn ghost sm chat-acao",
+    title: "Anexar arquivo ou foto"
+  }, "📎", /*#__PURE__*/React.createElement("input", {
+    type: "file",
+    accept: "image/*,.pdf,.doc,.docx,.xls,.xlsx",
+    style: {
+      display: 'none'
+    },
+    onChange: onArquivo
+  })), /*#__PURE__*/React.createElement("label", {
+    className: "btn ghost sm chat-acao",
+    title: "Tirar foto com a câmera"
+  }, "📷", /*#__PURE__*/React.createElement("input", {
+    type: "file",
+    accept: "image/*",
+    capture: "environment",
+    style: {
+      display: 'none'
+    },
+    onChange: onArquivo
+  })), /*#__PURE__*/React.createElement("textarea", {
+    rows: "2",
+    value: texto,
+    onChange: e => setTexto(e.target.value),
+    placeholder: "Escreva sua mensagem…",
+    onKeyDown: e => {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        enviar();
+      }
+    }
+  }), /*#__PURE__*/React.createElement("button", {
+    className: "btn accent",
+    onClick: enviar,
+    disabled: !texto.trim() && !anexo
+  }, "Enviar"))))));
+}
+function GrupoVendas({
+  db,
+  update,
+  setTab
+}) {
+  const [sub, setSub] = useState('pedidos');
+  return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    className: "page-head"
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    className: "eyebrow"
+  }, "Grupo 4"), /*#__PURE__*/React.createElement("h2", null, "Pedidos de Venda"))), /*#__PURE__*/React.createElement(SubTabs, {
+    active: sub,
+    onChange: setSub,
+    tabs: [{
+      id: 'pedidos',
+      label: 'Pedidos'
+    }, {
+      id: 'relatorios',
+      label: 'Relatórios de vendas'
+    }]
+  }), sub === 'pedidos' && /*#__PURE__*/React.createElement(Pedidos, {
+    db: db,
+    update: update,
+    setTab: setTab
+  }), sub === 'relatorios' && /*#__PURE__*/React.createElement(RelatoriosVendas, {
+    db: db
+  }));
+}
+
+/* ---- Grupo 5: Departamentos & Etapas ---- */
+function GrupoEstrutura({
+  db,
+  update,
+  perm
+}) {
+  const [sub, setSub] = useState('departamentos');
+  return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    className: "page-head"
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    className: "eyebrow"
+  }, "Grupo 5"), /*#__PURE__*/React.createElement("h2", null, "Departamentos & Etapas"))), /*#__PURE__*/React.createElement(SubTabs, {
+    active: sub,
+    onChange: setSub,
+    tabs: [{
+      id: 'departamentos',
+      label: 'Departamentos'
+    }, {
+      id: 'etapas',
+      label: 'Etapas de Produção'
+    }]
+  }), sub === 'departamentos' && /*#__PURE__*/React.createElement(Departamentos, {
+    db: db,
+    update: update
+  }), sub === 'etapas' && /*#__PURE__*/React.createElement(EtapasProducao, {
+    db: db,
+    update: update
+  }));
+}
+
+/* ---- Grupo 6: Produção ---- */
+function GrupoProducao({
+  db,
+  update,
+  usuario
+}) {
+  const [sub, setSub] = useState('pedidos');
+  return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    className: "page-head"
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    className: "eyebrow"
+  }, "Grupo 5"), /*#__PURE__*/React.createElement("h2", null, "Produção"))), /*#__PURE__*/React.createElement(SubTabs, {
+    active: sub,
+    onChange: setSub,
+    tabs: [{
+      id: 'pedidos',
+      label: 'Pedidos a produzir'
+    }, {
+      id: 'apontamento',
+      label: 'Lançamento de produção'
+    }, {
+      id: 'cronograma',
+      label: 'Cronograma / PCP'
+    }]
+  }), sub === 'pedidos' && /*#__PURE__*/React.createElement(PedidosParaProduzir, {
+    db: db,
+    update: update,
+    irParaOPs: () => setSub('apontamento')
+  }), sub === 'apontamento' && /*#__PURE__*/React.createElement(LancamentoProducao, {
+    db: db,
+    update: update,
+    usuario: usuario
+  }), sub === 'cronograma' && /*#__PURE__*/React.createElement(Cronograma, {
+    db: db,
+    update: update,
+    usuario: usuario
+  }));
+}
+
+/* ==========================================================
+   LANÇAMENTO DE PRODUÇÃO — iniciar / em aberto / concluir
+   Fluxo: escolhe OP + etapa + colaborador + quantidade,
+   o sistema projeta o horário de término pela meta.
+   Ao concluir, informa peças boas, defeitos e retrabalho,
+   e o sistema calcula tempo real, eficiência e nota A/B/C.
+========================================================== */
+function classificarEficiencia(pct) {
+  if (pct >= 95) return {
+    nota: 'A',
+    tone: 'ok',
+    texto: 'A — dentro ou acima da meta'
+  };
+  if (pct >= 80) return {
+    nota: 'B',
+    tone: 'warn',
+    texto: 'B — abaixo da meta'
+  };
+  return {
+    nota: 'C',
+    tone: 'bad',
+    texto: 'C — bem abaixo da meta'
+  };
+}
+function minutosEntre(iniISO, fimISO) {
+  const a = new Date(String(iniISO).replace(' ', 'T'));
+  const b = new Date(String(fimISO).replace(' ', 'T'));
+  const d = (b - a) / 60000;
+  return isNaN(d) ? 0 : Math.max(d, 0);
+}
+function somaMinutos(quandoISO, minutos) {
+  const d = new Date(String(quandoISO).replace(' ', 'T'));
+  d.setMinutes(d.getMinutes() + Math.round(minutos));
+  const p = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
+/* Disponibilidade do colaborador a partir das produções em aberto.
+   Devolve até quando ele está ocupado e em quê. */
+function disponibilidadeColaborador(nome, emAberto) {
+  const meus = emAberto.filter(a => (a.equipe || [a.colaborador]).some(n => normaliza(n) === normaliza(nome)));
+  if (meus.length === 0) return {
+    livre: true
+  };
+  // o mais tarde entre os términos previstos
+  let fim = null,
+    ref = null;
+  meus.forEach(a => {
+    const f = a.previsaoFim || a.inicio;
+    if (!fim || String(f) > String(fim)) {
+      fim = f;
+      ref = a;
+    }
+  });
+  return {
+    livre: false,
+    ocupadoAte: fim,
+    etapa: ref ? ref.etapaNome : '',
+    op: ref ? ref.opRotulo : '',
+    janelas: meus
+  };
+}
+function rotuloDisponibilidade(d) {
+  if (d.livre) return 'livre agora';
+  return `ocupado até ${String(d.ocupadoAte).replace('T', ' ')} · ${d.etapa}`;
+}
+// duas janelas de tempo se sobrepõem?
+function sobrepoe(ini1, fim1, ini2, fim2) {
+  const a1 = new Date(String(ini1).replace(' ', 'T')),
+    b1 = new Date(String(fim1).replace(' ', 'T'));
+  const a2 = new Date(String(ini2).replace(' ', 'T')),
+    b2 = new Date(String(fim2).replace(' ', 'T'));
+  return a1 < b2 && a2 < b1;
+}
+function LancamentoProducao({
+  db,
+  update,
+  usuario
+}) {
+  const [aberta, setAberta] = useState(null); // opId expandida
+  const [abaOP, setAbaOP] = useState('atividades');
+  const [iniciando, setIniciando] = useState(null); // {opId, etapaIdx}
+  const [concluir, setConcluir] = useState(null);
+  const [verConcluidas, setVerConcluidas] = useState(false);
+  const [relatorioOP, setRelatorioOP] = useState(null);
+  const apontamentos = db.apontamentos || [];
+  const emAberto = apontamentos.filter(a => !a.fim);
+  const concluidos = apontamentos.filter(a => a.fim).slice().reverse();
+
+  // OPs com pelo menos uma etapa pendente
+  const opsAbertas = db.ops.filter(op => op.etapas.some(e => e.status !== 'Concluída'));
+  function apontamentoDaEtapa(opId, idx) {
+    return emAberto.find(a => a.opId === opId && a.etapaIdx === idx);
+  }
+  function iniciar(op, idx, dados) {
+    const et = op.etapas[idx];
+    const minPorPeca = cargaEtapaOP(et, 1, op.quantidade, db);
+    const base = num(et.qtdRecebida) > 0 ? num(et.qtdRecebida) : num(op.quantidade);
+    const qtd = num(dados.quantidade) > 0 ? num(dados.quantidade) : Math.max(base - num(et.qtdConcluida), 0);
+    const responsaveis = dados.modo === 'equipe' ? dados.equipe : dados.colaborador ? [dados.colaborador] : [];
+    if (responsaveis.length === 0) {
+      alert('Selecione o colaborador.');
+      return;
+    }
+    const minPrevistos = minPorPeca * qtd / responsaveis.length;
+    const inicio = dados.inicio || agoraISO();
+    const fimPrevisto = somaMinutos(inicio, minPrevistos || 1);
+
+    // nunca duplicar o mesmo colaborador na mesma data e horário
+    for (const n of responsaveis) {
+      const d = disponibilidadeColaborador(n, emAberto);
+      if (!d.livre) {
+        const choque = (d.janelas || []).find(a => sobrepoe(inicio, fimPrevisto, a.inicio, a.previsaoFim || a.inicio));
+        if (choque) {
+          alert(`${n} já está produzindo "${choque.etapa}" (${choque.opRotulo}) das ${String(choque.inicio).slice(11)} às ${String(choque.previsaoFim || '').slice(11)}.\n\nEsse colaborador fica livre a partir de ${String(d.ocupadoAte).replace('T', ' ')}. Ajuste o horário de início ou conclua a produção anterior.`);
+          return;
+        }
+      }
+    }
+
+    // a mesma máquina também não pode receber dois trabalhos no mesmo horário
+    const equipUsado = dados.equipamentoId || et.equipamentoId || '';
+    if (equipUsado) {
+      const choqueMaq = emAberto.find(a => a.equipamentoId === equipUsado && sobrepoe(inicio, fimPrevisto, a.inicio, a.previsaoFim || a.inicio));
+      if (choqueMaq) {
+        const maq = (db.equipamentos || []).find(q => q.id === equipUsado);
+        alert(`A máquina ${maq ? maq.codigo + ' · ' + maq.nome : ''} já está ocupada com "${choqueMaq.etapaNome}" (${choqueMaq.opRotulo}) até ${String(choqueMaq.previsaoFim || '').replace('T', ' ')}.`);
+        return;
+      }
+      const q = (db.equipamentos || []).find(x => x.id === equipUsado);
+      if (q && (q.status || 'Operando') === 'Em manutenção' && !confirm(`${q.codigo} · ${q.nome} está marcada como "Em manutenção". Usar mesmo assim?`)) return;
+    }
+    update(d => {
+      d.apontamentos = [...(d.apontamentos || []), {
+        id: uid(),
+        opId: op.id,
+        opRotulo: rotuloOP(op),
+        etapaIdx: idx,
+        etapaNome: et.nome,
+        departamentoId: et.departamentoId || '',
+        equipamentoId: equipUsado,
+        modo: dados.modo,
+        colaborador: responsaveis[0],
+        equipe: responsaveis,
+        quantidade: qtd,
+        minPorPeca,
+        metaHora: minPorPeca > 0 ? Math.floor(60 / minPorPeca) : 0,
+        minPrevistos,
+        inicio,
+        previsaoFim: fimPrevisto,
+        semTempoPadrao: !(minPorPeca > 0),
+        camposSetor: dados.camposSetor || {},
+        fim: null,
+        qtdBoas: 0,
+        qtdDefeito: 0,
+        qtdRetrabalho: 0,
+        observacao: ''
+      }];
+      d.ops = d.ops.map(o => {
+        if (o.id !== op.id) return o;
+        const etapas = o.etapas.slice();
+        etapas[idx] = {
+          ...etapas[idx],
+          equipamentoId: equipUsado || etapas[idx].equipamentoId,
+          status: etapas[idx].status === 'Não iniciada' ? 'Em andamento' : etapas[idx].status,
+          dataInicio: etapas[idx].dataInicio || inicio.slice(0, 10)
+        };
+        return {
+          ...o,
+          etapas
+        };
+      });
+      registrarLog(d, usuario, 'Iniciou produção', `${rotuloOP(op)} · ${et.nome} · ${responsaveis.join(', ')} · ${qtd} peças`);
+      return d;
+    });
+    setIniciando(null);
+  }
+  function salvarConclusao(dados) {
+    update(d => {
+      const ap = (d.apontamentos || []).find(a => a.id === dados.id);
+      if (!ap) return d;
+      const fim = agoraISO();
+      const minReais = minutosEntre(ap.inicio, fim);
+      const boas = num(dados.qtdBoas);
+      const pessoas = (ap.equipe || [ap.colaborador]).length || 1;
+      const minPrevistosBoas = ap.minPorPeca * boas / pessoas;
+      const eficiencia = minReais > 0 ? minPrevistosBoas / minReais * 100 : 0;
+      const pecasHora = minReais > 0 ? boas / (minReais / 60) : 0;
+      d.apontamentos = (d.apontamentos || []).map(a => a.id !== dados.id ? a : {
+        ...a,
+        fim,
+        minReais,
+        qtdBoas: boas,
+        qtdDefeito: num(dados.qtdDefeito),
+        qtdRetrabalho: num(dados.qtdRetrabalho),
+        observacao: dados.observacao || '',
+        anexos: dados.anexos || [],
+        eficiencia,
+        pecasHora,
+        nota: classificarEficiencia(eficiencia).nota
+      });
+      d.ops = d.ops.map(o => {
+        if (o.id !== ap.opId) return o;
+        const etapas = o.etapas.slice();
+        const et = etapas[ap.etapaIdx];
+        if (!et) return o;
+        const base = num(et.qtdRecebida) > 0 ? num(et.qtdRecebida) : num(o.quantidade);
+        const acumulado = num(et.qtdConcluida) + boas;
+        const completou = acumulado >= base;
+        etapas[ap.etapaIdx] = {
+          ...et,
+          qtdConcluida: acumulado,
+          status: completou ? 'Concluída' : 'Em andamento',
+          dataConclusao: completou ? todayISO() : ''
+        };
+        return {
+          ...o,
+          etapas
+        };
+      });
+      registrarLog(d, usuario, 'Concluiu produção', `${ap.opRotulo} · ${ap.etapaNome} · ${boas} boas, ${num(dados.qtdDefeito)} defeito, ${num(dados.qtdRetrabalho)} retrabalho`);
+      return d;
+    });
+    setConcluir(null);
+  }
+  function cancelarApontamento(ap) {
+    if (!confirm('Cancelar esta produção em aberto?')) return;
+    update(d => {
+      d.apontamentos = (d.apontamentos || []).filter(a => a.id !== ap.id);
+      return d;
+    });
+  }
+  function excluirOP(op) {
+    if (!exigirPermissao(usuario, 'cadastros', update, 'excluir ordens de produção')) return;
+    if (!confirm(`Excluir a ${rotuloOP(op)}?`)) return;
+    update(d => {
+      d.ops = d.ops.filter(o => o.id !== op.id);
+      d.apontamentos = (d.apontamentos || []).filter(a => a.opId !== op.id);
+      return d;
+    });
+  }
+  return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("h3", {
+    style: {
+      fontFamily: 'var(--display)',
+      fontSize: 16,
+      margin: '0 0 10px 0'
+    }
+  }, "Ordens em aberto"), opsAbertas.length === 0 && /*#__PURE__*/React.createElement(Empty, {
+    text: "Nenhuma Ordem de Produção em aberto. Gere uma OP a partir de um pedido."
+  }), opsAbertas.map(op => {
+    const pedido = db.pedidos.find(p => p.id === op.pedidoId);
+    const produto = db.produtos.find(p => p.id === op.produtoId);
+    const expandida = aberta === op.id;
+    const pendentes = op.etapas.filter(e => e.status !== 'Concluída');
+    const deptosPend = new Set(pendentes.map(e => e.departamentoId || '_sem')).size;
+    const totalMin = op.etapas.reduce((sm, e) => {
+      const b = num(e.qtdRecebida) > 0 ? num(e.qtdRecebida) : num(op.quantidade);
+      return sm + cargaEtapaOP(e, b, op.quantidade, db);
+    }, 0);
+    const atrasada = op.entrega && op.entrega < todayISO();
+    const necessidades = opNecessidades(op, db);
+    const anexos = op.anexos || [];
+    return /*#__PURE__*/React.createElement("div", {
+      key: op.id,
+      className: "op-card"
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "op-head",
+      onClick: () => {
+        setAberta(expandida ? null : op.id);
+        setAbaOP('atividades');
+      }
+    }, /*#__PURE__*/React.createElement("span", {
+      className: "op-seta"
+    }, expandida ? '⌄' : '›'), /*#__PURE__*/React.createElement("div", {
+      style: {
+        flex: 1,
+        minWidth: 0
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "op-titulo"
+    }, rotuloOP(op), " · ", pedido ? pedido.cliente : '—'), /*#__PURE__*/React.createElement("div", {
+      className: "small muted"
+    }, produto ? produto.nome : '—', " (", op.quantidade, ")", anexos.length > 0 && /*#__PURE__*/React.createElement(React.Fragment, null, " · 📎 ", anexos.length)), /*#__PURE__*/React.createElement("div", {
+      className: "op-badges"
+    }, /*#__PURE__*/React.createElement("span", {
+      className: "tag " + (atrasada ? 'tag-bad' : 'tag-ok')
+    }, atrasada ? 'Fora do prazo' : 'Dentro do prazo'), /*#__PURE__*/React.createElement("span", {
+      className: "tag"
+    }, "Entrega: ", fmtDate(op.entrega)), /*#__PURE__*/React.createElement("span", {
+      className: "tag"
+    }, "Total estimado: ", minParaHHMM(totalMin)), /*#__PURE__*/React.createElement("span", {
+      className: "tag"
+    }, deptosPend, " departamento", deptosPend > 1 ? 's' : '', " pendente", deptosPend > 1 ? 's' : ''))), /*#__PURE__*/React.createElement("div", {
+      className: "row-actions",
+      onClick: e => e.stopPropagation()
+    }, /*#__PURE__*/React.createElement("button", {
+      className: "btn ghost sm",
+      title: "Relatório da OP",
+      onClick: () => setRelatorioOP(op)
+    }, "🖨"), /*#__PURE__*/React.createElement("button", {
+      className: "btn danger sm",
+      title: "Excluir",
+      onClick: () => excluirOP(op)
+    }, "🗑"))), expandida && /*#__PURE__*/React.createElement("div", {
+      className: "op-corpo"
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "op-abas"
+    }, /*#__PURE__*/React.createElement("button", {
+      className: abaOP === 'atividades' ? 'ativa' : '',
+      onClick: () => setAbaOP('atividades')
+    }, "Atividades"), /*#__PURE__*/React.createElement("button", {
+      className: abaOP === 'materiais' ? 'ativa' : '',
+      onClick: () => setAbaOP('materiais')
+    }, "Materiais (", necessidades.length, ")"), /*#__PURE__*/React.createElement("button", {
+      className: abaOP === 'arquivos' ? 'ativa' : '',
+      onClick: () => setAbaOP('arquivos')
+    }, "Arquivos (", anexos.length, ")")), abaOP === 'atividades' && op.etapas.map((et, idx) => {
+      const dep = db.departamentos.find(d => d.id === et.departamentoId);
+      const ap = apontamentoDaEtapa(op.id, idx);
+      const base = num(et.qtdRecebida) > 0 ? num(et.qtdRecebida) : num(op.quantidade);
+      const restante = Math.max(base - num(et.qtdConcluida), 0);
+      const minPorPeca = cargaEtapaOP(et, 1, op.quantidade, db);
+      const estim = cargaEtapaOP(et, restante || base, op.quantidade, db);
+      const concluida = et.status === 'Concluída';
+      const abrindo = iniciando && iniciando.opId === op.id && iniciando.etapaIdx === idx;
+      return /*#__PURE__*/React.createElement("div", {
+        key: idx,
+        className: "ativ " + (concluida ? 'ativ-ok' : ap ? 'ativ-run' : '')
+      }, /*#__PURE__*/React.createElement("div", {
+        className: "ativ-linha"
+      }, /*#__PURE__*/React.createElement("div", {
+        style: {
+          flex: 1,
+          minWidth: 0
+        }
+      }, /*#__PURE__*/React.createElement("div", {
+        className: "ativ-nome"
+      }, idx + 1, ". ", et.nome, /*#__PURE__*/React.createElement("span", {
+        className: "muted"
+      }, " (", dep ? dep.nome : 'sem depto', " · ", produto ? produto.nome : '—', ")")), /*#__PURE__*/React.createElement("div", {
+        className: "small muted"
+      }, minParaHHMM(estim), " · ", minPorPeca > 0 ? `padrão ${labelModoTempo(etapaAtual(et, db))} · meta ${Math.floor(60 / minPorPeca)} pç/h` : /*#__PURE__*/React.createElement("span", {
+        style: {
+          color: 'var(--bad)'
+        }
+      }, "sem tempo cadastrado na etapa"), ' · ', num(et.qtdConcluida), "/", base, " pç", (() => {
+        const q = (db.equipamentos || []).find(x => x.id === et.equipamentoId);
+        return q ? /*#__PURE__*/React.createElement(React.Fragment, null, " · ", q.codigo) : null;
+      })(), ap && /*#__PURE__*/React.createElement(React.Fragment, null, " · ", /*#__PURE__*/React.createElement("span", {
+        style: {
+          color: 'var(--thread-dark)',
+          fontWeight: 600
+        }
+      }, "prev. ", ap.previsaoFim)))), concluida ? /*#__PURE__*/React.createElement(Badge, {
+        tone: "ok"
+      }, "Concluída") : ap ? /*#__PURE__*/React.createElement("div", {
+        className: "row-actions"
+      }, /*#__PURE__*/React.createElement("button", {
+        className: "btn accent sm",
+        onClick: () => setConcluir(ap)
+      }, "■ Concluir"), /*#__PURE__*/React.createElement("button", {
+        className: "btn ghost sm",
+        onClick: () => cancelarApontamento(ap)
+      }, "Cancelar")) : /*#__PURE__*/React.createElement("button", {
+        className: "btn escuro sm",
+        onClick: () => setIniciando(abrindo ? null : {
+          opId: op.id,
+          etapaIdx: idx
+        })
+      }, "▶ Iniciar")), ap && /*#__PURE__*/React.createElement("div", {
+        className: "proj-box"
+      }, /*#__PURE__*/React.createElement("div", {
+        className: "small",
+        style: {
+          marginBottom: 6
+        }
+      }, "Em produção por ", /*#__PURE__*/React.createElement("strong", null, (ap.equipe || [ap.colaborador]).join(', ')), " desde ", String(ap.inicio).replace('T', ' '), " · ", ap.quantidade, " peças", (() => {
+        const q = (db.equipamentos || []).find(x => x.id === ap.equipamentoId);
+        return q ? /*#__PURE__*/React.createElement(React.Fragment, null, " · máquina ", /*#__PURE__*/React.createElement("strong", null, q.codigo, " · ", q.nome)) : null;
+      })()), ap.semTempoPadrao || !(num(ap.minPorPeca) > 0) ? /*#__PURE__*/React.createElement("div", {
+        className: "small",
+        style: {
+          color: 'var(--bad)',
+          fontWeight: 600
+        }
+      }, "Sem tempo de produção cadastrado nesta etapa — não há como projetar a conclusão.") : /*#__PURE__*/React.createElement("div", {
+        className: "proj-grid"
+      }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+        className: "k"
+      }, "Conclusão prevista"), /*#__PURE__*/React.createElement("div", {
+        className: "v"
+      }, String(ap.previsaoFim).replace('T', ' '))), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+        className: "k"
+      }, "Duração prevista"), /*#__PURE__*/React.createElement("div", {
+        className: "v"
+      }, minParaHHMM(ap.minPrevistos))), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+        className: "k"
+      }, "Meta"), /*#__PURE__*/React.createElement("div", {
+        className: "v"
+      }, ap.metaHora, " pç/h")), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+        className: "k"
+      }, "Decorrido"), /*#__PURE__*/React.createElement("div", {
+        className: "v"
+      }, minParaHHMM(minutosEntre(ap.inicio, agoraISO())))))), abrindo && !ap && !concluida && /*#__PURE__*/React.createElement(FormIniciarEtapa, {
+        etapa: et,
+        dep: dep,
+        restante: restante,
+        db: db,
+        emAberto: emAberto,
+        minPorPeca: minPorPeca,
+        onCancelar: () => setIniciando(null),
+        onIniciar: dados => iniciar(op, idx, dados)
+      }));
+    }), abaOP === 'materiais' && (necessidades.length === 0 ? /*#__PURE__*/React.createElement(Empty, {
+      text: "Este produto não tem ficha técnica."
+    }) : /*#__PURE__*/React.createElement("table", null, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("th", null, "Material"), /*#__PURE__*/React.createElement("th", {
+      className: "num"
+    }, "Necessário"), /*#__PURE__*/React.createElement("th", {
+      className: "num"
+    }, "Estoque"), /*#__PURE__*/React.createElement("th", {
+      className: "num"
+    }, "Falta"))), /*#__PURE__*/React.createElement("tbody", null, necessidades.map(n => /*#__PURE__*/React.createElement("tr", {
+      key: n.materialId
+    }, /*#__PURE__*/React.createElement("td", null, n.nome), /*#__PURE__*/React.createElement("td", {
+      className: "num"
+    }, n.necessario, " ", n.unidade), /*#__PURE__*/React.createElement("td", {
+      className: "num"
+    }, n.disponivel, " ", n.unidade), /*#__PURE__*/React.createElement("td", {
+      className: "num",
+      style: n.falta > 0 ? {
+        color: 'var(--bad)',
+        fontWeight: 700
+      } : {}
+    }, n.falta || '—')))))), abaOP === 'arquivos' && (anexos.length === 0 ? /*#__PURE__*/React.createElement(Empty, {
+      text: "Nenhum arquivo anexado a esta OP."
+    }) : /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: 'flex',
+        flexWrap: 'wrap',
+        gap: 10
+      }
+    }, anexos.map(a => /*#__PURE__*/React.createElement("div", {
+      key: a.id,
+      style: {
+        width: 130,
+        border: '1px solid var(--line)',
+        borderRadius: 6,
+        padding: 8,
+        background: '#fff'
+      }
+    }, a.tipo === 'imagem' ? /*#__PURE__*/React.createElement("a", {
+      href: a.url,
+      target: "_blank",
+      rel: "noopener noreferrer"
+    }, /*#__PURE__*/React.createElement("img", {
+      src: a.url,
+      alt: a.nome,
+      style: {
+        width: '100%',
+        height: 80,
+        objectFit: 'cover',
+        borderRadius: 4
+      }
+    })) : /*#__PURE__*/React.createElement("div", {
+      style: {
+        height: 80,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        background: '#f0ede6',
+        borderRadius: 4,
+        fontSize: 26
+      }
+    }, "📄"), /*#__PURE__*/React.createElement("div", {
+      className: "small",
+      style: {
+        wordBreak: 'break-word',
+        marginTop: 6
+      }
+    }, a.nome)))))));
+  }), /*#__PURE__*/React.createElement("div", {
+    className: "panel",
+    style: {
+      padding: 0,
+      marginTop: 18
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      padding: '14px 18px',
+      display: 'flex',
+      alignItems: 'center',
+      gap: 10,
+      flexWrap: 'wrap'
+    }
+  }, /*#__PURE__*/React.createElement("h3", {
+    style: {
+      margin: 0,
+      flex: 1
+    }
+  }, "Produções concluídas ", /*#__PURE__*/React.createElement("span", {
+    className: "chip"
+  }, concluidos.length)), /*#__PURE__*/React.createElement("button", {
+    className: "btn ghost sm",
+    onClick: () => setVerConcluidas(!verConcluidas)
+  }, verConcluidas ? 'Ocultar' : 'Ver histórico')), verConcluidas && (concluidos.length === 0 ? /*#__PURE__*/React.createElement("div", {
+    style: {
+      padding: 20
+    }
+  }, /*#__PURE__*/React.createElement(Empty, {
+    text: "Nenhuma produção concluída ainda."
+  })) : /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+    className: "small muted",
+    style: {
+      padding: '0 18px 10px 18px'
+    }
+  }, "🟢 A (95%+) · 🟡 B (80–94%) · 🔴 C (abaixo de 80%). A meta considera apenas peças boas."), /*#__PURE__*/React.createElement("table", null, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("th", null, "Colaborador"), /*#__PURE__*/React.createElement("th", null, "OP"), /*#__PURE__*/React.createElement("th", null, "Etapa"), /*#__PURE__*/React.createElement("th", {
+    className: "num"
+  }, "Boas"), /*#__PURE__*/React.createElement("th", {
+    className: "num"
+  }, "Defeito"), /*#__PURE__*/React.createElement("th", {
+    className: "num"
+  }, "Retrab."), /*#__PURE__*/React.createElement("th", {
+    className: "num"
+  }, "Previsto"), /*#__PURE__*/React.createElement("th", {
+    className: "num"
+  }, "Real"), /*#__PURE__*/React.createElement("th", {
+    className: "num"
+  }, "Pç/h"), /*#__PURE__*/React.createElement("th", {
+    className: "num"
+  }, "Eficiência"), /*#__PURE__*/React.createElement("th", null, "Nota"))), /*#__PURE__*/React.createElement("tbody", null, concluidos.map(ap => {
+    const cls = classificarEficiencia(num(ap.eficiencia));
+    const pessoas = (ap.equipe || [ap.colaborador]).length || 1;
+    return /*#__PURE__*/React.createElement("tr", {
+      key: ap.id,
+      className: 'linha-nota-' + cls.nota
+    }, /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement("strong", null, (ap.equipe || [ap.colaborador]).join(', ')), /*#__PURE__*/React.createElement("div", {
+      className: "small muted"
+    }, ap.fim)), /*#__PURE__*/React.createElement("td", {
+      className: "small"
+    }, ap.opRotulo), /*#__PURE__*/React.createElement("td", {
+      className: "small"
+    }, ap.etapaNome, (ap.anexos || []).length > 0 && /*#__PURE__*/React.createElement("span", {
+      title: `${ap.anexos.length} anexo(s)`
+    }, " 📎", ap.anexos.length), ap.observacao && /*#__PURE__*/React.createElement("div", {
+      className: "small muted"
+    }, ap.observacao), (ap.anexos || []).filter(x => x.tipo === 'imagem').length > 0 && /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: 'flex',
+        gap: 4,
+        marginTop: 4
+      }
+    }, (ap.anexos || []).filter(x => x.tipo === 'imagem').map(x => /*#__PURE__*/React.createElement("a", {
+      key: x.id,
+      href: x.url,
+      target: "_blank",
+      rel: "noopener noreferrer"
+    }, /*#__PURE__*/React.createElement("img", {
+      src: x.url,
+      alt: x.nome,
+      style: {
+        width: 40,
+        height: 40,
+        objectFit: 'cover',
+        borderRadius: 4,
+        border: '1px solid var(--line)'
+      }
+    }))))), /*#__PURE__*/React.createElement("td", {
+      className: "num"
+    }, ap.qtdBoas), /*#__PURE__*/React.createElement("td", {
+      className: "num",
+      style: num(ap.qtdDefeito) > 0 ? {
+        color: 'var(--bad)',
+        fontWeight: 600
+      } : {}
+    }, ap.qtdDefeito || '—'), /*#__PURE__*/React.createElement("td", {
+      className: "num",
+      style: num(ap.qtdRetrabalho) > 0 ? {
+        color: 'var(--warn)',
+        fontWeight: 600
+      } : {}
+    }, ap.qtdRetrabalho || '—'), /*#__PURE__*/React.createElement("td", {
+      className: "num small"
+    }, minParaHHMM(ap.minPorPeca * ap.qtdBoas / pessoas)), /*#__PURE__*/React.createElement("td", {
+      className: "num small"
+    }, minParaHHMM(ap.minReais)), /*#__PURE__*/React.createElement("td", {
+      className: "num"
+    }, num(ap.pecasHora).toFixed(0)), /*#__PURE__*/React.createElement("td", {
+      className: "num"
+    }, /*#__PURE__*/React.createElement("strong", null, num(ap.eficiencia).toFixed(1), "%")), /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement(Badge, {
+      tone: cls.tone
+    }, cls.nota)));
+  })))))), concluir && /*#__PURE__*/React.createElement(ConcluirProducaoModal, {
+    ap: concluir,
+    onClose: () => setConcluir(null),
+    onSalvar: salvarConclusao
+  }), relatorioOP && (() => {
+    const ped = db.pedidos.find(p => p.id === relatorioOP.pedidoId);
+    const prod = db.produtos.find(p => p.id === relatorioOP.produtoId);
+    return /*#__PURE__*/React.createElement(Modal, {
+      title: `Relatório — ${rotuloOP(relatorioOP)}`,
+      onClose: () => setRelatorioOP(null),
+      wide: true
+    }, /*#__PURE__*/React.createElement(RelatorioOP, {
+      op: relatorioOP,
+      db: db,
+      pedido: ped,
+      produto: prod,
+      necessidades: opNecessidades(relatorioOP, db)
+    }), /*#__PURE__*/React.createElement("div", {
+      className: "modal-actions"
+    }, /*#__PURE__*/React.createElement("button", {
+      className: "btn ghost",
+      onClick: () => setRelatorioOP(null)
+    }, "Fechar")));
+  })());
+}
+
+/* formulário inline de início da atividade, com campos próprios do setor */
+function FormIniciarEtapa({
+  etapa,
+  dep,
+  restante,
+  db,
+  emAberto,
+  minPorPeca,
+  onCancelar,
+  onIniciar
+}) {
+  const [modo, setModo] = useState('individual');
+  const [colaborador, setColaborador] = useState('');
+  const [equipe, setEquipe] = useState([]);
+  const [quantidade, setQuantidade] = useState(String(restante || ''));
+  const [inicio, setInicio] = useState(agoraISO().replace(' ', 'T'));
+  const [campos, setCampos] = useState({});
+  const [equipamentoId, setEquipamentoId] = useState(etapa.equipamentoId || '');
+  const maquinas = maquinasDaEtapa(etapa, db);
+  const doDep = db.colaboradores.filter(c => c.status !== 'Inativo' && c.departamentoId === etapa.departamentoId);
+  const outros = db.colaboradores.filter(c => c.status !== 'Inativo' && c.departamentoId !== etapa.departamentoId);
+  const nomeDep = normaliza(dep && dep.nome || '');
+
+  // campos extras conforme o setor
+  const extras = [];
+  if (nomeDep.includes('corte')) extras.push({
+    k: 'tecido',
+    label: 'Tipo de tecido',
+    ph: 'Ex.: Malha 100% algodão'
+  }, {
+    k: 'consumo',
+    label: 'Consumo (metros)',
+    ph: 'Ex.: 12.5',
+    tipo: 'number'
+  });
+  if (nomeDep.includes('silk') || nomeDep.includes('grava')) extras.push({
+    k: 'cores',
+    label: 'Cores / Pantone',
+    ph: 'Ex.: Preto + Branco'
+  }, {
+    k: 'fotolito',
+    label: 'Fotolito / tela',
+    ph: 'Ex.: Tela 120 fios'
+  });
+  if (nomeDep.includes('costura')) extras.push({
+    k: 'linha',
+    label: 'Linha / cor',
+    ph: 'Ex.: Linha 120 branca'
+  });
+  const nomes = modo === 'equipe' ? equipe : colaborador ? [colaborador] : [];
+  return /*#__PURE__*/React.createElement("div", {
+    className: "form-iniciar"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "field"
+  }, /*#__PURE__*/React.createElement("label", null, "Colaborador"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 6,
+      marginBottom: 8
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "btn sm " + (modo === 'individual' ? 'escuro' : 'ghost'),
+    onClick: () => setModo('individual')
+  }, "Individual"), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "btn sm " + (modo === 'equipe' ? 'escuro' : 'ghost'),
+    onClick: () => setModo('equipe')
+  }, "Equipe")), modo === 'individual' ? /*#__PURE__*/React.createElement("select", {
+    value: colaborador,
+    onChange: e => setColaborador(e.target.value)
+  }, /*#__PURE__*/React.createElement("option", {
+    value: ""
+  }, "Selecione…"), doDep.length > 0 && /*#__PURE__*/React.createElement("optgroup", {
+    label: dep ? dep.nome : 'Departamento'
+  }, doDep.map(c => {
+    const d = disponibilidadeColaborador(c.nome, emAberto || []);
+    return /*#__PURE__*/React.createElement("option", {
+      key: c.id,
+      value: c.nome
+    }, c.nome, " — ", rotuloDisponibilidade(d));
+  })), outros.length > 0 && /*#__PURE__*/React.createElement("optgroup", {
+    label: "Outros departamentos"
+  }, outros.map(c => {
+    const d = disponibilidadeColaborador(c.nome, emAberto || []);
+    return /*#__PURE__*/React.createElement("option", {
+      key: c.id,
+      value: c.nome
+    }, c.nome, " — ", rotuloDisponibilidade(d));
+  }))) : /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexWrap: 'wrap',
+      gap: 5,
+      marginBottom: 6
+    }
+  }, equipe.map(n => /*#__PURE__*/React.createElement("span", {
+    key: n,
+    className: "chip-col"
+  }, n, /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: () => setEquipe(equipe.filter(x => x !== n))
+  }, "×"))), equipe.length === 0 && /*#__PURE__*/React.createElement("span", {
+    className: "small muted"
+  }, "Nenhum colaborador na equipe.")), /*#__PURE__*/React.createElement("select", {
+    value: "",
+    onChange: e => {
+      if (e.target.value) setEquipe([...equipe, e.target.value]);
+    }
+  }, /*#__PURE__*/React.createElement("option", {
+    value: ""
+  }, "+ adicionar à equipe"), [...doDep, ...outros].filter(c => !equipe.includes(c.nome)).map(c => {
+    const d = disponibilidadeColaborador(c.nome, emAberto || []);
+    return /*#__PURE__*/React.createElement("option", {
+      key: c.id,
+      value: c.nome
+    }, c.nome, " — ", rotuloDisponibilidade(d));
+  })))), /*#__PURE__*/React.createElement(Field, {
+    label: "Equipamento utilizado"
+  }, maquinas.length === 0 ? /*#__PURE__*/React.createElement("div", {
+    className: "small muted"
+  }, "Nenhum equipamento cadastrado em ", dep ? dep.nome : 'este departamento', ".") : /*#__PURE__*/React.createElement("select", {
+    value: equipamentoId,
+    onChange: e => setEquipamentoId(e.target.value)
+  }, /*#__PURE__*/React.createElement("option", {
+    value: ""
+  }, "— sem equipamento / manual —"), maquinas.map(q => {
+    const ocupa = (emAberto || []).find(a => a.equipamentoId === q.id);
+    const st = (q.status || 'Operando') !== 'Operando' ? ` (${q.status})` : '';
+    return /*#__PURE__*/React.createElement("option", {
+      key: q.id,
+      value: q.id
+    }, q.codigo, " · ", q.nome, st, ocupa ? ` — em uso até ${String(ocupa.previsaoFim || '').replace('T', ' ').slice(11)}` : '');
+  }))), extras.map(x => /*#__PURE__*/React.createElement(Field, {
+    key: x.k,
+    label: x.label
+  }, /*#__PURE__*/React.createElement("input", {
+    type: x.tipo || 'text',
+    value: campos[x.k] || '',
+    placeholder: x.ph,
+    onChange: e => setCampos({
+      ...campos,
+      [x.k]: e.target.value
+    })
+  }))), /*#__PURE__*/React.createElement("div", {
+    className: "grid2"
+  }, /*#__PURE__*/React.createElement(Field, {
+    label: "Quantidade a produzir"
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "number",
+    min: "1",
+    value: quantidade,
+    onChange: e => setQuantidade(e.target.value)
+  })), /*#__PURE__*/React.createElement(Field, {
+    label: "Início (quando)"
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "datetime-local",
+    value: inicio,
+    onChange: e => setInicio(e.target.value)
+  }))), (() => {
+    if (nomes.length === 0) return null;
+    const mp = num(minPorPeca);
+    const prev = mp > 0 ? mp * num(quantidade) / nomes.length : 0;
+    const ini = inicio.replace('T', ' ');
+    const fim = mp > 0 ? somaMinutos(ini, prev) : null;
+    const conflitos = nomes.map(n => {
+      const d = disponibilidadeColaborador(n, emAberto || []);
+      if (d.livre) return null;
+      const bate = (d.janelas || []).some(a => sobrepoe(ini, fim || somaMinutos(ini, 1), a.inicio, a.previsaoFim || a.inicio));
+      return {
+        nome: n,
+        disp: d,
+        bate
+      };
+    }).filter(Boolean);
+    return /*#__PURE__*/React.createElement(React.Fragment, null, mp > 0 && /*#__PURE__*/React.createElement("div", {
+      className: "proj-box",
+      style: {
+        marginBottom: 10
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "proj-grid"
+    }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+      className: "k"
+    }, "Conclusão prevista"), /*#__PURE__*/React.createElement("div", {
+      className: "v"
+    }, fim)), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+      className: "k"
+    }, "Duração"), /*#__PURE__*/React.createElement("div", {
+      className: "v"
+    }, minParaHHMM(prev))), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+      className: "k"
+    }, "Meta"), /*#__PURE__*/React.createElement("div", {
+      className: "v"
+    }, Math.floor(60 / mp), " pç/h")), nomes.length > 1 && /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+      className: "k"
+    }, "Divisão"), /*#__PURE__*/React.createElement("div", {
+      className: "v"
+    }, nomes.length, " pessoas")))), (() => {
+      if (!equipamentoId) return null;
+      const choque = (emAberto || []).find(a => a.equipamentoId === equipamentoId && sobrepoe(ini, fim || somaMinutos(ini, 1), a.inicio, a.previsaoFim || a.inicio));
+      if (!choque) return null;
+      const q = (db.equipamentos || []).find(x => x.id === equipamentoId);
+      return /*#__PURE__*/React.createElement("div", {
+        className: "small",
+        style: {
+          background: 'var(--bad-bg)',
+          color: 'var(--bad)',
+          padding: '8px 10px',
+          borderRadius: 6,
+          marginBottom: 8,
+          fontWeight: 600
+        }
+      }, "⛔ ", q ? `${q.codigo} · ${q.nome}` : 'A máquina', " já está em uso em ", /*#__PURE__*/React.createElement("strong", null, choque.etapaNome), " (", choque.opRotulo, ") até", ' ', /*#__PURE__*/React.createElement("strong", null, String(choque.previsaoFim || '').replace('T', ' ')), ". Escolha outra máquina ou ajuste o horário.");
+    })(), conflitos.map(c => /*#__PURE__*/React.createElement("div", {
+      key: c.nome,
+      className: "small",
+      style: {
+        background: c.bate ? 'var(--bad-bg)' : 'var(--warn-bg)',
+        color: c.bate ? 'var(--bad)' : 'var(--warn)',
+        padding: '8px 10px',
+        borderRadius: 6,
+        marginBottom: 8,
+        fontWeight: 600
+      }
+    }, c.bate ? '⛔' : '⚠', " ", c.nome, " está em ", /*#__PURE__*/React.createElement("strong", null, c.disp.etapa), " (", c.disp.op, ") e fica livre em", ' ', /*#__PURE__*/React.createElement("strong", null, String(c.disp.ocupadoAte).replace('T', ' ')), ".", c.bate && ' O horário escolhido conflita — ajuste o início ou conclua a produção anterior.')));
+  })(), /*#__PURE__*/React.createElement("div", {
+    className: "row-actions",
+    style: {
+      marginTop: 6
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "btn accent",
+    style: {
+      flex: 1,
+      justifyContent: 'center'
+    },
+    disabled: nomes.length === 0 || num(quantidade) <= 0,
+    onClick: () => onIniciar({
+      modo,
+      colaborador,
+      equipe,
+      quantidade,
+      inicio: inicio.replace('T', ' '),
+      camposSetor: campos,
+      equipamentoId
+    })
+  }, "▶ Iniciar ", etapa.nome), /*#__PURE__*/React.createElement("button", {
+    className: "btn ghost",
+    onClick: onCancelar
+  }, "Cancelar")));
+}
+function ConcluirProducaoModal({
+  ap,
+  onClose,
+  onSalvar
+}) {
+  const [qtdBoas, setQtdBoas] = useState(String(ap.quantidade));
+  const [temDefeito, setTemDefeito] = useState(null);
+  const [qtdDefeito, setQtdDefeito] = useState('');
+  const [qtdRetrabalho, setQtdRetrabalho] = useState('');
+  const [observacao, setObservacao] = useState('');
+  const [anexos, setAnexos] = useState([]);
+  const pessoas = (ap.equipe || [ap.colaborador]).length || 1;
+  const minReais = minutosEntre(ap.inicio, agoraISO());
+  const boas = num(qtdBoas);
+  const semTempoPadrao = !(num(ap.minPorPeca) > 0);
+  const minPrevistos = num(ap.minPorPeca) * boas / pessoas;
+  const podeMedir = !semTempoPadrao && minReais > 0;
+  const eficiencia = podeMedir ? minPrevistos / minReais * 100 : 0;
+  const cls = classificarEficiencia(eficiencia);
+  const inicioNoFuturo = new Date(String(ap.inicio).replace(' ', 'T')) > new Date();
+  async function onArquivo(e) {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = '';
+    if (!file) return;
+    const ehImagem = file.type.startsWith('image/');
+    try {
+      let url;
+      if (ehImagem) url = await comprimirImagem(file);else {
+        if (file.size > 300 * 1024) {
+          alert('Documento muito grande (máx. 300 KB).');
+          return;
+        }
+        url = await new Promise((res, rej) => {
+          const r = new FileReader();
+          r.onload = () => res(r.result);
+          r.onerror = () => rej(new Error('Falha ao ler o arquivo.'));
+          r.readAsDataURL(file);
+        });
+      }
+      setAnexos(a => [...a, {
+        id: uid(),
+        nome: file.name,
+        tipo: ehImagem ? 'imagem' : 'documento',
+        url,
+        quando: agoraISO()
+      }]);
+    } catch (err) {
+      alert('Não foi possível anexar: ' + (err && err.message));
+    }
+  }
+  return /*#__PURE__*/React.createElement(Modal, {
+    title: `Concluir produção — ${ap.etapaNome}`,
+    onClose: onClose,
+    wide: true
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "small muted",
+    style: {
+      marginBottom: 12
+    }
+  }, ap.opRotulo, " · ", (ap.equipe || [ap.colaborador]).join(', '), " · iniciada em ", ap.inicio, ap.previsaoFim && /*#__PURE__*/React.createElement(React.Fragment, null, " · previsão ", ap.previsaoFim), pessoas > 1 && /*#__PURE__*/React.createElement(React.Fragment, null, " · equipe de ", pessoas)), inicioNoFuturo && /*#__PURE__*/React.createElement("div", {
+    className: "small",
+    style: {
+      background: 'var(--warn-bg)',
+      color: 'var(--warn)',
+      padding: '8px 10px',
+      borderRadius: 6,
+      marginBottom: 12,
+      fontWeight: 600
+    }
+  }, "A data de início está no futuro, então o tempo real ainda é 0:00. Ajuste o início na atividade se foi engano."), semTempoPadrao && /*#__PURE__*/React.createElement("div", {
+    className: "small",
+    style: {
+      background: 'var(--warn-bg)',
+      color: 'var(--warn)',
+      padding: '8px 10px',
+      borderRadius: 6,
+      marginBottom: 12,
+      fontWeight: 600
+    }
+  }, "Esta etapa não tem tempo de produção cadastrado — sem isso não há meta, e a eficiência não pode ser calculada. Cadastre o tempo em Departamentos → Etapas para medir o desempenho."), /*#__PURE__*/React.createElement("div", {
+    className: "painel-meta",
+    style: {
+      marginBottom: 14
+    }
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    className: "k"
+  }, "Tempo real"), /*#__PURE__*/React.createElement("div", {
+    className: "v"
+  }, minParaHHMM(minReais))), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    className: "k"
+  }, "Tempo previsto"), /*#__PURE__*/React.createElement("div", {
+    className: "v"
+  }, semTempoPadrao ? '—' : minParaHHMM(minPrevistos))), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    className: "k"
+  }, "Eficiência"), /*#__PURE__*/React.createElement("div", {
+    className: "v",
+    style: {
+      color: !podeMedir ? '#8a8577' : cls.tone === 'ok' ? 'var(--ok)' : cls.tone === 'warn' ? 'var(--warn)' : 'var(--bad)'
+    }
+  }, podeMedir ? eficiencia.toFixed(1) + '%' : '—')), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    className: "k"
+  }, "Nota"), /*#__PURE__*/React.createElement("div", {
+    className: "v"
+  }, podeMedir ? cls.nota : '—'))), /*#__PURE__*/React.createElement(Field, {
+    label: "Quantidade de peças boas produzidas"
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "number",
+    min: "0",
+    value: qtdBoas,
+    onChange: e => setQtdBoas(e.target.value)
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "field"
+  }, /*#__PURE__*/React.createElement("label", null, "Houve peças com defeito?"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 6
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "btn sm " + (temDefeito === false ? 'accent' : 'ghost'),
+    onClick: () => {
+      setTemDefeito(false);
+      setQtdDefeito('');
+      setQtdRetrabalho('');
+    }
+  }, "Não"), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "btn sm " + (temDefeito === true ? 'accent' : 'ghost'),
+    onClick: () => setTemDefeito(true)
+  }, "Sim"))), temDefeito && /*#__PURE__*/React.createElement("div", {
+    className: "grid2"
+  }, /*#__PURE__*/React.createElement(Field, {
+    label: "Quantidade com defeito"
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "number",
+    min: "0",
+    value: qtdDefeito,
+    onChange: e => setQtdDefeito(e.target.value)
+  })), /*#__PURE__*/React.createElement(Field, {
+    label: "Quantidade para retrabalho"
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "number",
+    min: "0",
+    value: qtdRetrabalho,
+    onChange: e => setQtdRetrabalho(e.target.value)
+  }))), /*#__PURE__*/React.createElement("div", {
+    className: "field"
+  }, /*#__PURE__*/React.createElement("label", null, "Anexar foto ou arquivo ", anexos.length > 0 && `(${anexos.length})`), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 8,
+      flexWrap: 'wrap'
+    }
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "btn ghost sm",
+    style: {
+      cursor: 'pointer'
+    }
+  }, "📎 Anexar arquivo", /*#__PURE__*/React.createElement("input", {
+    type: "file",
+    accept: "image/*,.pdf,.doc,.docx,.xls,.xlsx",
+    style: {
+      display: 'none'
+    },
+    onChange: onArquivo
+  })), /*#__PURE__*/React.createElement("label", {
+    className: "btn ghost sm",
+    style: {
+      cursor: 'pointer'
+    }
+  }, "📷 Tirar foto", /*#__PURE__*/React.createElement("input", {
+    type: "file",
+    accept: "image/*",
+    capture: "environment",
+    style: {
+      display: 'none'
+    },
+    onChange: onArquivo
+  })), /*#__PURE__*/React.createElement("span", {
+    className: "small muted",
+    style: {
+      alignSelf: 'center'
+    }
+  }, temDefeito ? 'registre a foto do defeito encontrado' : 'foto da peça pronta, ocorrência, etiqueta…')), anexos.length > 0 && /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexWrap: 'wrap',
+      gap: 8,
+      marginTop: 10
+    }
+  }, anexos.map(a => /*#__PURE__*/React.createElement("div", {
+    key: a.id,
+    style: {
+      width: 120,
+      border: '1px solid var(--line)',
+      borderRadius: 6,
+      padding: 6,
+      background: '#fff'
+    }
+  }, a.tipo === 'imagem' ? /*#__PURE__*/React.createElement("a", {
+    href: a.url,
+    target: "_blank",
+    rel: "noopener noreferrer"
+  }, /*#__PURE__*/React.createElement("img", {
+    src: a.url,
+    alt: a.nome,
+    style: {
+      width: '100%',
+      height: 70,
+      objectFit: 'cover',
+      borderRadius: 4
+    }
+  })) : /*#__PURE__*/React.createElement("div", {
+    style: {
+      height: 70,
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      background: '#f0ede6',
+      borderRadius: 4,
+      fontSize: 24
+    }
+  }, "📄"), /*#__PURE__*/React.createElement("div", {
+    className: "small",
+    style: {
+      wordBreak: 'break-word',
+      margin: '4px 0'
+    }
+  }, a.nome), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "btn danger sm",
+    onClick: () => setAnexos(x => x.filter(y => y.id !== a.id))
+  }, "Remover"))))), /*#__PURE__*/React.createElement(Field, {
+    label: "Observação"
+  }, /*#__PURE__*/React.createElement("textarea", {
+    rows: "2",
+    value: observacao,
+    onChange: e => setObservacao(e.target.value),
+    placeholder: "Ocorrências, motivo do atraso, causa do defeito…"
+  })), podeMedir && /*#__PURE__*/React.createElement("div", {
+    className: "small muted",
+    style: {
+      marginBottom: 10
+    }
+  }, cls.texto, ". A meta considera apenas as peças boas — defeitos reduzem a eficiência proporcionalmente."), /*#__PURE__*/React.createElement("div", {
+    className: "modal-actions"
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "btn ghost",
+    onClick: onClose
+  }, "Cancelar"), /*#__PURE__*/React.createElement("button", {
+    className: "btn accent",
+    disabled: temDefeito === null || boas < 0,
+    onClick: () => onSalvar({
+      id: ap.id,
+      qtdBoas,
+      qtdDefeito,
+      qtdRetrabalho,
+      observacao,
+      anexos
+    })
+  }, "Concluir produção")));
+}
+function SelectComCadastro({
+  label,
+  valor,
+  onChange,
+  lista,
+  campoDb,
+  update,
+  placeholderCod,
+  placeholderNome,
+  pai,
+  filtro
+}) {
+  const [aberto, setAberto] = useState(false);
+  const [cod, setCod] = useState('');
+  const [nome, setNome] = useState('');
+  const opcoes = filtro ? lista.filter(filtro) : lista;
+  function criar() {
+    const c = cod.trim().toUpperCase(),
+      n = nome.trim();
+    if (!c || !n) return;
+    const dup = lista.find(x => normaliza(x.codigo) === normaliza(c) || normaliza(x.nome) === normaliza(n));
+    if (dup) {
+      alert(`Já existe: "${dup.codigo} · ${dup.nome}".`);
+      return;
+    }
+    const novo = {
+      id: uid(),
+      codigo: c,
+      nome: n,
+      ...(pai ? {
+        [pai.campo]: pai.valor || ''
+      } : {})
     };
-    await onSalvarRegistro({ ...r, comentarios: [...(r.comentarios || []), comentario] });
-    setComentandoId(null); setTextoComentario(""); setAnexosComentario([]);
+    update(d => {
+      d[campoDb] = [...(d[campoDb] || []), novo];
+      return d;
+    });
+    onChange(novo.id);
+    setCod('');
+    setNome('');
+    setAberto(false);
   }
-  async function removerComentario(r, comentarioId) {
-    if (!window.confirm("Excluir este comentário?")) return;
-    await onSalvarRegistro({ ...r, comentarios: (r.comentarios || []).filter(c => c.id !== comentarioId) });
+  return /*#__PURE__*/React.createElement("div", {
+    className: "field"
+  }, /*#__PURE__*/React.createElement("label", null, label), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 6
+    }
+  }, /*#__PURE__*/React.createElement("select", {
+    value: valor || '',
+    onChange: e => onChange(e.target.value),
+    style: {
+      flex: 1
+    }
+  }, /*#__PURE__*/React.createElement("option", {
+    value: ""
+  }, "—"), opcoes.map(x => /*#__PURE__*/React.createElement("option", {
+    key: x.id,
+    value: x.id
+  }, x.codigo, " · ", x.nome))), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "btn sm " + (aberto ? 'accent' : 'ghost'),
+    onClick: () => setAberto(!aberto),
+    title: "Cadastrar nova"
+  }, aberto ? '×' : '+')), aberto && /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 6,
+      marginTop: 6
+    }
+  }, /*#__PURE__*/React.createElement("input", {
+    value: cod,
+    onChange: e => setCod(e.target.value.toUpperCase()),
+    placeholder: placeholderCod,
+    maxLength: "6",
+    style: {
+      width: 90
+    }
+  }), /*#__PURE__*/React.createElement("input", {
+    value: nome,
+    onChange: e => setNome(e.target.value),
+    placeholder: placeholderNome,
+    style: {
+      flex: 1
+    },
+    onKeyDown: e => {
+      if (e.key === 'Enter') criar();
+    }
+  }), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "btn accent sm",
+    onClick: criar,
+    disabled: !cod.trim() || !nome.trim()
+  }, "Criar")));
+}
+
+/* ==========================================================
+   1. MATERIAIS
+========================================================== */
+function Materiais({
+  db,
+  update
+}) {
+  const [modal, setModal] = useState(null); // {} novo ou material existente
+  const [q, setQ] = useState('');
+  const list = db.materiais.filter(m => {
+    const s = q.toLowerCase();
+    return !s || m.nome.toLowerCase().includes(s) || m.codigo.toLowerCase().includes(s) || (m.categoria || '').toLowerCase().includes(s);
+  });
+  function save(mat) {
+    const erro = checarDuplicidade(db.materiais, mat, [{
+      key: 'codigo',
+      label: 'código'
+    }, {
+      key: 'nome',
+      label: 'nome'
+    }]);
+    if (erro) {
+      alert(erro);
+      return;
+    }
+    update(d => {
+      if (mat.id) {
+        d.materiais = d.materiais.map(m => m.id === mat.id ? mat : m);
+      } else {
+        d.materiais.push({
+          ...mat,
+          id: uid()
+        });
+      }
+      return d;
+    });
+    setModal(null);
+  }
+  function remove(id) {
+    if (!confirm('Excluir este material?')) return;
+    update(d => {
+      d.materiais = d.materiais.filter(m => m.id !== id);
+      return d;
+    });
+  }
+  return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    className: "page-head"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "eyebrow"
+  }, "Materiais"), /*#__PURE__*/React.createElement("button", {
+    className: "btn accent",
+    onClick: () => setModal({})
+  }, "+ Novo material")), /*#__PURE__*/React.createElement("div", {
+    className: "searchbar"
+  }, /*#__PURE__*/React.createElement("input", {
+    placeholder: "Buscar por código, nome ou categoria…",
+    value: q,
+    onChange: e => setQ(e.target.value)
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "panel",
+    style: {
+      padding: 0
+    }
+  }, list.length === 0 ? /*#__PURE__*/React.createElement("div", {
+    style: {
+      padding: 20
+    }
+  }, /*#__PURE__*/React.createElement(Empty, {
+    text: "Nenhum material cadastrado ainda."
+  })) : /*#__PURE__*/React.createElement("table", null, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("th", null, "Código"), /*#__PURE__*/React.createElement("th", null, "Nome"), /*#__PURE__*/React.createElement("th", null, "Categoria"), /*#__PURE__*/React.createElement("th", null, "Cor"), /*#__PURE__*/React.createElement("th", null, "Un."), /*#__PURE__*/React.createElement("th", {
+    className: "num"
+  }, "Estoque"), /*#__PURE__*/React.createElement("th", {
+    className: "num"
+  }, "Mínimo"), /*#__PURE__*/React.createElement("th", {
+    className: "num"
+  }, "Custo"), /*#__PURE__*/React.createElement("th", null, "Fornecedor"), /*#__PURE__*/React.createElement("th", null, "Local"), /*#__PURE__*/React.createElement("th", null))), /*#__PURE__*/React.createElement("tbody", null, list.map(m => {
+    const baixo = num(m.estoqueAtual) <= num(m.estoqueMinimo);
+    return /*#__PURE__*/React.createElement("tr", {
+      key: m.id
+    }, /*#__PURE__*/React.createElement("td", {
+      className: "small muted"
+    }, m.codigo), /*#__PURE__*/React.createElement("td", null, m.nome), /*#__PURE__*/React.createElement("td", {
+      className: "small"
+    }, ((db.categoriasMaterial || []).find(c => c.id === m.categoriaId) || {}).nome || m.categoria || '—'), /*#__PURE__*/React.createElement("td", {
+      className: "small"
+    }, m.cor), /*#__PURE__*/React.createElement("td", {
+      className: "small"
+    }, m.unidade), /*#__PURE__*/React.createElement("td", {
+      className: "num",
+      style: baixo ? {
+        color: 'var(--bad)',
+        fontWeight: 700
+      } : {}
+    }, num(m.estoqueAtual)), /*#__PURE__*/React.createElement("td", {
+      className: "num muted"
+    }, num(m.estoqueMinimo)), /*#__PURE__*/React.createElement("td", {
+      className: "num"
+    }, money(m.custo)), /*#__PURE__*/React.createElement("td", {
+      className: "small"
+    }, m.fornecedor), /*#__PURE__*/React.createElement("td", {
+      className: "small muted"
+    }, m.localizacao), /*#__PURE__*/React.createElement("td", {
+      className: "row-actions"
+    }, /*#__PURE__*/React.createElement("button", {
+      className: "btn ghost sm",
+      onClick: () => setModal(m)
+    }, "Editar"), /*#__PURE__*/React.createElement("button", {
+      className: "btn danger sm",
+      onClick: () => remove(m.id)
+    }, "Excluir")));
+  })))), modal !== null && /*#__PURE__*/React.createElement(MaterialModal, {
+    mat: modal,
+    db: db,
+    update: update,
+    onClose: () => setModal(null),
+    onSave: save
+  }));
+}
+function MaterialModal({
+  mat,
+  db,
+  update,
+  onClose,
+  onSave
+}) {
+  const cats = db.categoriasMaterial || [];
+  const [f, setF] = useState({
+    codigo: '',
+    nome: '',
+    categoriaId: '',
+    categoria: '',
+    cor: '',
+    unidade: 'm',
+    estoqueAtual: 0,
+    estoqueMinimo: 0,
+    custo: 0,
+    fornecedorId: '',
+    fornecedor: '',
+    localizacao: '',
+    ...mat
+  });
+  const set = (k, v) => setF(prev => ({
+    ...prev,
+    [k]: v
+  }));
+
+  // ao escolher a categoria, gera o código com o prefixo dela (só para cadastro novo)
+  function escolherCategoria(catId) {
+    const cat = (db.categoriasMaterial || []).find(c => c.id === catId);
+    setF(prev => ({
+      ...prev,
+      categoriaId: catId,
+      categoria: cat ? cat.nome : '',
+      codigo: !prev.id && cat ? proximoSequencial(db.materiais, cat.codigo) : prev.codigo
+    }));
+  }
+  return /*#__PURE__*/React.createElement(Modal, {
+    title: mat.id ? 'Editar material' : 'Novo material',
+    onClose: onClose
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "grid2"
+  }, /*#__PURE__*/React.createElement(SelectComCadastro, {
+    label: "Categoria",
+    valor: f.categoriaId,
+    onChange: escolherCategoria,
+    lista: cats,
+    campoDb: "categoriasMaterial",
+    update: update,
+    placeholderCod: "TEC",
+    placeholderNome: "Tecidos"
+  }), /*#__PURE__*/React.createElement(Field, {
+    label: "Código (gerado pela categoria)"
+  }, /*#__PURE__*/React.createElement("input", {
+    value: f.codigo,
+    onChange: e => set('codigo', e.target.value),
+    placeholder: "Selecione a categoria"
+  })), /*#__PURE__*/React.createElement(Field, {
+    label: "Nome"
+  }, /*#__PURE__*/React.createElement("input", {
+    value: f.nome,
+    onChange: e => set('nome', e.target.value),
+    placeholder: "Tecido Oxford"
+  })), /*#__PURE__*/React.createElement(Field, {
+    label: "Cor"
+  }, /*#__PURE__*/React.createElement("input", {
+    value: f.cor,
+    onChange: e => set('cor', e.target.value),
+    placeholder: "Royal"
+  })), /*#__PURE__*/React.createElement(Field, {
+    label: "Unidade"
+  }, /*#__PURE__*/React.createElement("select", {
+    value: f.unidade,
+    onChange: e => set('unidade', e.target.value)
+  }, /*#__PURE__*/React.createElement("option", {
+    value: "m"
+  }, "m (metro)"), /*#__PURE__*/React.createElement("option", {
+    value: "un"
+  }, "un (unidade)"), /*#__PURE__*/React.createElement("option", {
+    value: "kg"
+  }, "kg"), /*#__PURE__*/React.createElement("option", {
+    value: "rolo"
+  }, "rolo"), /*#__PURE__*/React.createElement("option", {
+    value: "pct"
+  }, "pacote"))), /*#__PURE__*/React.createElement(Field, {
+    label: "Custo unitário (R$)"
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "number",
+    step: "0.01",
+    value: f.custo,
+    onChange: e => set('custo', e.target.value)
+  })), /*#__PURE__*/React.createElement(Field, {
+    label: "Estoque atual"
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "number",
+    step: "0.01",
+    value: f.estoqueAtual,
+    onChange: e => set('estoqueAtual', e.target.value)
+  })), /*#__PURE__*/React.createElement(Field, {
+    label: "Estoque mínimo"
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "number",
+    step: "0.01",
+    value: f.estoqueMinimo,
+    onChange: e => set('estoqueMinimo', e.target.value)
+  })), /*#__PURE__*/React.createElement(Field, {
+    label: "Fornecedor"
+  }, /*#__PURE__*/React.createElement("select", {
+    value: f.fornecedorId || '',
+    onChange: e => {
+      const forn = db.fornecedores.find(x => x.id === e.target.value);
+      setF(prev => ({
+        ...prev,
+        fornecedorId: e.target.value,
+        fornecedor: forn ? forn.nome : ''
+      }));
+    }
+  }, /*#__PURE__*/React.createElement("option", {
+    value: ""
+  }, f.fornecedor && !f.fornecedorId ? f.fornecedor : '—'), db.fornecedores.map(x => /*#__PURE__*/React.createElement("option", {
+    key: x.id,
+    value: x.id
+  }, x.nome)))), /*#__PURE__*/React.createElement(Field, {
+    label: "Localização no estoque"
+  }, /*#__PURE__*/React.createElement("input", {
+    value: f.localizacao,
+    onChange: e => set('localizacao', e.target.value),
+    placeholder: "Prateleira A3"
+  }))), /*#__PURE__*/React.createElement("div", {
+    className: "modal-actions"
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "btn ghost",
+    onClick: onClose
+  }, "Cancelar"), /*#__PURE__*/React.createElement("button", {
+    className: "btn accent",
+    onClick: () => onSave(f),
+    disabled: !f.codigo || !f.nome
+  }, "Salvar")));
+}
+
+/* ==========================================================
+   D. DEPARTAMENTOS
+========================================================== */
+function Departamentos({
+  db,
+  update
+}) {
+  const [modal, setModal] = useState(null);
+  function save(dep) {
+    update(d => {
+      if (dep.id) {
+        d.departamentos = d.departamentos.map(x => x.id === dep.id ? dep : x);
+      } else {
+        d.departamentos.push({
+          ...dep,
+          id: uid()
+        });
+      }
+      return d;
+    });
+    setModal(null);
+  }
+  function remove(id) {
+    const emUso = db.etapasProducao.filter(e => e.departamentoId === id).length;
+    const msg = emUso ? `Este departamento está vinculado a ${emUso} etapa(s) de produção. Excluir mesmo assim? As etapas ficarão sem departamento.` : 'Excluir este departamento?';
+    if (!confirm(msg)) return;
+    update(d => {
+      d.departamentos = d.departamentos.filter(x => x.id !== id);
+      d.etapasProducao = d.etapasProducao.map(e => e.departamentoId === id ? {
+        ...e,
+        departamentoId: ''
+      } : e);
+      return d;
+    });
+  }
+  return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    className: "page-head"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "eyebrow"
+  }, "Departamentos"), /*#__PURE__*/React.createElement("button", {
+    className: "btn accent",
+    onClick: () => setModal({})
+  }, "+ Novo departamento")), /*#__PURE__*/React.createElement("div", {
+    className: "panel",
+    style: {
+      padding: 0
+    }
+  }, db.departamentos.length === 0 ? /*#__PURE__*/React.createElement("div", {
+    style: {
+      padding: 20
+    }
+  }, /*#__PURE__*/React.createElement(Empty, {
+    text: "Nenhum departamento cadastrado. Ex: Corte, Costura, Silk, Revisão, Embalagem."
+  })) : /*#__PURE__*/React.createElement("table", null, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("th", null, "Nome"), /*#__PURE__*/React.createElement("th", null, "Responsável"), /*#__PURE__*/React.createElement("th", null, "Descrição"), /*#__PURE__*/React.createElement("th", {
+    className: "num"
+  }, "Colaboradores"), /*#__PURE__*/React.createElement("th", {
+    className: "num"
+  }, "Média salarial"), /*#__PURE__*/React.createElement("th", {
+    className: "num"
+  }, "Etapas vinculadas"), /*#__PURE__*/React.createElement("th", null))), /*#__PURE__*/React.createElement("tbody", null, db.departamentos.map(dep => {
+    const qtdEtapas = db.etapasProducao.filter(e => e.departamentoId === dep.id).length;
+    const qtdColab = db.colaboradores.filter(c => c.departamentoId === dep.id && c.status !== 'Inativo').length;
+    const media = mediaSalarialDepartamento(db, dep.id);
+    return /*#__PURE__*/React.createElement("tr", {
+      key: dep.id
+    }, /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement("strong", null, dep.nome)), /*#__PURE__*/React.createElement("td", {
+      className: "small"
+    }, dep.responsavel), /*#__PURE__*/React.createElement("td", {
+      className: "small muted"
+    }, dep.descricao), /*#__PURE__*/React.createElement("td", {
+      className: "num"
+    }, qtdColab), /*#__PURE__*/React.createElement("td", {
+      className: "num"
+    }, media === null ? /*#__PURE__*/React.createElement("span", {
+      className: "muted"
+    }, "—") : money(media)), /*#__PURE__*/React.createElement("td", {
+      className: "num"
+    }, qtdEtapas), /*#__PURE__*/React.createElement("td", {
+      className: "row-actions"
+    }, /*#__PURE__*/React.createElement("button", {
+      className: "btn ghost sm",
+      onClick: () => setModal(dep)
+    }, "Editar"), /*#__PURE__*/React.createElement("button", {
+      className: "btn danger sm",
+      onClick: () => remove(dep.id)
+    }, "Excluir")));
+  })))), modal !== null && /*#__PURE__*/React.createElement(DepartamentoModal, {
+    dep: modal,
+    onClose: () => setModal(null),
+    onSave: save
+  }));
+}
+function DepartamentoModal({
+  dep,
+  onClose,
+  onSave
+}) {
+  const [f, setF] = useState({
+    nome: '',
+    responsavel: '',
+    descricao: '',
+    ...dep
+  });
+  const set = (k, v) => setF(prev => ({
+    ...prev,
+    [k]: v
+  }));
+  return /*#__PURE__*/React.createElement(Modal, {
+    title: dep.id ? 'Editar departamento' : 'Novo departamento',
+    onClose: onClose
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "grid2"
+  }, /*#__PURE__*/React.createElement(Field, {
+    label: "Nome"
+  }, /*#__PURE__*/React.createElement("input", {
+    value: f.nome,
+    onChange: e => set('nome', e.target.value),
+    placeholder: "Corte"
+  })), /*#__PURE__*/React.createElement(Field, {
+    label: "Responsável"
+  }, /*#__PURE__*/React.createElement("input", {
+    value: f.responsavel,
+    onChange: e => set('responsavel', e.target.value)
+  }))), /*#__PURE__*/React.createElement(Field, {
+    label: "Descrição"
+  }, /*#__PURE__*/React.createElement("textarea", {
+    rows: "2",
+    value: f.descricao,
+    onChange: e => set('descricao', e.target.value)
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "modal-actions"
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "btn ghost",
+    onClick: onClose
+  }, "Cancelar"), /*#__PURE__*/React.createElement("button", {
+    className: "btn accent",
+    onClick: () => onSave(f),
+    disabled: !f.nome
+  }, "Salvar")));
+}
+
+/* ==========================================================
+   T. ETAPAS DE PRODUÇÃO & TEMPOS
+========================================================== */
+function EtapasProducao({
+  db,
+  update
+}) {
+  const [modal, setModal] = useState(null);
+  function save(et) {
+    update(d => {
+      if (et.id) {
+        d.etapasProducao = d.etapasProducao.map(x => x.id === et.id ? et : x);
+      } else {
+        d.etapasProducao.push({
+          ...et,
+          id: uid()
+        });
+      }
+      return d;
+    });
+    setModal(null);
+  }
+  function remove(id) {
+    if (!confirm('Excluir esta etapa de produção? Ela deixará de entrar nas novas Ordens de Produção e no cálculo de custo.')) return;
+    update(d => {
+      d.etapasProducao = d.etapasProducao.filter(x => x.id !== id);
+      return d;
+    });
+  }
+  return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    className: "page-head"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "eyebrow"
+  }, "Etapas de produção & tempos"), /*#__PURE__*/React.createElement("button", {
+    className: "btn accent",
+    onClick: () => setModal({}),
+    disabled: db.departamentos.length === 0
+  }, "+ Nova etapa")), db.departamentos.length === 0 && /*#__PURE__*/React.createElement("div", {
+    className: "empty",
+    style: {
+      marginBottom: 16
+    }
+  }, "Cadastre ao menos um departamento antes de criar etapas de produção."), db.etapasProducao.length === 0 ? /*#__PURE__*/React.createElement(Empty, {
+    text: "Nenhuma etapa de produção cadastrada. Ex: Corte, Costura, Revisão — cada uma vinculada a um departamento, com seu tempo de produção."
+  }) : (() => {
+    // agrupa as etapas por departamento
+    const grupos = [];
+    const porDep = {};
+    db.etapasProducao.forEach(et => {
+      const k = et.departamentoId || '_sem';
+      if (!porDep[k]) {
+        porDep[k] = {
+          dep: db.departamentos.find(d => d.id === et.departamentoId),
+          itens: []
+        };
+        grupos.push({
+          k,
+          ...porDep[k]
+        });
+      }
+      porDep[k].itens.push(et);
+    });
+    return grupos.map(g => {
+      const itens = porDep[g.k].itens;
+      let somaMin = 0,
+        temVariavel = false,
+        somaCusto = 0;
+      itens.forEach(et => {
+        if (et.modoTempo === 'peca' || num(et.tamanhoLote) > 0) somaMin += cargaEtapaMinutos(et, 1, 1);else temVariavel = true;
+        const c = custoMaoDeObraPorPeca(et, db);
+        if (c !== null) somaCusto += c;
+      });
+      return /*#__PURE__*/React.createElement("div", {
+        key: g.k,
+        style: {
+          marginBottom: 18
+        }
+      }, /*#__PURE__*/React.createElement("div", {
+        style: {
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
+          margin: '0 0 8px 0',
+          flexWrap: 'wrap'
+        }
+      }, /*#__PURE__*/React.createElement("div", {
+        style: {
+          width: 6,
+          height: 18,
+          background: 'var(--thread)',
+          borderRadius: 3
+        }
+      }), /*#__PURE__*/React.createElement("h3", {
+        style: {
+          margin: 0
+        }
+      }, g.dep ? g.dep.nome : 'Sem departamento'), /*#__PURE__*/React.createElement("span", {
+        className: "small muted"
+      }, itens.length, " etapa", itens.length > 1 ? 's' : '', " · ", somaMin.toFixed(2), " min/peça", temVariavel && ' (+ variáveis)', " · ", /*#__PURE__*/React.createElement("strong", null, money(somaCusto)), "/peça", (() => {
+        const md = mediaSalarialDepartamento(db, g.k === '_sem' ? '' : g.dep && g.dep.id);
+        return md === null ? /*#__PURE__*/React.createElement("span", {
+          style: {
+            color: 'var(--bad)'
+          }
+        }, " · sem base salarial") : /*#__PURE__*/React.createElement(React.Fragment, null, " · média salarial ", money(md));
+      })())), /*#__PURE__*/React.createElement("div", {
+        className: "panel",
+        style: {
+          padding: 0,
+          marginBottom: 0
+        }
+      }, /*#__PURE__*/React.createElement("table", null, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("th", {
+        style: {
+          width: 30
+        }
+      }, "#"), /*#__PURE__*/React.createElement("th", null, "Etapa"), /*#__PURE__*/React.createElement("th", {
+        className: "num"
+      }, "Tempo"), /*#__PURE__*/React.createElement("th", {
+        className: "num"
+      }, "Min/peça"), /*#__PURE__*/React.createElement("th", {
+        className: "num"
+      }, "Custo/min"), /*#__PURE__*/React.createElement("th", {
+        className: "num"
+      }, "Custo da etapa"), /*#__PURE__*/React.createElement("th", {
+        style: {
+          width: 150
+        }
+      }))), /*#__PURE__*/React.createElement("tbody", null, itens.map((et, i) => {
+        const custo = custoMaoDeObraPorPeca(et, db);
+        const cMin = custoPorMinutoDepartamento(db, et.departamentoId);
+        const mPeca = et.modoTempo === 'peca' || num(et.tamanhoLote) > 0 ? cargaEtapaMinutos(et, 1, 1) : null;
+        return /*#__PURE__*/React.createElement("tr", {
+          key: et.id
+        }, /*#__PURE__*/React.createElement("td", {
+          className: "small muted"
+        }, i + 1), /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement("strong", null, et.nome)), /*#__PURE__*/React.createElement("td", {
+          className: "num small"
+        }, labelModoTempo(et)), /*#__PURE__*/React.createElement("td", {
+          className: "num small"
+        }, mPeca !== null ? mPeca.toFixed(3) : /*#__PURE__*/React.createElement("span", {
+          className: "muted"
+        }, "informe o lote"), et.modoTempo !== 'peca' && num(et.tamanhoLote) > 0 && /*#__PURE__*/React.createElement("div", {
+          className: "muted",
+          style: {
+            fontSize: 10
+          }
+        }, "lote ", num(et.tamanhoLote), " pçs")), /*#__PURE__*/React.createElement("td", {
+          className: "num small"
+        }, cMin === null ? /*#__PURE__*/React.createElement("span", {
+          className: "muted"
+        }, "—") : money(cMin)), /*#__PURE__*/React.createElement("td", {
+          className: "num small"
+        }, /*#__PURE__*/React.createElement("strong", null, custo === null ? /*#__PURE__*/React.createElement("span", {
+          className: "muted"
+        }, et.modoTempo === 'peca' ? 'sem equipe no depto.' : 'informe o lote') : money(custo))), /*#__PURE__*/React.createElement("td", {
+          className: "row-actions"
+        }, /*#__PURE__*/React.createElement("button", {
+          className: "btn ghost sm",
+          onClick: () => setModal(et)
+        }, "Editar"), /*#__PURE__*/React.createElement("button", {
+          className: "btn danger sm",
+          onClick: () => remove(et.id)
+        }, "Excluir")));
+      })))));
+    });
+  })(), modal !== null && /*#__PURE__*/React.createElement(EtapaProducaoModal, {
+    et: modal,
+    db: db,
+    onClose: () => setModal(null),
+    onSave: save
+  }));
+}
+function EtapaProducaoModal({
+  et,
+  db,
+  onClose,
+  onSave
+}) {
+  const [f, setF] = useState({
+    nome: '',
+    departamentoId: db.departamentos[0]?.id || '',
+    modoTempo: 'peca',
+    tempoProducao: 0,
+    unidadeTempo: 'seg',
+    tamanhoEquipe: '',
+    tamanhoLote: '',
+    ...et
+  });
+  const set = (k, v) => setF(prev => ({
+    ...prev,
+    [k]: v
+  }));
+
+  // equipamentos do departamento — apenas informativo; a máquina é escolhida na OP
+  const maquinasDoDepto = (db.equipamentos || []).filter(q => q.departamentoId === f.departamentoId && (q.status || 'Operando') !== 'Baixado');
+  const depNome = (db.departamentos.find(d => d.id === f.departamentoId) || {}).nome || '';
+  return /*#__PURE__*/React.createElement(Modal, {
+    title: et.id ? 'Editar etapa de produção' : 'Nova etapa de produção',
+    onClose: onClose
+  }, /*#__PURE__*/React.createElement(Field, {
+    label: "1. Departamento"
+  }, /*#__PURE__*/React.createElement("select", {
+    value: f.departamentoId,
+    onChange: e => set('departamentoId', e.target.value)
+  }, /*#__PURE__*/React.createElement("option", {
+    value: ""
+  }, "— selecione —"), db.departamentos.map(dep => /*#__PURE__*/React.createElement("option", {
+    key: dep.id,
+    value: dep.id
+  }, dep.nome)))), maquinasDoDepto.length > 0 && /*#__PURE__*/React.createElement("div", {
+    className: "small muted",
+    style: {
+      marginTop: -8,
+      marginBottom: 12
+    }
+  }, "Equipamentos disponíveis em ", depNome, ": ", maquinasDoDepto.map(q => `${q.codigo} · ${q.nome}`).join(' | '), ". A máquina é escolhida na Ordem de Produção."), /*#__PURE__*/React.createElement(Field, {
+    label: "2. Nome da etapa"
+  }, /*#__PURE__*/React.createElement("input", {
+    value: f.nome,
+    onChange: e => set('nome', e.target.value),
+    placeholder: "Chulear bolso, Viés de barra, Presponto…"
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "field"
+  }, /*#__PURE__*/React.createElement("label", null, "Como o tempo é medido"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 6,
+      flexWrap: 'wrap'
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "btn sm " + (f.modoTempo === 'peca' ? 'accent' : 'ghost'),
+    onClick: () => set('modoTempo', 'peca')
+  }, "Por peça"), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "btn sm " + (f.modoTempo === 'lote' ? 'accent' : 'ghost'),
+    onClick: () => set('modoTempo', 'lote')
+  }, "Por lote"), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "btn sm " + (f.modoTempo === 'equipe' ? 'accent' : 'ghost'),
+    onClick: () => set('modoTempo', 'equipe')
+  }, "Por equipe"))), /*#__PURE__*/React.createElement("div", {
+    className: "grid3"
+  }, /*#__PURE__*/React.createElement(Field, {
+    label: f.modoTempo === 'peca' ? '3. Tempo da peça' : f.modoTempo === 'lote' ? '3. Tempo para a OP inteira' : '3. Tempo do ciclo da equipe'
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "number",
+    step: "0.01",
+    value: f.tempoProducao,
+    onChange: e => set('tempoProducao', e.target.value)
+  })), /*#__PURE__*/React.createElement(Field, {
+    label: "4. Unidade de tempo"
+  }, /*#__PURE__*/React.createElement("select", {
+    value: f.unidadeTempo,
+    onChange: e => set('unidadeTempo', e.target.value)
+  }, /*#__PURE__*/React.createElement("option", {
+    value: "seg"
+  }, "segundos"), /*#__PURE__*/React.createElement("option", {
+    value: "min"
+  }, "minutos"), /*#__PURE__*/React.createElement("option", {
+    value: "hora"
+  }, "horas"))), (f.modoTempo === 'lote' || f.modoTempo === 'equipe') && /*#__PURE__*/React.createElement(Field, {
+    label: "Quantidade de peças do lote"
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "number",
+    step: "1",
+    min: "1",
+    value: f.tamanhoLote,
+    onChange: e => set('tamanhoLote', e.target.value),
+    placeholder: "Ex: 50"
+  })), f.modoTempo === 'equipe' && /*#__PURE__*/React.createElement(Field, {
+    label: "Nº de colaboradores na equipe"
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "number",
+    step: "1",
+    value: f.tamanhoEquipe,
+    onChange: e => set('tamanhoEquipe', e.target.value),
+    placeholder: "Ex: 4"
+  }))), (f.modoTempo === 'lote' || f.modoTempo === 'equipe') && /*#__PURE__*/React.createElement("div", {
+    className: "small muted",
+    style: {
+      marginTop: -6,
+      marginBottom: 14
+    }
+  }, num(f.tamanhoLote) > 0 ? /*#__PURE__*/React.createElement(React.Fragment, null, "O tempo informado produz ", /*#__PURE__*/React.createElement("strong", null, num(f.tamanhoLote)), " peças", ' ', "— equivale a ", /*#__PURE__*/React.createElement("strong", null, cargaEtapaMinutos(f, 1, 1).toFixed(3), " min por peça"), ".", ' ', "Uma OP de 500 peças levaria ", minParaHHMM(cargaEtapaMinutos(f, 500, 500)), ".") : /*#__PURE__*/React.createElement(React.Fragment, null, "Sem a quantidade do lote, o sistema assume que o tempo cobre a quantidade inteira de cada Ordem de Produção.")), (() => {
+    // custo da etapa calculado pelo custo médio de mão de obra do departamento
+    const equipe = db.colaboradores.filter(c => c.departamentoId === f.departamentoId && c.status !== 'Inativo' && num(c.salario) > 0);
+    const media = mediaSalarialDepartamento(db, f.departamentoId);
+    const custoMin = custoPorMinutoDepartamento(db, f.departamentoId);
+    const lote = num(f.tamanhoLote);
+    const porLote = f.modoTempo === 'lote' || f.modoTempo === 'equipe';
+    const temBase = f.modoTempo === 'peca' || lote > 0;
+    const minPeca = temBase ? cargaEtapaMinutos(f, 1, 1) : null;
+    const pessoas = f.modoTempo === 'equipe' ? Math.max(num(f.tamanhoEquipe), 1) : 1;
+    const custoPeca = custoMin !== null && minPeca !== null ? custoMin * minPeca * pessoas : null;
+    const minLote = custoMin !== null && lote > 0 ? cargaEtapaMinutos(f, lote, lote) : null;
+    const custoLote = minLote !== null ? custoMin * minLote * pessoas : null;
+    return /*#__PURE__*/React.createElement("div", {
+      className: "panel",
+      style: {
+        background: '#fff',
+        marginBottom: 14
+      }
+    }, /*#__PURE__*/React.createElement("h3", null, "Custo da etapa — base: custo médio de mão de obra"), !f.departamentoId ? /*#__PURE__*/React.createElement("div", {
+      className: "small muted"
+    }, "Selecione o departamento para calcular o custo.") : media === null ? /*#__PURE__*/React.createElement("div", {
+      className: "small",
+      style: {
+        color: 'var(--bad)'
+      }
+    }, depNome ? `O departamento ${depNome} não tem colaboradores ativos com salário cadastrado.` : 'Departamento sem equipe cadastrada.', ' ', "Sem essa base não é possível calcular o custo da etapa.") : /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("table", null, /*#__PURE__*/React.createElement("tbody", null, /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("td", null, "Colaboradores considerados"), /*#__PURE__*/React.createElement("td", {
+      className: "num"
+    }, equipe.length, " em ", depNome)), /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("td", null, "Custo médio de mão de obra (mensal)"), /*#__PURE__*/React.createElement("td", {
+      className: "num"
+    }, money(media))), /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("td", null, "Custo por hora (", HORAS_MES_PADRAO, "h/mês)"), /*#__PURE__*/React.createElement("td", {
+      className: "num"
+    }, money(media / HORAS_MES_PADRAO))), /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("td", null, "Custo por minuto"), /*#__PURE__*/React.createElement("td", {
+      className: "num"
+    }, money(custoMin))), porLote && lote > 0 && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("td", null, "Tempo do lote"), /*#__PURE__*/React.createElement("td", {
+      className: "num"
+    }, minLote !== null ? `${minParaHHMM(minLote)} para ${lote} peças` : '—')), custoLote !== null && /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("td", null, "Custo do lote inteiro"), /*#__PURE__*/React.createElement("td", {
+      className: "num"
+    }, money(custoLote))), /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("td", null, "Diluição por peça"), /*#__PURE__*/React.createElement("td", {
+      className: "num"
+    }, minLote !== null ? `${money(custoLote)} ÷ ${lote} peças` : '—'))), f.modoTempo === 'equipe' && /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("td", null, "Pessoas na equipe (multiplica o custo)"), /*#__PURE__*/React.createElement("td", {
+      className: "num"
+    }, "× ", pessoas)), /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("td", null, "Tempo por peça"), /*#__PURE__*/React.createElement("td", {
+      className: "num"
+    }, minPeca !== null ? `${minPeca.toFixed(3)} min` : 'informe a quantidade do lote')), /*#__PURE__*/React.createElement("tr", {
+      style: {
+        background: 'var(--ok-bg)'
+      }
+    }, /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement("strong", null, "Custo da etapa por peça")), /*#__PURE__*/React.createElement("td", {
+      className: "num"
+    }, /*#__PURE__*/React.createElement("strong", {
+      style: {
+        color: 'var(--ok)'
+      }
+    }, custoPeca !== null ? money(custoPeca) : 'informe a quantidade do lote'))))), custoPeca !== null && /*#__PURE__*/React.createElement("div", {
+      className: "small muted",
+      style: {
+        marginTop: 8
+      }
+    }, "Referência: ", money(custoPeca * 100), " a cada 100 peças · ", money(custoPeca * 1000), " a cada 1.000 peças. O valor é recalculado sozinho quando a média salarial do departamento muda.")));
+  })(), /*#__PURE__*/React.createElement("div", {
+    className: "modal-actions"
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "btn ghost",
+    onClick: onClose
+  }, "Cancelar"), /*#__PURE__*/React.createElement("button", {
+    className: "btn accent",
+    onClick: () => onSave(f),
+    disabled: !f.nome || !f.departamentoId
+  }, "Salvar")));
+}
+function EnderecoFields({
+  f,
+  set
+}) {
+  return /*#__PURE__*/React.createElement("div", {
+    className: "grid3"
+  }, /*#__PURE__*/React.createElement(Field, {
+    label: "CEP"
+  }, /*#__PURE__*/React.createElement("input", {
+    value: f.cep,
+    onChange: e => set('cep', e.target.value),
+    placeholder: "00000-000"
+  })), /*#__PURE__*/React.createElement(Field, {
+    label: "Endereço"
+  }, /*#__PURE__*/React.createElement("input", {
+    value: f.endereco,
+    onChange: e => set('endereco', e.target.value)
+  })), /*#__PURE__*/React.createElement(Field, {
+    label: "Número"
+  }, /*#__PURE__*/React.createElement("input", {
+    value: f.numero,
+    onChange: e => set('numero', e.target.value)
+  })), /*#__PURE__*/React.createElement(Field, {
+    label: "Complemento"
+  }, /*#__PURE__*/React.createElement("input", {
+    value: f.complemento,
+    onChange: e => set('complemento', e.target.value)
+  })), /*#__PURE__*/React.createElement(Field, {
+    label: "Bairro"
+  }, /*#__PURE__*/React.createElement("input", {
+    value: f.bairro,
+    onChange: e => set('bairro', e.target.value)
+  })), /*#__PURE__*/React.createElement(Field, {
+    label: "Cidade"
+  }, /*#__PURE__*/React.createElement("input", {
+    value: f.cidade,
+    onChange: e => set('cidade', e.target.value)
+  })), /*#__PURE__*/React.createElement(Field, {
+    label: "UF"
+  }, /*#__PURE__*/React.createElement("input", {
+    value: f.uf,
+    onChange: e => set('uf', e.target.value.toUpperCase().slice(0, 2)),
+    maxLength: "2"
+  })));
+}
+const ENDERECO_VAZIO = {
+  cep: '',
+  endereco: '',
+  numero: '',
+  complemento: '',
+  bairro: '',
+  cidade: '',
+  uf: ''
+};
+
+/* ==========================================================
+   RH. COLABORADORES
+========================================================== */
+function Colaboradores({
+  db,
+  update,
+  usuario
+}) {
+  const [modal, setModal] = useState(null);
+  const [q, setQ] = useState('');
+  const list = db.colaboradores.filter(c => {
+    const s = q.toLowerCase();
+    return !s || c.nome.toLowerCase().includes(s) || funcoesColaborador(c).some(fn => fn.toLowerCase().includes(s));
+  });
+  const CAMPOS_COLAB = [{
+    key: 'nome',
+    label: 'nome'
+  }, {
+    key: 'cpf',
+    label: 'CPF'
+  }, {
+    key: 'rg',
+    label: 'RG'
+  }];
+  function save(c) {
+    if (!exigirPermissao(usuario, 'pessoas', update, 'criar ou alterar colaboradores')) return;
+    const erro = checarDuplicidade(db.colaboradores, c, CAMPOS_COLAB);
+    if (erro) {
+      alert(erro);
+      return;
+    }
+    // só administrador concede perfil de administrador
+    if (c.perfil === 'Administrador' && !podeExecutar(usuario, 'admin')) {
+      alert('Apenas um administrador pode conceder o perfil de Administrador.');
+      return;
+    }
+    update(d => {
+      if (c.id) {
+        const antes = d.colaboradores.find(x => x.id === c.id) || {};
+        d.colaboradores = d.colaboradores.map(x => x.id === c.id ? c : x);
+        const mudancas = [];
+        if (antes.perfil !== c.perfil) mudancas.push(`perfil: ${antes.perfil || '—'} → ${c.perfil}`);
+        if ((antes.senha || '') !== (c.senha || '')) mudancas.push(c.senha ? 'senha definida/alterada' : 'senha removida (acesso bloqueado)');
+        if (antes.status !== c.status) mudancas.push(`status: ${antes.status || '—'} → ${c.status}`);
+        registrarLog(d, usuario, 'Editou colaborador', `${c.nome}${mudancas.length ? ' — ' + mudancas.join('; ') : ''}`);
+      } else {
+        d.colaboradores.push({
+          ...c,
+          id: uid()
+        });
+        registrarLog(d, usuario, 'Cadastrou colaborador', `${c.nome} · perfil ${c.perfil}${c.senha ? '' : ' (sem senha — acesso bloqueado)'}`);
+      }
+      return d;
+    });
+    setModal(null);
+  }
+  function remove(id) {
+    if (!exigirPermissao(usuario, 'pessoas', update, 'excluir colaboradores')) return;
+    const c = db.colaboradores.find(x => x.id === id);
+    if (c && c.id === (usuario && usuario.id)) {
+      alert('Você não pode excluir o próprio usuário.');
+      return;
+    }
+    const admins = db.colaboradores.filter(x => x.perfil === 'Administrador' && x.status !== 'Inativo');
+    if (c && c.perfil === 'Administrador' && admins.length <= 1) {
+      alert('Este é o único administrador ativo. Cadastre outro antes de excluí-lo.');
+      return;
+    }
+    if (!confirm('Excluir este colaborador? O histórico de produção dele será mantido.')) return;
+    update(d => {
+      d.colaboradores = d.colaboradores.filter(x => x.id !== id);
+      registrarLog(d, usuario, 'Excluiu colaborador', c ? c.nome : '');
+      return d;
+    });
+  }
+  return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    className: "page-head"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "eyebrow"
+  }, "Colaboradores"), /*#__PURE__*/React.createElement("button", {
+    className: "btn accent",
+    onClick: () => setModal({})
+  }, "+ Novo colaborador")), /*#__PURE__*/React.createElement("div", {
+    className: "searchbar"
+  }, /*#__PURE__*/React.createElement("input", {
+    placeholder: "Buscar por nome ou função…",
+    value: q,
+    onChange: e => setQ(e.target.value)
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "panel",
+    style: {
+      padding: 0
+    }
+  }, list.length === 0 ? /*#__PURE__*/React.createElement("div", {
+    style: {
+      padding: 20
+    }
+  }, /*#__PURE__*/React.createElement(Empty, {
+    text: "Nenhum colaborador cadastrado."
+  })) : /*#__PURE__*/React.createElement("table", null, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("th", null, "Nome"), /*#__PURE__*/React.createElement("th", null, "Funções"), /*#__PURE__*/React.createElement("th", null, "Departamento"), /*#__PURE__*/React.createElement("th", null, "Admissão"), /*#__PURE__*/React.createElement("th", {
+    className: "num"
+  }, "Salário"), /*#__PURE__*/React.createElement("th", null, "Perfil"), /*#__PURE__*/React.createElement("th", null, "Acesso"), /*#__PURE__*/React.createElement("th", null, "Status"), /*#__PURE__*/React.createElement("th", null))), /*#__PURE__*/React.createElement("tbody", null, list.map(c => {
+    const dep = db.departamentos.find(d => d.id === c.departamentoId);
+    const temSenha = temSenhaDefinida(c);
+    return /*#__PURE__*/React.createElement("tr", {
+      key: c.id
+    }, /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement("strong", null, c.nome), /*#__PURE__*/React.createElement("div", {
+      className: "small muted"
+    }, c.celular || c.telefone)), /*#__PURE__*/React.createElement("td", {
+      className: "small"
+    }, funcoesColaborador(c).join(', ') || '—'), /*#__PURE__*/React.createElement("td", {
+      className: "small"
+    }, dep ? dep.nome : '—'), /*#__PURE__*/React.createElement("td", {
+      className: "small"
+    }, fmtDate(c.dataAdmissao)), /*#__PURE__*/React.createElement("td", {
+      className: "num"
+    }, money(c.salario)), /*#__PURE__*/React.createElement("td", {
+      className: "small"
+    }, c.perfil || 'Colaborador'), /*#__PURE__*/React.createElement("td", null, temSenha ? /*#__PURE__*/React.createElement(Badge, {
+      tone: "ok"
+    }, "Liberado") : /*#__PURE__*/React.createElement(Badge, {
+      tone: "bad"
+    }, "Bloqueado")), /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement(Badge, {
+      tone: c.status === 'Inativo' ? 'idle' : 'ok'
+    }, c.status || 'Ativo')), /*#__PURE__*/React.createElement("td", {
+      className: "row-actions"
+    }, /*#__PURE__*/React.createElement("button", {
+      className: "btn ghost sm",
+      onClick: () => setModal(c)
+    }, "Editar"), /*#__PURE__*/React.createElement("button", {
+      className: "btn danger sm",
+      onClick: () => remove(c.id)
+    }, "Excluir")));
+  })))), modal !== null && /*#__PURE__*/React.createElement(ColaboradorModal, {
+    col: modal,
+    db: db,
+    onClose: () => setModal(null),
+    onSave: save
+  }));
+}
+function ColaboradorModal({
+  col,
+  db,
+  onClose,
+  onSave
+}) {
+  const [f, setF] = useState({
+    nome: '',
+    cpf: '',
+    rg: '',
+    dataNascimento: '',
+    telefone: '',
+    celular: '',
+    email: '',
+    cargo: '',
+    funcoes: [],
+    departamentoId: '',
+    dataAdmissao: todayISO(),
+    salario: 0,
+    status: 'Ativo',
+    perfil: 'Colaborador',
+    ...ENDERECO_VAZIO,
+    observacoes: '',
+    ...col
+  });
+  const set = (k, v) => setF(prev => ({
+    ...prev,
+    [k]: v
+  }));
+  const [novaFuncao, setNovaFuncao] = useState('');
+  const listaFuncoes = funcoesColaborador(f);
+  const sugestoesFuncao = Array.from(new Set(['Vendedor', 'Costureira', 'Costureiro', 'Cortador', 'Enfestador', 'Gravador', 'Revisor', 'Embalador', 'Auxiliar', 'Supervisor', 'Mecânico', ...db.colaboradores.flatMap(c => funcoesColaborador(c))])).sort();
+  function addFuncao() {
+    const v = novaFuncao.trim();
+    if (!v) return;
+    if (listaFuncoes.some(x => normaliza(x) === normaliza(v))) {
+      setNovaFuncao('');
+      return;
+    }
+    setF(prev => ({
+      ...prev,
+      funcoes: [...funcoesColaborador(prev), v],
+      cargo: ''
+    }));
+    setNovaFuncao('');
+  }
+  function rmFuncao(nome) {
+    setF(prev => ({
+      ...prev,
+      funcoes: funcoesColaborador(prev).filter(x => x !== nome),
+      cargo: ''
+    }));
+  }
+  return /*#__PURE__*/React.createElement(Modal, {
+    title: col.id ? 'Editar colaborador' : 'Novo colaborador',
+    onClose: onClose,
+    wide: true
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "grid3"
+  }, /*#__PURE__*/React.createElement(Field, {
+    label: "Nome completo"
+  }, /*#__PURE__*/React.createElement("input", {
+    value: f.nome,
+    onChange: e => set('nome', e.target.value)
+  })), /*#__PURE__*/React.createElement(Field, {
+    label: "CPF"
+  }, /*#__PURE__*/React.createElement("input", {
+    value: f.cpf,
+    onChange: e => set('cpf', e.target.value),
+    placeholder: "000.000.000-00"
+  })), /*#__PURE__*/React.createElement(Field, {
+    label: "RG"
+  }, /*#__PURE__*/React.createElement("input", {
+    value: f.rg,
+    onChange: e => set('rg', e.target.value)
+  })), /*#__PURE__*/React.createElement(Field, {
+    label: "Data de nascimento"
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "date",
+    value: f.dataNascimento,
+    onChange: e => set('dataNascimento', e.target.value)
+  })), /*#__PURE__*/React.createElement(Field, {
+    label: "Telefone"
+  }, /*#__PURE__*/React.createElement("input", {
+    value: f.telefone,
+    onChange: e => set('telefone', e.target.value)
+  })), /*#__PURE__*/React.createElement(Field, {
+    label: "Celular / WhatsApp"
+  }, /*#__PURE__*/React.createElement("input", {
+    value: f.celular,
+    onChange: e => set('celular', e.target.value)
+  })), /*#__PURE__*/React.createElement(Field, {
+    label: "E-mail"
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "email",
+    value: f.email,
+    onChange: e => set('email', e.target.value)
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "field"
+  }, /*#__PURE__*/React.createElement("label", null, "Funções (pode ter mais de uma)"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 6
+    }
+  }, /*#__PURE__*/React.createElement("input", {
+    value: novaFuncao,
+    onChange: e => setNovaFuncao(e.target.value),
+    list: "funcoes-sugeridas",
+    placeholder: "Costureira, Cortador, Vendedor…",
+    onKeyDown: e => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        addFuncao();
+      }
+    }
+  }), /*#__PURE__*/React.createElement("datalist", {
+    id: "funcoes-sugeridas"
+  }, sugestoesFuncao.map(x => /*#__PURE__*/React.createElement("option", {
+    key: x,
+    value: x
+  }))), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "btn accent sm",
+    onClick: addFuncao,
+    disabled: !novaFuncao.trim()
+  }, "+")), listaFuncoes.length > 0 && /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexWrap: 'wrap',
+      gap: 5,
+      marginTop: 6
+    }
+  }, listaFuncoes.map(fn => /*#__PURE__*/React.createElement("span", {
+    key: fn,
+    className: "chip-col"
+  }, fn, /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: () => rmFuncao(fn)
+  }, "×")))), listaFuncoes.length === 0 && /*#__PURE__*/React.createElement("div", {
+    className: "small muted",
+    style: {
+      marginTop: 4
+    }
+  }, "Nenhuma função definida.")), /*#__PURE__*/React.createElement(Field, {
+    label: "Departamento"
+  }, /*#__PURE__*/React.createElement("select", {
+    value: f.departamentoId,
+    onChange: e => set('departamentoId', e.target.value)
+  }, /*#__PURE__*/React.createElement("option", {
+    value: ""
+  }, "—"), db.departamentos.map(dep => /*#__PURE__*/React.createElement("option", {
+    key: dep.id,
+    value: dep.id
+  }, dep.nome)))), /*#__PURE__*/React.createElement(Field, {
+    label: "Data de admissão"
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "date",
+    value: f.dataAdmissao,
+    onChange: e => set('dataAdmissao', e.target.value)
+  })), /*#__PURE__*/React.createElement(Field, {
+    label: "Salário mensal (R$)"
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "number",
+    step: "0.01",
+    value: f.salario,
+    onChange: e => set('salario', e.target.value)
+  })), /*#__PURE__*/React.createElement(Field, {
+    label: "Status"
+  }, /*#__PURE__*/React.createElement("select", {
+    value: f.status,
+    onChange: e => set('status', e.target.value)
+  }, /*#__PURE__*/React.createElement("option", {
+    value: "Ativo"
+  }, "Ativo"), /*#__PURE__*/React.createElement("option", {
+    value: "Inativo"
+  }, "Inativo")))), /*#__PURE__*/React.createElement("div", {
+    className: "panel",
+    style: {
+      background: '#fff'
+    }
+  }, /*#__PURE__*/React.createElement("h3", null, "Acesso ao sistema"), /*#__PURE__*/React.createElement("div", {
+    className: "grid2"
+  }, /*#__PURE__*/React.createElement(Field, {
+    label: "Perfil de acesso"
+  }, /*#__PURE__*/React.createElement("select", {
+    value: f.perfil,
+    onChange: e => set('perfil', e.target.value)
+  }, PERFIS.map(p => /*#__PURE__*/React.createElement("option", {
+    key: p,
+    value: p
+  }, p)))), /*#__PURE__*/React.createElement(Field, {
+    label: "Senha"
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 8,
+      alignItems: 'center'
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "small",
+    style: {
+      flex: 1
+    }
+  }, temSenhaDefinida(f) ? /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("span", {
+    style: {
+      color: 'var(--ok)',
+      fontWeight: 600
+    }
+  }, "definida"), f.senhaDefinidaEm && /*#__PURE__*/React.createElement("span", {
+    className: "muted"
+  }, " em ", f.senhaDefinidaEm)) : /*#__PURE__*/React.createElement("span", {
+    style: {
+      color: 'var(--bad)',
+      fontWeight: 600
+    }
+  }, "não definida — acesso bloqueado")), temSenhaDefinida(f) && /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "btn ghost sm",
+    onClick: () => {
+      if (!confirm('Redefinir a senha deste colaborador? Ele terá de criar uma nova no próximo acesso.')) return;
+      setF(prev => ({
+        ...prev,
+        senhaHash: undefined,
+        senhaSalt: undefined,
+        senha: undefined,
+        precisaTrocarSenha: true,
+        tentativasFalhas: 0,
+        bloqueadoAte: null
+      }));
+    }
+  }, "Redefinir")))), /*#__PURE__*/React.createElement("div", {
+    className: "small muted"
+  }, f.perfil === 'Administrador' && 'Administrador: acesso total ao sistema.', f.perfil === 'Gestor' && 'Gestor: acesso restrito — não vê cadastros de colaboradores/clientes nem dados financeiros.', f.perfil === 'Colaborador' && 'Colaborador: acesso somente ao módulo de Produção.', !temSenhaDefinida(f) && ' · O colaborador define a própria senha no primeiro acesso; ela nunca é digitada aqui.')), /*#__PURE__*/React.createElement(EnderecoFields, {
+    f: f,
+    set: set
+  }), /*#__PURE__*/React.createElement(Field, {
+    label: "Observações"
+  }, /*#__PURE__*/React.createElement("textarea", {
+    rows: "2",
+    value: f.observacoes,
+    onChange: e => set('observacoes', e.target.value)
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "modal-actions"
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "btn ghost",
+    onClick: onClose
+  }, "Cancelar"), /*#__PURE__*/React.createElement("button", {
+    className: "btn accent",
+    onClick: () => onSave(f),
+    disabled: !f.nome
+  }, "Salvar")));
+}
+
+/* ==========================================================
+   EQ. EQUIPAMENTOS
+========================================================== */
+const STATUS_EQUIP = ['Operando', 'Em manutenção', 'Parado', 'Baixado'];
+function Equipamentos({
+  db,
+  update
+}) {
+  const [modal, setModal] = useState(null);
+  const [historico, setHistorico] = useState(null);
+  const [q, setQ] = useState('');
+  const [fDep, setFDep] = useState('');
+  const [fStatus, setFStatus] = useState('');
+  const lista = (db.equipamentos || []).filter(e => {
+    const s = q.toLowerCase();
+    if (s && !(e.nome || '').toLowerCase().includes(s) && !(e.codigo || '').toLowerCase().includes(s) && !(e.numeroSerie || '').toLowerCase().includes(s) && !(e.marca || '').toLowerCase().includes(s)) return false;
+    if (fDep && e.departamentoId !== fDep) return false;
+    if (fStatus && (e.status || 'Operando') !== fStatus) return false;
+    return true;
+  });
+  function save(eq) {
+    const erro = checarDuplicidade(db.equipamentos || [], eq, [{
+      key: 'codigo',
+      label: 'código'
+    }, {
+      key: 'numeroSerie',
+      label: 'número de série'
+    }]);
+    if (erro) {
+      alert(erro);
+      return;
+    }
+    update(d => {
+      if (eq.id) {
+        d.equipamentos = d.equipamentos.map(x => x.id === eq.id ? eq : x);
+      } else {
+        d.equipamentos = [...(d.equipamentos || []), {
+          ...eq,
+          id: uid()
+        }];
+      }
+      return d;
+    });
+    setModal(null);
+  }
+  function remove(id) {
+    if (!confirm('Excluir este equipamento?')) return;
+    update(d => {
+      d.equipamentos = d.equipamentos.filter(x => x.id !== id);
+      return d;
+    });
+  }
+  const emManutencao = lista.filter(e => e.status === 'Em manutenção').length;
+  return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    className: "page-head"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "eyebrow"
+  }, "Equipamentos e máquinas"), /*#__PURE__*/React.createElement("button", {
+    className: "btn accent",
+    onClick: () => setModal({})
+  }, "+ Novo equipamento")), /*#__PURE__*/React.createElement("div", {
+    className: "panel"
+  }, /*#__PURE__*/React.createElement("h3", null, "Filtros"), /*#__PURE__*/React.createElement("div", {
+    className: "grid3"
+  }, /*#__PURE__*/React.createElement(Field, {
+    label: "Buscar"
+  }, /*#__PURE__*/React.createElement("input", {
+    placeholder: "Nome, código, série ou marca…",
+    value: q,
+    onChange: e => setQ(e.target.value)
+  })), /*#__PURE__*/React.createElement(Field, {
+    label: "Departamento"
+  }, /*#__PURE__*/React.createElement("select", {
+    value: fDep,
+    onChange: e => setFDep(e.target.value)
+  }, /*#__PURE__*/React.createElement("option", {
+    value: ""
+  }, "Todos"), db.departamentos.map(d => /*#__PURE__*/React.createElement("option", {
+    key: d.id,
+    value: d.id
+  }, d.nome)))), /*#__PURE__*/React.createElement(Field, {
+    label: "Situação"
+  }, /*#__PURE__*/React.createElement("select", {
+    value: fStatus,
+    onChange: e => setFStatus(e.target.value)
+  }, /*#__PURE__*/React.createElement("option", {
+    value: ""
+  }, "Todas"), STATUS_EQUIP.map(st => /*#__PURE__*/React.createElement("option", {
+    key: st,
+    value: st
+  }, st))))), /*#__PURE__*/React.createElement("button", {
+    className: "btn ghost sm",
+    onClick: () => {
+      setQ('');
+      setFDep('');
+      setFStatus('');
+    }
+  }, "Limpar filtros")), emManutencao > 0 && /*#__PURE__*/React.createElement("div", {
+    className: "panel",
+    style: {
+      borderColor: 'var(--warn)',
+      background: 'var(--warn-bg)'
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "small",
+    style: {
+      color: 'var(--warn)',
+      fontWeight: 600
+    }
+  }, "⚠ ", emManutencao, " equipamento(s) em manutenção.")), /*#__PURE__*/React.createElement("div", {
+    className: "panel",
+    style: {
+      padding: 0
+    }
+  }, lista.length === 0 ? /*#__PURE__*/React.createElement("div", {
+    style: {
+      padding: 20
+    }
+  }, /*#__PURE__*/React.createElement(Empty, {
+    text: "Nenhum equipamento cadastrado. Ex: máquina reta, overlock, galoneira, prensa térmica."
+  })) : /*#__PURE__*/React.createElement("table", null, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("th", null, "Código"), /*#__PURE__*/React.createElement("th", null, "Equipamento"), /*#__PURE__*/React.createElement("th", null, "Departamento"), /*#__PURE__*/React.createElement("th", null, "Marca / Modelo"), /*#__PURE__*/React.createElement("th", null, "Nº de série"), /*#__PURE__*/React.createElement("th", null, "Aquisição"), /*#__PURE__*/React.createElement("th", null, "Próx. manutenção"), /*#__PURE__*/React.createElement("th", null, "Situação"), /*#__PURE__*/React.createElement("th", null))), /*#__PURE__*/React.createElement("tbody", null, lista.map(eq => {
+    const dep = db.departamentos.find(d => d.id === eq.departamentoId);
+    const st = eq.status || 'Operando';
+    const tone = st === 'Operando' ? 'ok' : st === 'Em manutenção' ? 'warn' : st === 'Parado' ? 'bad' : 'idle';
+    const atrasada = eq.proximaManutencao && eq.proximaManutencao < todayISO();
+    return /*#__PURE__*/React.createElement("tr", {
+      key: eq.id
+    }, /*#__PURE__*/React.createElement("td", {
+      className: "small muted"
+    }, /*#__PURE__*/React.createElement("strong", null, eq.codigo)), /*#__PURE__*/React.createElement("td", null, eq.nome), /*#__PURE__*/React.createElement("td", {
+      className: "small"
+    }, dep ? dep.nome : '—'), /*#__PURE__*/React.createElement("td", {
+      className: "small"
+    }, [eq.marca, eq.modelo].filter(Boolean).join(' / ') || '—'), /*#__PURE__*/React.createElement("td", {
+      className: "small muted"
+    }, eq.numeroSerie || '—'), /*#__PURE__*/React.createElement("td", {
+      className: "small"
+    }, fmtDate(eq.dataAquisicao)), /*#__PURE__*/React.createElement("td", {
+      className: "small",
+      style: atrasada ? {
+        color: 'var(--bad)',
+        fontWeight: 600
+      } : {}
+    }, fmtDate(eq.proximaManutencao), atrasada && ' ⚠'), /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement(Badge, {
+      tone: tone
+    }, st)), /*#__PURE__*/React.createElement("td", {
+      className: "row-actions"
+    }, /*#__PURE__*/React.createElement("button", {
+      className: "btn ghost sm",
+      onClick: () => setModal(eq)
+    }, "Editar"), /*#__PURE__*/React.createElement("button", {
+      className: "btn accent sm",
+      onClick: () => setHistorico(eq)
+    }, "Histórico"), /*#__PURE__*/React.createElement("button", {
+      className: "btn danger sm",
+      onClick: () => remove(eq.id)
+    }, "Excluir")));
+  })))), modal !== null && /*#__PURE__*/React.createElement(EquipamentoModal, {
+    eq: modal,
+    db: db,
+    onClose: () => setModal(null),
+    onSave: save
+  }), historico && /*#__PURE__*/React.createElement(HistoricoEquipamentoModal, {
+    eq: historico,
+    db: db,
+    update: update,
+    onClose: () => setHistorico(null)
+  }));
+}
+
+/* ==========================================================
+   FICHA DE HISTÓRICO DO EQUIPAMENTO
+========================================================== */
+function coletarUsoEquipamento(eq, db) {
+  // percorre todas as OPs e recolhe as etapas executadas nesta máquina
+  const usos = [];
+  db.ops.forEach(op => {
+    op.etapas.forEach(et => {
+      if (et.equipamentoId !== eq.id) return;
+      const qtdBase = num(et.qtdRecebida) > 0 ? num(et.qtdRecebida) : num(op.quantidade);
+      const cargaMin = cargaEtapaOP(et, qtdBase, op.quantidade, db);
+      const pedido = db.pedidos.find(p => p.id === op.pedidoId);
+      const produto = db.produtos.find(p => p.id === op.produtoId);
+      const dep = db.departamentos.find(d => d.id === et.departamentoId);
+      usos.push({
+        op,
+        opRotulo: rotuloOP(op),
+        pedido,
+        produto,
+        dep,
+        etapa: et,
+        nomeEtapa: et.nome,
+        operadores: responsaveisEtapa(et),
+        qtd: qtdBase,
+        produzido: num(et.qtdConcluida),
+        cargaMin,
+        data: et.dataInicio || '',
+        dataFim: et.dataConclusao || '',
+        status: et.status
+      });
+    });
+  });
+  return usos.sort((a, b) => (b.data || '').localeCompare(a.data || ''));
+}
+function HistoricoEquipamentoModal({
+  eq,
+  db,
+  update,
+  onClose
+}) {
+  const [aba, setAba] = useState('resumo');
+  const usos = useMemo(() => coletarUsoEquipamento(eq, db), [eq, db]);
+  const manutencoes = (eq.manutencoes || []).slice().sort((a, b) => (b.data || '').localeCompare(a.data || ''));
+  const dep = db.departamentos.find(d => d.id === eq.departamentoId);
+  const tempoTotal = usos.reduce((s, u) => s + u.cargaMin, 0);
+  const pecasTotal = usos.reduce((s, u) => s + u.produzido, 0);
+  const opsUnicas = Array.from(new Set(usos.map(u => u.opRotulo)));
+  const custoManut = manutencoes.reduce((s, m) => s + num(m.custo), 0);
+
+  // tempo de serviço por operador
+  const porOperador = {};
+  usos.forEach(u => {
+    const lista = u.operadores.length ? u.operadores : ['(sem operador informado)'];
+    const fatia = u.cargaMin / lista.length;
+    lista.forEach(nome => {
+      if (!porOperador[nome]) porOperador[nome] = {
+        nome,
+        min: 0,
+        pecas: 0,
+        etapas: new Set(),
+        execucoes: 0
+      };
+      porOperador[nome].min += fatia;
+      porOperador[nome].pecas += u.produzido / lista.length;
+      porOperador[nome].etapas.add(u.nomeEtapa);
+      porOperador[nome].execucoes += 1;
+    });
+  });
+  const operadores = Object.values(porOperador).sort((a, b) => b.min - a.min);
+
+  // fluxo de produção: etapas que passam por esta máquina
+  const porEtapa = {};
+  usos.forEach(u => {
+    if (!porEtapa[u.nomeEtapa]) porEtapa[u.nomeEtapa] = {
+      nome: u.nomeEtapa,
+      dep: u.dep,
+      min: 0,
+      pecas: 0,
+      execucoes: 0
+    };
+    porEtapa[u.nomeEtapa].min += u.cargaMin;
+    porEtapa[u.nomeEtapa].pecas += u.produzido;
+    porEtapa[u.nomeEtapa].execucoes += 1;
+  });
+  const etapas = Object.values(porEtapa).sort((a, b) => b.min - a.min);
+  function addManutencao(m) {
+    update(d => {
+      d.equipamentos = d.equipamentos.map(x => x.id === eq.id ? {
+        ...x,
+        manutencoes: [...(x.manutencoes || []), {
+          ...m,
+          id: uid()
+        }],
+        ultimaManutencao: m.data || x.ultimaManutencao
+      } : x);
+      return d;
+    });
+  }
+  function rmManutencao(id) {
+    if (!confirm('Excluir este registro de manutenção?')) return;
+    update(d => {
+      d.equipamentos = d.equipamentos.map(x => x.id === eq.id ? {
+        ...x,
+        manutencoes: (x.manutencoes || []).filter(m => m.id !== id)
+      } : x);
+      return d;
+    });
+  }
+  return /*#__PURE__*/React.createElement(Modal, {
+    title: `Histórico — ${eq.codigo} · ${eq.nome}`,
+    onClose: onClose,
+    wide: true
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginBottom: 12
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "btn accent sm",
+    onClick: () => window.print()
+  }, "🖨️ Imprimir / salvar como PDF")), /*#__PURE__*/React.createElement(SubTabs, {
+    active: aba,
+    onChange: setAba,
+    tabs: [{
+      id: 'resumo',
+      label: 'Resumo'
+    }, {
+      id: 'fluxo',
+      label: `Fluxo de produção (${etapas.length})`
+    }, {
+      id: 'operadores',
+      label: `Operadores (${operadores.length})`
+    }, {
+      id: 'ops',
+      label: `Ordens de produção (${opsUnicas.length})`
+    }, {
+      id: 'manutencao',
+      label: `Peças trocadas (${manutencoes.length})`
+    }]
+  }), /*#__PURE__*/React.createElement("div", {
+    className: "report-doc"
+  }, aba === 'resumo' && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("h2", null, "Ficha do Equipamento"), /*#__PURE__*/React.createElement("div", {
+    className: "rep-sub"
+  }, eq.codigo, " · ", eq.nome, " · Emitida em ", fmtDate(todayISO())), /*#__PURE__*/React.createElement("div", {
+    className: "rep-grid"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "rep-box"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "k"
+  }, "Tipo"), /*#__PURE__*/React.createElement("div", {
+    className: "v"
+  }, eq.tipo || '—')), /*#__PURE__*/React.createElement("div", {
+    className: "rep-box"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "k"
+  }, "Departamento"), /*#__PURE__*/React.createElement("div", {
+    className: "v"
+  }, dep ? dep.nome : '—')), /*#__PURE__*/React.createElement("div", {
+    className: "rep-box"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "k"
+  }, "Situação"), /*#__PURE__*/React.createElement("div", {
+    className: "v"
+  }, eq.status || 'Operando')), /*#__PURE__*/React.createElement("div", {
+    className: "rep-box"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "k"
+  }, "Localização"), /*#__PURE__*/React.createElement("div", {
+    className: "v"
+  }, eq.localizacao || '—'))), /*#__PURE__*/React.createElement("h4", null, "Identificação"), /*#__PURE__*/React.createElement("table", null, /*#__PURE__*/React.createElement("tbody", null, /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("td", null, "Marca / Modelo"), /*#__PURE__*/React.createElement("td", null, [eq.marca, eq.modelo].filter(Boolean).join(' / ') || '—')), /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("td", null, "Número de série"), /*#__PURE__*/React.createElement("td", null, eq.numeroSerie || '—')), /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("td", null, "Patrimônio"), /*#__PURE__*/React.createElement("td", null, eq.patrimonio || '—')), /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("td", null, "Aquisição"), /*#__PURE__*/React.createElement("td", null, fmtDate(eq.dataAquisicao), " ", num(eq.valorAquisicao) > 0 && `· ${money(eq.valorAquisicao)}`)), /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("td", null, "Fornecedor"), /*#__PURE__*/React.createElement("td", null, eq.fornecedor || '—')), /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("td", null, "Última manutenção"), /*#__PURE__*/React.createElement("td", null, fmtDate(eq.ultimaManutencao))), /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("td", null, "Próxima manutenção"), /*#__PURE__*/React.createElement("td", null, fmtDate(eq.proximaManutencao))))), /*#__PURE__*/React.createElement("h4", null, "Utilização acumulada"), /*#__PURE__*/React.createElement("table", null, /*#__PURE__*/React.createElement("tbody", null, /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("td", null, "Tempo total de máquina"), /*#__PURE__*/React.createElement("td", {
+    className: "num"
+  }, /*#__PURE__*/React.createElement("strong", null, minParaHHMM(tempoTotal)), " (", (tempoTotal / 60).toFixed(1), " h)")), /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("td", null, "Peças produzidas"), /*#__PURE__*/React.createElement("td", {
+    className: "num"
+  }, /*#__PURE__*/React.createElement("strong", null, Math.round(pecasTotal)))), /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("td", null, "Ordens de produção atendidas"), /*#__PURE__*/React.createElement("td", {
+    className: "num"
+  }, /*#__PURE__*/React.createElement("strong", null, opsUnicas.length))), /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("td", null, "Etapas distintas executadas"), /*#__PURE__*/React.createElement("td", {
+    className: "num"
+  }, /*#__PURE__*/React.createElement("strong", null, etapas.length))), /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("td", null, "Operadores distintos"), /*#__PURE__*/React.createElement("td", {
+    className: "num"
+  }, /*#__PURE__*/React.createElement("strong", null, operadores.length))), /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("td", null, "Registros de manutenção"), /*#__PURE__*/React.createElement("td", {
+    className: "num"
+  }, /*#__PURE__*/React.createElement("strong", null, manutencoes.length), custoManut > 0 && ` · ${money(custoManut)}`)))), eq.observacoes && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("h4", null, "Observações"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 12.5
+    }
+  }, eq.observacoes))), aba === 'fluxo' && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("h4", null, "Fluxo de produção nesta máquina"), etapas.length === 0 ? /*#__PURE__*/React.createElement(Empty, {
+    text: "Esta máquina ainda não foi alocada em nenhuma etapa de OP."
+  }) : /*#__PURE__*/React.createElement("table", null, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("th", null, "Etapa"), /*#__PURE__*/React.createElement("th", null, "Departamento"), /*#__PURE__*/React.createElement("th", {
+    className: "num"
+  }, "Execuções"), /*#__PURE__*/React.createElement("th", {
+    className: "num"
+  }, "Peças"), /*#__PURE__*/React.createElement("th", {
+    className: "num"
+  }, "Tempo de máquina"), /*#__PURE__*/React.createElement("th", {
+    className: "num"
+  }, "% do uso"))), /*#__PURE__*/React.createElement("tbody", null, etapas.map((e, i) => /*#__PURE__*/React.createElement("tr", {
+    key: i
+  }, /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement("strong", null, e.nome)), /*#__PURE__*/React.createElement("td", {
+    className: "small muted"
+  }, e.dep ? e.dep.nome : '—'), /*#__PURE__*/React.createElement("td", {
+    className: "num"
+  }, e.execucoes), /*#__PURE__*/React.createElement("td", {
+    className: "num"
+  }, Math.round(e.pecas)), /*#__PURE__*/React.createElement("td", {
+    className: "num"
+  }, minParaHHMM(e.min)), /*#__PURE__*/React.createElement("td", {
+    className: "num"
+  }, tempoTotal > 0 ? Math.round(e.min / tempoTotal * 100) : 0, "%")))))), aba === 'operadores' && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("h4", null, "Quem operou o equipamento"), operadores.length === 0 ? /*#__PURE__*/React.createElement(Empty, {
+    text: "Nenhum operador registrado ainda."
+  }) : /*#__PURE__*/React.createElement("table", null, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("th", null, "Operador"), /*#__PURE__*/React.createElement("th", null, "Etapas executadas"), /*#__PURE__*/React.createElement("th", {
+    className: "num"
+  }, "Execuções"), /*#__PURE__*/React.createElement("th", {
+    className: "num"
+  }, "Peças"), /*#__PURE__*/React.createElement("th", {
+    className: "num"
+  }, "Tempo de serviço"), /*#__PURE__*/React.createElement("th", {
+    className: "num"
+  }, "% do uso"))), /*#__PURE__*/React.createElement("tbody", null, operadores.map((o, i) => /*#__PURE__*/React.createElement("tr", {
+    key: i
+  }, /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement("strong", null, o.nome)), /*#__PURE__*/React.createElement("td", {
+    className: "small muted"
+  }, Array.from(o.etapas).join(', ')), /*#__PURE__*/React.createElement("td", {
+    className: "num"
+  }, o.execucoes), /*#__PURE__*/React.createElement("td", {
+    className: "num"
+  }, Math.round(o.pecas)), /*#__PURE__*/React.createElement("td", {
+    className: "num"
+  }, minParaHHMM(o.min)), /*#__PURE__*/React.createElement("td", {
+    className: "num"
+  }, tempoTotal > 0 ? Math.round(o.min / tempoTotal * 100) : 0, "%")))))), aba === 'ops' && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("h4", null, "Ordens de produção que passaram por esta máquina"), usos.length === 0 ? /*#__PURE__*/React.createElement(Empty, {
+    text: "Nenhuma OP registrada para esta máquina."
+  }) : /*#__PURE__*/React.createElement("table", null, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("th", null, "Data"), /*#__PURE__*/React.createElement("th", null, "OP"), /*#__PURE__*/React.createElement("th", null, "Cliente"), /*#__PURE__*/React.createElement("th", null, "Produto"), /*#__PURE__*/React.createElement("th", null, "Etapa"), /*#__PURE__*/React.createElement("th", null, "Operador(es)"), /*#__PURE__*/React.createElement("th", {
+    className: "num"
+  }, "Qtd."), /*#__PURE__*/React.createElement("th", {
+    className: "num"
+  }, "Tempo"), /*#__PURE__*/React.createElement("th", null, "Status"))), /*#__PURE__*/React.createElement("tbody", null, usos.map((u, i) => /*#__PURE__*/React.createElement("tr", {
+    key: i
+  }, /*#__PURE__*/React.createElement("td", {
+    className: "small"
+  }, fmtDate(u.data)), /*#__PURE__*/React.createElement("td", {
+    className: "small"
+  }, /*#__PURE__*/React.createElement("strong", null, u.opRotulo)), /*#__PURE__*/React.createElement("td", {
+    className: "small"
+  }, u.pedido ? u.pedido.cliente : '—'), /*#__PURE__*/React.createElement("td", {
+    className: "small"
+  }, u.produto ? u.produto.nome : '—'), /*#__PURE__*/React.createElement("td", {
+    className: "small"
+  }, u.nomeEtapa), /*#__PURE__*/React.createElement("td", {
+    className: "small muted"
+  }, u.operadores.join(', ') || '—'), /*#__PURE__*/React.createElement("td", {
+    className: "num"
+  }, u.produzido, "/", u.qtd), /*#__PURE__*/React.createElement("td", {
+    className: "num"
+  }, minParaHHMM(u.cargaMin)), /*#__PURE__*/React.createElement("td", {
+    className: "small"
+  }, u.status)))))), aba === 'manutencao' && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("h4", null, "Manutenções e peças trocadas"), manutencoes.length === 0 ? /*#__PURE__*/React.createElement(Empty, {
+    text: "Nenhuma manutenção registrada."
+  }) : /*#__PURE__*/React.createElement("table", null, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("th", null, "Data"), /*#__PURE__*/React.createElement("th", null, "Tipo"), /*#__PURE__*/React.createElement("th", null, "Peças trocadas"), /*#__PURE__*/React.createElement("th", null, "Serviço executado"), /*#__PURE__*/React.createElement("th", null, "Responsável"), /*#__PURE__*/React.createElement("th", {
+    className: "num"
+  }, "Custo"), /*#__PURE__*/React.createElement("th", {
+    className: "num"
+  }, "Parada"), /*#__PURE__*/React.createElement("th", null))), /*#__PURE__*/React.createElement("tbody", null, manutencoes.map(m => /*#__PURE__*/React.createElement("tr", {
+    key: m.id
+  }, /*#__PURE__*/React.createElement("td", {
+    className: "small"
+  }, fmtDate(m.data)), /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement(Badge, {
+    tone: m.tipo === 'Corretiva' ? 'bad' : m.tipo === 'Preventiva' ? 'ok' : 'info'
+  }, m.tipo)), /*#__PURE__*/React.createElement("td", {
+    className: "small"
+  }, m.pecas || '—'), /*#__PURE__*/React.createElement("td", {
+    className: "small muted"
+  }, m.servico || '—'), /*#__PURE__*/React.createElement("td", {
+    className: "small"
+  }, m.responsavel || '—'), /*#__PURE__*/React.createElement("td", {
+    className: "num"
+  }, money(m.custo)), /*#__PURE__*/React.createElement("td", {
+    className: "num small"
+  }, num(m.horasParada) > 0 ? `${m.horasParada} h` : '—'), /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement("button", {
+    className: "btn danger sm",
+    onClick: () => rmManutencao(m.id)
+  }, "Excluir")))), /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("td", {
+    colSpan: "5",
+    style: {
+      textAlign: 'right'
+    }
+  }, /*#__PURE__*/React.createElement("strong", null, "Custo total")), /*#__PURE__*/React.createElement("td", {
+    className: "num"
+  }, /*#__PURE__*/React.createElement("strong", null, money(custoManut))), /*#__PURE__*/React.createElement("td", {
+    colSpan: "2"
+  })))))), aba === 'manutencao' && /*#__PURE__*/React.createElement(NovaManutencao, {
+    db: db,
+    onAdd: addManutencao
+  }), /*#__PURE__*/React.createElement("div", {
+    className: "modal-actions"
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "btn ghost",
+    onClick: onClose
+  }, "Fechar")));
+}
+function NovaManutencao({
+  db,
+  onAdd
+}) {
+  const vazio = {
+    data: todayISO(),
+    tipo: 'Preventiva',
+    pecas: '',
+    servico: '',
+    responsavel: '',
+    custo: 0,
+    horasParada: 0
+  };
+  const [f, setF] = useState(vazio);
+  const set = (k, v) => setF(p => ({
+    ...p,
+    [k]: v
+  }));
+  return /*#__PURE__*/React.createElement("div", {
+    className: "panel",
+    style: {
+      background: '#fff',
+      marginTop: 14
+    }
+  }, /*#__PURE__*/React.createElement("h3", null, "Registrar manutenção / troca de peça"), /*#__PURE__*/React.createElement("div", {
+    className: "grid3"
+  }, /*#__PURE__*/React.createElement(Field, {
+    label: "Data"
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "date",
+    value: f.data,
+    onChange: e => set('data', e.target.value)
+  })), /*#__PURE__*/React.createElement(Field, {
+    label: "Tipo"
+  }, /*#__PURE__*/React.createElement("select", {
+    value: f.tipo,
+    onChange: e => set('tipo', e.target.value)
+  }, /*#__PURE__*/React.createElement("option", null, "Preventiva"), /*#__PURE__*/React.createElement("option", null, "Corretiva"), /*#__PURE__*/React.createElement("option", null, "Ajuste / Regulagem"))), /*#__PURE__*/React.createElement(Field, {
+    label: "Responsável / Técnico"
+  }, /*#__PURE__*/React.createElement("input", {
+    list: "tecnicos-manut",
+    value: f.responsavel,
+    onChange: e => set('responsavel', e.target.value)
+  }), /*#__PURE__*/React.createElement("datalist", {
+    id: "tecnicos-manut"
+  }, db.colaboradores.filter(c => c.status !== 'Inativo').map(c => /*#__PURE__*/React.createElement("option", {
+    key: c.id,
+    value: c.nome
+  })), db.fornecedores.map(x => /*#__PURE__*/React.createElement("option", {
+    key: x.id,
+    value: x.nome
+  })))), /*#__PURE__*/React.createElement(Field, {
+    label: "Custo (R$)"
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "number",
+    step: "0.01",
+    value: f.custo,
+    onChange: e => set('custo', e.target.value)
+  })), /*#__PURE__*/React.createElement(Field, {
+    label: "Horas de parada"
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "number",
+    step: "0.5",
+    value: f.horasParada,
+    onChange: e => set('horasParada', e.target.value)
+  }))), /*#__PURE__*/React.createElement(Field, {
+    label: "Peças trocadas"
+  }, /*#__PURE__*/React.createElement("input", {
+    value: f.pecas,
+    onChange: e => set('pecas', e.target.value),
+    placeholder: "Agulha, correia, motor, lançadeira…"
+  })), /*#__PURE__*/React.createElement(Field, {
+    label: "Serviço executado"
+  }, /*#__PURE__*/React.createElement("textarea", {
+    rows: "2",
+    value: f.servico,
+    onChange: e => set('servico', e.target.value)
+  })), /*#__PURE__*/React.createElement("button", {
+    className: "btn accent sm",
+    onClick: () => {
+      onAdd(f);
+      setF(vazio);
+    },
+    disabled: !f.data || !f.pecas.trim() && !f.servico.trim()
+  }, "+ Registrar"));
+}
+function EquipamentoModal({
+  eq,
+  db,
+  onClose,
+  onSave
+}) {
+  const [f, setF] = useState({
+    codigo: '',
+    nome: '',
+    tipo: '',
+    departamentoId: '',
+    marca: '',
+    modelo: '',
+    numeroSerie: '',
+    patrimonio: '',
+    dataAquisicao: '',
+    valorAquisicao: 0,
+    fornecedorId: '',
+    fornecedor: '',
+    localizacao: '',
+    ultimaManutencao: '',
+    proximaManutencao: '',
+    status: 'Operando',
+    observacoes: '',
+    manutencoes: [],
+    ...eq
+  });
+  const set = (k, v) => setF(prev => ({
+    ...prev,
+    [k]: v
+  }));
+  return /*#__PURE__*/React.createElement(Modal, {
+    title: eq.id ? 'Editar equipamento' : 'Novo equipamento',
+    onClose: onClose,
+    wide: true
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "grid3"
+  }, /*#__PURE__*/React.createElement(Field, {
+    label: "Código"
+  }, /*#__PURE__*/React.createElement("input", {
+    value: f.codigo,
+    onChange: e => set('codigo', e.target.value),
+    placeholder: "EQ-001"
+  })), /*#__PURE__*/React.createElement(Field, {
+    label: "Nome do equipamento"
+  }, /*#__PURE__*/React.createElement("input", {
+    value: f.nome,
+    onChange: e => set('nome', e.target.value),
+    placeholder: "Máquina Overlock"
+  })), /*#__PURE__*/React.createElement(Field, {
+    label: "Tipo"
+  }, /*#__PURE__*/React.createElement("input", {
+    value: f.tipo,
+    onChange: e => set('tipo', e.target.value),
+    placeholder: "Costura / Corte / Gravação"
+  })), /*#__PURE__*/React.createElement(Field, {
+    label: "Departamento"
+  }, /*#__PURE__*/React.createElement("select", {
+    value: f.departamentoId,
+    onChange: e => set('departamentoId', e.target.value)
+  }, /*#__PURE__*/React.createElement("option", {
+    value: ""
+  }, "—"), db.departamentos.map(d => /*#__PURE__*/React.createElement("option", {
+    key: d.id,
+    value: d.id
+  }, d.nome)))), /*#__PURE__*/React.createElement(Field, {
+    label: "Marca"
+  }, /*#__PURE__*/React.createElement("input", {
+    value: f.marca,
+    onChange: e => set('marca', e.target.value),
+    placeholder: "Singer, Juki…"
+  })), /*#__PURE__*/React.createElement(Field, {
+    label: "Modelo"
+  }, /*#__PURE__*/React.createElement("input", {
+    value: f.modelo,
+    onChange: e => set('modelo', e.target.value)
+  })), /*#__PURE__*/React.createElement(Field, {
+    label: "Número de série"
+  }, /*#__PURE__*/React.createElement("input", {
+    value: f.numeroSerie,
+    onChange: e => set('numeroSerie', e.target.value)
+  })), /*#__PURE__*/React.createElement(Field, {
+    label: "Nº de patrimônio"
+  }, /*#__PURE__*/React.createElement("input", {
+    value: f.patrimonio,
+    onChange: e => set('patrimonio', e.target.value)
+  })), /*#__PURE__*/React.createElement(Field, {
+    label: "Localização"
+  }, /*#__PURE__*/React.createElement("input", {
+    value: f.localizacao,
+    onChange: e => set('localizacao', e.target.value),
+    placeholder: "Setor / posição na linha"
+  }))), /*#__PURE__*/React.createElement("div", {
+    className: "grid3"
+  }, /*#__PURE__*/React.createElement(Field, {
+    label: "Data de aquisição"
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "date",
+    value: f.dataAquisicao,
+    onChange: e => set('dataAquisicao', e.target.value)
+  })), /*#__PURE__*/React.createElement(Field, {
+    label: "Valor de aquisição (R$)"
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "number",
+    step: "0.01",
+    value: f.valorAquisicao,
+    onChange: e => set('valorAquisicao', e.target.value)
+  })), /*#__PURE__*/React.createElement(Field, {
+    label: "Fornecedor"
+  }, /*#__PURE__*/React.createElement("select", {
+    value: f.fornecedorId || '',
+    onChange: e => {
+      const forn = db.fornecedores.find(x => x.id === e.target.value);
+      setF(prev => ({
+        ...prev,
+        fornecedorId: e.target.value,
+        fornecedor: forn ? forn.nome : ''
+      }));
+    }
+  }, /*#__PURE__*/React.createElement("option", {
+    value: ""
+  }, f.fornecedor && !f.fornecedorId ? f.fornecedor : '—'), db.fornecedores.map(x => /*#__PURE__*/React.createElement("option", {
+    key: x.id,
+    value: x.id
+  }, x.nome)))), /*#__PURE__*/React.createElement(Field, {
+    label: "Última manutenção"
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "date",
+    value: f.ultimaManutencao,
+    onChange: e => set('ultimaManutencao', e.target.value)
+  })), /*#__PURE__*/React.createElement(Field, {
+    label: "Próxima manutenção"
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "date",
+    value: f.proximaManutencao,
+    onChange: e => set('proximaManutencao', e.target.value)
+  })), /*#__PURE__*/React.createElement(Field, {
+    label: "Situação"
+  }, /*#__PURE__*/React.createElement("select", {
+    value: f.status,
+    onChange: e => set('status', e.target.value)
+  }, STATUS_EQUIP.map(st => /*#__PURE__*/React.createElement("option", {
+    key: st,
+    value: st
+  }, st))))), /*#__PURE__*/React.createElement(Field, {
+    label: "Observações"
+  }, /*#__PURE__*/React.createElement("textarea", {
+    rows: "2",
+    value: f.observacoes,
+    onChange: e => set('observacoes', e.target.value)
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "modal-actions"
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "btn ghost",
+    onClick: onClose
+  }, "Cancelar"), /*#__PURE__*/React.createElement("button", {
+    className: "btn accent",
+    onClick: () => onSave(f),
+    disabled: !f.nome || !f.codigo
+  }, "Salvar")));
+}
+
+/* ==========================================================
+   CL. CLIENTES
+========================================================== */
+function Clientes({
+  db,
+  update
+}) {
+  const [modal, setModal] = useState(null);
+  const [q, setQ] = useState('');
+  const list = db.clientes.filter(c => {
+    const s = q.toLowerCase();
+    return !s || (c.nome || '').toLowerCase().includes(s) || (c.nomeFantasia || '').toLowerCase().includes(s) || (c.documento || '').includes(s);
+  });
+  const CAMPOS_CLI = [{
+    key: 'nome',
+    label: 'nome / razão social'
+  }, {
+    key: 'documento',
+    label: 'CPF/CNPJ'
+  }, {
+    key: 'ie',
+    label: 'inscrição estadual'
+  }];
+  function save(c) {
+    const erro = checarDuplicidade(db.clientes, c, CAMPOS_CLI);
+    if (erro) {
+      alert(erro);
+      return;
+    }
+    update(d => {
+      if (c.id) {
+        d.clientes = d.clientes.map(x => x.id === c.id ? c : x);
+      } else {
+        d.clientes.push({
+          ...c,
+          id: uid()
+        });
+      }
+      return d;
+    });
+    setModal(null);
+  }
+  function remove(id) {
+    if (!confirm('Excluir este cliente?')) return;
+    update(d => {
+      d.clientes = d.clientes.filter(c => c.id !== id);
+      return d;
+    });
+  }
+  return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    className: "page-head"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "eyebrow"
+  }, "Clientes"), /*#__PURE__*/React.createElement("button", {
+    className: "btn accent",
+    onClick: () => setModal({})
+  }, "+ Novo cliente")), /*#__PURE__*/React.createElement("div", {
+    className: "searchbar"
+  }, /*#__PURE__*/React.createElement("input", {
+    placeholder: "Buscar por nome, fantasia ou CPF/CNPJ…",
+    value: q,
+    onChange: e => setQ(e.target.value)
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "panel",
+    style: {
+      padding: 0
+    }
+  }, list.length === 0 ? /*#__PURE__*/React.createElement("div", {
+    style: {
+      padding: 20
+    }
+  }, /*#__PURE__*/React.createElement(Empty, {
+    text: "Nenhum cliente cadastrado."
+  })) : /*#__PURE__*/React.createElement("table", null, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("th", null, "Nome / Razão Social"), /*#__PURE__*/React.createElement("th", null, "Fantasia"), /*#__PURE__*/React.createElement("th", null, "CPF/CNPJ"), /*#__PURE__*/React.createElement("th", null, "Contato"), /*#__PURE__*/React.createElement("th", null, "Cidade/UF"), /*#__PURE__*/React.createElement("th", null))), /*#__PURE__*/React.createElement("tbody", null, list.map(c => /*#__PURE__*/React.createElement("tr", {
+    key: c.id
+  }, /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement("strong", null, c.nome), " ", /*#__PURE__*/React.createElement("span", {
+    className: "small muted"
+  }, c.tipo === 'PJ' ? 'PJ' : 'PF')), /*#__PURE__*/React.createElement("td", {
+    className: "small"
+  }, c.nomeFantasia), /*#__PURE__*/React.createElement("td", {
+    className: "small muted"
+  }, c.documento), /*#__PURE__*/React.createElement("td", {
+    className: "small"
+  }, c.celular || c.telefone), /*#__PURE__*/React.createElement("td", {
+    className: "small muted"
+  }, c.cidade, c.uf ? `/${c.uf}` : ''), /*#__PURE__*/React.createElement("td", {
+    className: "row-actions"
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "btn ghost sm",
+    onClick: () => setModal(c)
+  }, "Editar"), /*#__PURE__*/React.createElement("button", {
+    className: "btn danger sm",
+    onClick: () => remove(c.id)
+  }, "Excluir"))))))), modal !== null && /*#__PURE__*/React.createElement(ClienteModal, {
+    cli: modal,
+    onClose: () => setModal(null),
+    onSave: save
+  }));
+}
+function ClienteModal({
+  cli,
+  onClose,
+  onSave
+}) {
+  const [f, setF] = useState({
+    tipo: 'PJ',
+    nome: '',
+    nomeFantasia: '',
+    documento: '',
+    ie: '',
+    indicadorIE: 'Contribuinte',
+    telefone: '',
+    celular: '',
+    responsavel: '',
+    email: '',
+    ...ENDERECO_VAZIO,
+    observacoes: '',
+    ...cli
+  });
+  const set = (k, v) => setF(prev => ({
+    ...prev,
+    [k]: v
+  }));
+  return /*#__PURE__*/React.createElement(Modal, {
+    title: cli.id ? 'Editar cliente' : 'Novo cliente',
+    onClose: onClose,
+    wide: true
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "field"
+  }, /*#__PURE__*/React.createElement("label", null, "Tipo"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 6
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "btn sm " + (f.tipo === 'PJ' ? 'accent' : 'ghost'),
+    onClick: () => set('tipo', 'PJ')
+  }, "Pessoa Jurídica"), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "btn sm " + (f.tipo === 'PF' ? 'accent' : 'ghost'),
+    onClick: () => set('tipo', 'PF')
+  }, "Pessoa Física"))), /*#__PURE__*/React.createElement("div", {
+    className: "grid3"
+  }, /*#__PURE__*/React.createElement(Field, {
+    label: f.tipo === 'PJ' ? 'Razão Social' : 'Nome completo'
+  }, /*#__PURE__*/React.createElement("input", {
+    value: f.nome,
+    onChange: e => set('nome', e.target.value)
+  })), f.tipo === 'PJ' && /*#__PURE__*/React.createElement(Field, {
+    label: "Nome Fantasia"
+  }, /*#__PURE__*/React.createElement("input", {
+    value: f.nomeFantasia,
+    onChange: e => set('nomeFantasia', e.target.value)
+  })), /*#__PURE__*/React.createElement(Field, {
+    label: f.tipo === 'PJ' ? 'CNPJ' : 'CPF'
+  }, /*#__PURE__*/React.createElement("input", {
+    value: f.documento,
+    onChange: e => set('documento', e.target.value)
+  })), f.tipo === 'PJ' && /*#__PURE__*/React.createElement(Field, {
+    label: "Inscrição Estadual"
+  }, /*#__PURE__*/React.createElement("input", {
+    value: f.ie,
+    onChange: e => set('ie', e.target.value)
+  })), f.tipo === 'PJ' && /*#__PURE__*/React.createElement(Field, {
+    label: "Indicador da IE"
+  }, /*#__PURE__*/React.createElement("select", {
+    value: f.indicadorIE,
+    onChange: e => set('indicadorIE', e.target.value)
+  }, /*#__PURE__*/React.createElement("option", null, "Contribuinte"), /*#__PURE__*/React.createElement("option", null, "Isento"), /*#__PURE__*/React.createElement("option", null, "Não contribuinte"))), /*#__PURE__*/React.createElement(Field, {
+    label: "Telefone"
+  }, /*#__PURE__*/React.createElement("input", {
+    value: f.telefone,
+    onChange: e => set('telefone', e.target.value)
+  })), /*#__PURE__*/React.createElement(Field, {
+    label: "Celular / WhatsApp"
+  }, /*#__PURE__*/React.createElement("input", {
+    value: f.celular,
+    onChange: e => set('celular', e.target.value)
+  })), /*#__PURE__*/React.createElement(Field, {
+    label: "Nome do responsável"
+  }, /*#__PURE__*/React.createElement("input", {
+    value: f.responsavel,
+    onChange: e => set('responsavel', e.target.value)
+  })), /*#__PURE__*/React.createElement(Field, {
+    label: "E-mail"
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "email",
+    value: f.email,
+    onChange: e => set('email', e.target.value)
+  }))), /*#__PURE__*/React.createElement(EnderecoFields, {
+    f: f,
+    set: set
+  }), /*#__PURE__*/React.createElement(Field, {
+    label: "Observações"
+  }, /*#__PURE__*/React.createElement("textarea", {
+    rows: "2",
+    value: f.observacoes,
+    onChange: e => set('observacoes', e.target.value)
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "modal-actions"
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "btn ghost",
+    onClick: onClose
+  }, "Cancelar"), /*#__PURE__*/React.createElement("button", {
+    className: "btn accent",
+    onClick: () => onSave(f),
+    disabled: !f.nome
+  }, "Salvar")));
+}
+
+/* ==========================================================
+   FO. FORNECEDORES
+========================================================== */
+function Fornecedores({
+  db,
+  update
+}) {
+  const [modal, setModal] = useState(null);
+  const [q, setQ] = useState('');
+  const list = db.fornecedores.filter(f => {
+    const s = q.toLowerCase();
+    return !s || (f.nome || '').toLowerCase().includes(s) || (f.nomeFantasia || '').toLowerCase().includes(s) || (f.categoria || '').toLowerCase().includes(s);
+  });
+  const CAMPOS_FORN = [{
+    key: 'nome',
+    label: 'nome / razão social'
+  }, {
+    key: 'documento',
+    label: 'CNPJ/CPF'
+  }, {
+    key: 'ie',
+    label: 'inscrição estadual'
+  }];
+  function save(f) {
+    const erro = checarDuplicidade(db.fornecedores, f, CAMPOS_FORN);
+    if (erro) {
+      alert(erro);
+      return;
+    }
+    update(d => {
+      if (f.id) {
+        d.fornecedores = d.fornecedores.map(x => x.id === f.id ? f : x);
+      } else {
+        d.fornecedores.push({
+          ...f,
+          id: uid()
+        });
+      }
+      return d;
+    });
+    setModal(null);
+  }
+  function remove(id) {
+    if (!confirm('Excluir este fornecedor?')) return;
+    update(d => {
+      d.fornecedores = d.fornecedores.filter(f => f.id !== id);
+      return d;
+    });
+  }
+  return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    className: "page-head"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "eyebrow"
+  }, "Fornecedores"), /*#__PURE__*/React.createElement("button", {
+    className: "btn accent",
+    onClick: () => setModal({})
+  }, "+ Novo fornecedor")), /*#__PURE__*/React.createElement("div", {
+    className: "searchbar"
+  }, /*#__PURE__*/React.createElement("input", {
+    placeholder: "Buscar por nome, fantasia ou categoria…",
+    value: q,
+    onChange: e => setQ(e.target.value)
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "panel",
+    style: {
+      padding: 0
+    }
+  }, list.length === 0 ? /*#__PURE__*/React.createElement("div", {
+    style: {
+      padding: 20
+    }
+  }, /*#__PURE__*/React.createElement(Empty, {
+    text: "Nenhum fornecedor cadastrado."
+  })) : /*#__PURE__*/React.createElement("table", null, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("th", null, "Nome / Razão Social"), /*#__PURE__*/React.createElement("th", null, "Fantasia"), /*#__PURE__*/React.createElement("th", null, "CNPJ/CPF"), /*#__PURE__*/React.createElement("th", null, "Categoria"), /*#__PURE__*/React.createElement("th", null, "Contato"), /*#__PURE__*/React.createElement("th", null))), /*#__PURE__*/React.createElement("tbody", null, list.map(f => /*#__PURE__*/React.createElement("tr", {
+    key: f.id
+  }, /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement("strong", null, f.nome)), /*#__PURE__*/React.createElement("td", {
+    className: "small"
+  }, f.nomeFantasia), /*#__PURE__*/React.createElement("td", {
+    className: "small muted"
+  }, f.documento), /*#__PURE__*/React.createElement("td", {
+    className: "small"
+  }, f.categoria), /*#__PURE__*/React.createElement("td", {
+    className: "small"
+  }, f.celular || f.telefone), /*#__PURE__*/React.createElement("td", {
+    className: "row-actions"
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "btn ghost sm",
+    onClick: () => setModal(f)
+  }, "Editar"), /*#__PURE__*/React.createElement("button", {
+    className: "btn danger sm",
+    onClick: () => remove(f.id)
+  }, "Excluir"))))))), modal !== null && /*#__PURE__*/React.createElement(FornecedorModal, {
+    forn: modal,
+    onClose: () => setModal(null),
+    onSave: save
+  }));
+}
+function FornecedorModal({
+  forn,
+  onClose,
+  onSave
+}) {
+  const [f, setF] = useState({
+    nome: '',
+    nomeFantasia: '',
+    documento: '',
+    ie: '',
+    telefone: '',
+    celular: '',
+    contato: '',
+    email: '',
+    categoria: '',
+    condicaoPagamento: '',
+    ...ENDERECO_VAZIO,
+    observacoes: '',
+    ...forn
+  });
+  const set = (k, v) => setF(prev => ({
+    ...prev,
+    [k]: v
+  }));
+  return /*#__PURE__*/React.createElement(Modal, {
+    title: forn.id ? 'Editar fornecedor' : 'Novo fornecedor',
+    onClose: onClose,
+    wide: true
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "grid3"
+  }, /*#__PURE__*/React.createElement(Field, {
+    label: "Razão Social / Nome"
+  }, /*#__PURE__*/React.createElement("input", {
+    value: f.nome,
+    onChange: e => set('nome', e.target.value)
+  })), /*#__PURE__*/React.createElement(Field, {
+    label: "Nome Fantasia"
+  }, /*#__PURE__*/React.createElement("input", {
+    value: f.nomeFantasia,
+    onChange: e => set('nomeFantasia', e.target.value)
+  })), /*#__PURE__*/React.createElement(Field, {
+    label: "CNPJ/CPF"
+  }, /*#__PURE__*/React.createElement("input", {
+    value: f.documento,
+    onChange: e => set('documento', e.target.value)
+  })), /*#__PURE__*/React.createElement(Field, {
+    label: "Inscrição Estadual"
+  }, /*#__PURE__*/React.createElement("input", {
+    value: f.ie,
+    onChange: e => set('ie', e.target.value)
+  })), /*#__PURE__*/React.createElement(Field, {
+    label: "Telefone"
+  }, /*#__PURE__*/React.createElement("input", {
+    value: f.telefone,
+    onChange: e => set('telefone', e.target.value)
+  })), /*#__PURE__*/React.createElement(Field, {
+    label: "Celular / WhatsApp"
+  }, /*#__PURE__*/React.createElement("input", {
+    value: f.celular,
+    onChange: e => set('celular', e.target.value)
+  })), /*#__PURE__*/React.createElement(Field, {
+    label: "Nome do contato"
+  }, /*#__PURE__*/React.createElement("input", {
+    value: f.contato,
+    onChange: e => set('contato', e.target.value)
+  })), /*#__PURE__*/React.createElement(Field, {
+    label: "E-mail"
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "email",
+    value: f.email,
+    onChange: e => set('email', e.target.value)
+  })), /*#__PURE__*/React.createElement(Field, {
+    label: "Categoria / O que fornece"
+  }, /*#__PURE__*/React.createElement("input", {
+    value: f.categoria,
+    onChange: e => set('categoria', e.target.value),
+    placeholder: "Tecidos, aviamentos…"
+  })), /*#__PURE__*/React.createElement(Field, {
+    label: "Condição de pagamento"
+  }, /*#__PURE__*/React.createElement("input", {
+    value: f.condicaoPagamento,
+    onChange: e => set('condicaoPagamento', e.target.value),
+    placeholder: "30/60 dias, à vista…"
+  }))), /*#__PURE__*/React.createElement(EnderecoFields, {
+    f: f,
+    set: set
+  }), /*#__PURE__*/React.createElement(Field, {
+    label: "Observações"
+  }, /*#__PURE__*/React.createElement("textarea", {
+    rows: "2",
+    value: f.observacoes,
+    onChange: e => set('observacoes', e.target.value)
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "modal-actions"
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "btn ghost",
+    onClick: onClose
+  }, "Cancelar"), /*#__PURE__*/React.createElement("button", {
+    className: "btn accent",
+    onClick: () => onSave(f),
+    disabled: !f.nome
+  }, "Salvar")));
+}
+
+/* ==========================================================
+   2 & 3. PRODUTOS + FICHA TÉCNICA
+========================================================== */
+function Produtos({
+  db,
+  update,
+  podeFin = true
+}) {
+  const [modal, setModal] = useState(null);
+  const [ficha, setFicha] = useState(null);
+  const [q, setQ] = useState('');
+  const list = db.produtos.filter(p => {
+    const s = q.toLowerCase();
+    return !s || p.nome.toLowerCase().includes(s) || p.codigo.toLowerCase().includes(s);
+  });
+  function save(p) {
+    const erro = checarDuplicidade(db.produtos, p, [{
+      key: 'codigo',
+      label: 'código'
+    }, {
+      key: 'nome',
+      label: 'nome'
+    }]);
+    if (erro) {
+      alert(erro);
+      return;
+    }
+    update(d => {
+      if (p.id) {
+        d.produtos = d.produtos.map(x => x.id === p.id ? p : x);
+      } else {
+        d.produtos.push({
+          ...p,
+          id: uid()
+        });
+      }
+      return d;
+    });
+    setModal(null);
+  }
+  function remove(id) {
+    if (!confirm('Excluir este produto?')) return;
+    update(d => {
+      d.produtos = d.produtos.filter(p => p.id !== id);
+      return d;
+    });
+  }
+  return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    className: "page-head"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "eyebrow"
+  }, "Produtos, ficha técnica & custo unitário"), /*#__PURE__*/React.createElement("button", {
+    className: "btn accent",
+    onClick: () => setModal({})
+  }, "+ Novo produto")), /*#__PURE__*/React.createElement("div", {
+    className: "searchbar"
+  }, /*#__PURE__*/React.createElement("input", {
+    placeholder: "Buscar por código ou nome…",
+    value: q,
+    onChange: e => setQ(e.target.value)
+  })), list.length === 0 ? /*#__PURE__*/React.createElement(Empty, {
+    text: "Nenhum produto cadastrado ainda. Cadastre materiais primeiro para montar a ficha técnica."
+  }) : /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'grid',
+      gridTemplateColumns: 'repeat(auto-fill, minmax(270px,1fr))',
+      gap: 14
+    }
+  }, list.map(p => /*#__PURE__*/React.createElement("div", {
+    className: "panel",
+    key: p.id,
+    style: {
+      marginBottom: 0
+    }
+  }, /*#__PURE__*/React.createElement("h3", null, p.nome, " ", /*#__PURE__*/React.createElement("span", {
+    className: "chip"
+  }, p.codigo)), /*#__PURE__*/React.createElement("div", {
+    className: "small muted",
+    style: {
+      marginBottom: 8
+    }
+  }, p.categoria, (() => {
+    const t = db.materiais.find(m => m.id === p.tecidoId);
+    return t ? ` · ${t.nome}` : '';
+  })(), p.medidas ? ` · ${p.medidas}` : ''), p.observacoes && /*#__PURE__*/React.createElement("div", {
+    className: "small muted",
+    style: {
+      marginBottom: 8,
+      fontStyle: 'italic'
+    }
+  }, p.observacoes), etapasDoProduto(p).length > 0 && /*#__PURE__*/React.createElement("div", {
+    className: "small muted",
+    style: {
+      marginBottom: 8
+    }
+  }, /*#__PURE__*/React.createElement("strong", null, "Etapas:"), " ", etapasDoProduto(p).map(x => {
+    const et = (db.etapasProducao || []).find(e => e.id === x.etapaId);
+    return et ? et.nome : null;
+  }).filter(Boolean).join(' → ')), /*#__PURE__*/React.createElement("div", {
+    className: "small",
+    style: {
+      marginBottom: 6
+    }
+  }, /*#__PURE__*/React.createElement("strong", null, "Ficha técnica")), (p.fichaTecnica || []).length === 0 ? /*#__PURE__*/React.createElement("div", {
+    className: "small muted"
+  }, "Sem materiais definidos") : /*#__PURE__*/React.createElement("ul", {
+    style: {
+      margin: '0 0 10px 0',
+      paddingLeft: 16
+    }
+  }, (p.fichaTecnica || []).map((it, i) => {
+    const mat = db.materiais.find(m => m.id === it.materialId);
+    return /*#__PURE__*/React.createElement("li", {
+      key: i,
+      className: "small"
+    }, it.quantidade, " ", mat ? mat.unidade : '', " de ", mat ? mat.nome : '(material removido)');
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "row-actions"
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "btn ghost sm",
+    onClick: () => setModal(p)
+  }, "Editar"), /*#__PURE__*/React.createElement("button", {
+    className: "btn accent sm",
+    onClick: () => setFicha(p)
+  }, "Ficha técnica"), /*#__PURE__*/React.createElement("button", {
+    className: "btn danger sm",
+    onClick: () => remove(p.id)
+  }, "Excluir"))))), modal !== null && /*#__PURE__*/React.createElement(ProdutoModal, {
+    produto: modal,
+    db: db,
+    update: update,
+    onClose: () => setModal(null),
+    onSave: save
+  }), ficha && /*#__PURE__*/React.createElement(FichaTecnicaModal, {
+    produto: ficha,
+    db: db,
+    podeFin: podeFin,
+    onClose: () => setFicha(null)
+  }));
+}
+
+/* ==========================================================
+   FICHA TÉCNICA DO PRODUTO — visualização, impressão e PDF
+========================================================== */
+function FichaTecnicaModal({
+  produto,
+  db,
+  podeFin = true,
+  onClose
+}) {
+  const cat = (db.categoriasProduto || []).find(c => c.id === produto.categoriaId);
+  const grupo = (db.gruposProduto || []).find(g => g.id === produto.grupoId);
+  const sub = (db.subgruposProduto || []).find(sg => sg.id === produto.subgrupoId);
+  const tecido = db.materiais.find(m => m.id === produto.tecidoId);
+  const custo = custoUnitarioProduto(produto, db);
+  const imagens = (produto.arquivos || []).filter(a => a.tipo === 'imagem');
+  const documentos = (produto.arquivos || []).filter(a => a.tipo !== 'imagem');
+  const materiais = (produto.fichaTecnica || []).map(it => {
+    const mat = db.materiais.find(m => m.id === it.materialId);
+    const qtd = num(it.quantidade);
+    const custoUnit = mat ? num(mat.custo) : 0;
+    return {
+      mat,
+      qtd,
+      custoUnit,
+      total: qtd * custoUnit
+    };
+  });
+  const totalMat = materiais.reduce((s, l) => s + l.total, 0);
+  const doProd = etapasDoProduto(produto);
+  const listaOper = doProd.length ? doProd.map(x => ({
+    et: (db.etapasProducao || []).find(e => e.id === x.etapaId),
+    equipamentoId: x.equipamentoId
+  })).filter(x => x.et) : (db.etapasProducao || []).map(et => ({
+    et,
+    equipamentoId: ''
+  }));
+  const operacoes = listaOper.map(({
+    et,
+    equipamentoId
+  }) => {
+    const dep = db.departamentos.find(d => d.id === et.departamentoId);
+    const maq = (db.equipamentos || []).find(q => q.id === equipamentoId);
+    const c = custoMaoDeObraPorPeca(et, db);
+    return {
+      et,
+      dep,
+      maq,
+      custo: c
+    };
+  });
+  const totalMO = operacoes.reduce((s, o) => s + (o.custo || 0), 0);
+  return /*#__PURE__*/React.createElement(Modal, {
+    title: `Ficha técnica — ${produto.nome}`,
+    onClose: onClose,
+    wide: true
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginBottom: 12
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "btn accent sm",
+    onClick: () => window.print()
+  }, "🖨️ Imprimir / salvar como PDF")), /*#__PURE__*/React.createElement("div", {
+    className: "report-doc"
+  }, /*#__PURE__*/React.createElement("h2", null, "Ficha Técnica de Produto"), /*#__PURE__*/React.createElement("div", {
+    className: "rep-sub"
+  }, "Confecção ERP · Emitida em ", fmtDate(todayISO())), /*#__PURE__*/React.createElement("div", {
+    className: "rep-grid"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "rep-box"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "k"
+  }, "Código"), /*#__PURE__*/React.createElement("div", {
+    className: "v"
+  }, produto.codigo)), /*#__PURE__*/React.createElement("div", {
+    className: "rep-box"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "k"
+  }, "Categoria"), /*#__PURE__*/React.createElement("div", {
+    className: "v"
+  }, cat ? cat.nome : '—')), /*#__PURE__*/React.createElement("div", {
+    className: "rep-box"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "k"
+  }, "Grupo / Subgrupo"), /*#__PURE__*/React.createElement("div", {
+    className: "v"
+  }, [grupo && grupo.nome, sub && sub.nome].filter(Boolean).join(' / ') || '—')), /*#__PURE__*/React.createElement("div", {
+    className: "rep-box"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "k"
+  }, "Medida"), /*#__PURE__*/React.createElement("div", {
+    className: "v"
+  }, produto.medidas || '—'))), imagens.length > 0 && /*#__PURE__*/React.createElement("div", {
+    className: "ficha-hero"
+  }, /*#__PURE__*/React.createElement("img", {
+    src: imagens[0].url,
+    alt: imagens[0].nome
+  }), imagens.length > 1 && /*#__PURE__*/React.createElement("div", {
+    className: "ficha-hero-mini"
+  }, imagens.slice(1).map(a => /*#__PURE__*/React.createElement("img", {
+    key: a.id,
+    src: a.url,
+    alt: a.nome
+  })))), /*#__PURE__*/React.createElement("h4", null, "Descrição"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 13,
+      marginBottom: 8
+    }
+  }, produto.nome), tecido && /*#__PURE__*/React.createElement("div", {
+    className: "small muted"
+  }, "Tecido base: ", /*#__PURE__*/React.createElement("strong", null, tecido.codigo, " · ", tecido.nome)), produto.observacoes && /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 8,
+      fontSize: 12.5,
+      borderLeft: '3px solid var(--thread)',
+      paddingLeft: 10
+    }
+  }, /*#__PURE__*/React.createElement("strong", null, "Observações:"), " ", produto.observacoes), /*#__PURE__*/React.createElement("h4", null, "Consumo de materiais"), materiais.length === 0 ? /*#__PURE__*/React.createElement("div", {
+    className: "small muted"
+  }, "Nenhum material definido na ficha técnica.") : /*#__PURE__*/React.createElement("table", null, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("th", null, "Código"), /*#__PURE__*/React.createElement("th", null, "Material"), /*#__PURE__*/React.createElement("th", {
+    className: "num"
+  }, "Consumo / peça"), podeFin && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("th", {
+    className: "num"
+  }, "Custo unit."), /*#__PURE__*/React.createElement("th", {
+    className: "num"
+  }, "Custo / peça")))), /*#__PURE__*/React.createElement("tbody", null, materiais.map((l, i) => /*#__PURE__*/React.createElement("tr", {
+    key: i
+  }, /*#__PURE__*/React.createElement("td", {
+    className: "small muted"
+  }, l.mat ? l.mat.codigo : '—'), /*#__PURE__*/React.createElement("td", null, l.mat ? l.mat.nome : '(material removido)'), /*#__PURE__*/React.createElement("td", {
+    className: "num"
+  }, l.qtd, " ", l.mat ? l.mat.unidade : ''), podeFin && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("td", {
+    className: "num"
+  }, money(l.custoUnit)), /*#__PURE__*/React.createElement("td", {
+    className: "num"
+  }, money(l.total))))), podeFin && /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("td", {
+    colSpan: "4",
+    style: {
+      textAlign: 'right'
+    }
+  }, /*#__PURE__*/React.createElement("strong", null, "Total de materiais")), /*#__PURE__*/React.createElement("td", {
+    className: "num"
+  }, /*#__PURE__*/React.createElement("strong", null, money(totalMat)))))), /*#__PURE__*/React.createElement("h4", null, "Operações de produção"), operacoes.length === 0 ? /*#__PURE__*/React.createElement("div", {
+    className: "small muted"
+  }, "Nenhuma etapa de produção cadastrada.") : /*#__PURE__*/React.createElement("table", null, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("th", null, "Etapa"), /*#__PURE__*/React.createElement("th", null, "Departamento"), /*#__PURE__*/React.createElement("th", null, "Equipamento"), /*#__PURE__*/React.createElement("th", {
+    className: "num"
+  }, "Tempo"), podeFin && /*#__PURE__*/React.createElement("th", {
+    className: "num"
+  }, "Custo M.O. / peça"))), /*#__PURE__*/React.createElement("tbody", null, operacoes.map((o, i) => /*#__PURE__*/React.createElement("tr", {
+    key: i
+  }, /*#__PURE__*/React.createElement("td", null, o.et.nome), /*#__PURE__*/React.createElement("td", {
+    className: "small muted"
+  }, o.dep ? o.dep.nome : '—'), /*#__PURE__*/React.createElement("td", {
+    className: "small muted"
+  }, o.maq ? `${o.maq.codigo} · ${o.maq.nome}` : '—'), /*#__PURE__*/React.createElement("td", {
+    className: "num small"
+  }, labelModoTempo(o.et)), podeFin && /*#__PURE__*/React.createElement("td", {
+    className: "num"
+  }, o.custo === null ? /*#__PURE__*/React.createElement("span", {
+    className: "muted"
+  }, "variável") : money(o.custo)))), podeFin && /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("td", {
+    colSpan: "4",
+    style: {
+      textAlign: 'right'
+    }
+  }, /*#__PURE__*/React.createElement("strong", null, "Total de mão de obra")), /*#__PURE__*/React.createElement("td", {
+    className: "num"
+  }, /*#__PURE__*/React.createElement("strong", null, money(totalMO)))))), podeFin && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("h4", null, "Custo unitário de produção"), /*#__PURE__*/React.createElement("table", null, /*#__PURE__*/React.createElement("tbody", null, /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("td", null, "Materiais"), /*#__PURE__*/React.createElement("td", {
+    className: "num"
+  }, money(custo.custoMat))), /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("td", null, "Mão de obra"), /*#__PURE__*/React.createElement("td", {
+    className: "num"
+  }, money(custo.custoMO))), /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement("strong", null, "Custo total por peça")), /*#__PURE__*/React.createElement("td", {
+    className: "num"
+  }, /*#__PURE__*/React.createElement("strong", null, money(custo.total)))))), (custo.moVariavel || custo.moSemBase) && /*#__PURE__*/React.createElement("div", {
+    className: "small muted",
+    style: {
+      marginTop: 6
+    }
+  }, custo.moVariavel && 'Há etapas por lote/equipe cujo custo varia conforme a quantidade da OP. ', custo.moSemBase && 'Há departamentos sem colaboradores cadastrados (sem base salarial).')), documentos.length > 0 && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("h4", null, "Documentos anexados"), /*#__PURE__*/React.createElement("ul", {
+    style: {
+      margin: 0,
+      paddingLeft: 18
+    }
+  }, documentos.map(a => /*#__PURE__*/React.createElement("li", {
+    key: a.id,
+    className: "small"
+  }, a.nome)))), /*#__PURE__*/React.createElement("div", {
+    className: "rep-sign"
+  }, /*#__PURE__*/React.createElement("div", null, "Conferência técnica"), /*#__PURE__*/React.createElement("div", null, "Aprovação do cliente"))), /*#__PURE__*/React.createElement("div", {
+    className: "modal-actions"
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "btn ghost",
+    onClick: onClose
+  }, "Fechar")));
+}
+function ProdutoModal({
+  produto,
+  db,
+  update,
+  onClose,
+  onSave
+}) {
+  const cats = db.categoriasProduto || [];
+  const grupos = db.gruposProduto || [];
+  const subgrupos = db.subgruposProduto || [];
+  // tecidos disponíveis vêm do cadastro de materiais (categoria cujo nome contém "tecid" ou "malha")
+  const tecidos = db.materiais.filter(m => {
+    const cat = (db.categoriasMaterial || []).find(c => c.id === m.categoriaId);
+    const alvo = normaliza(cat && cat.nome || '') + normaliza(m.categoria || '');
+    return alvo.includes('tecid') || alvo.includes('malha');
+  });
+  const [f, setF] = useState({
+    codigo: '',
+    nome: '',
+    categoriaId: '',
+    grupoId: '',
+    subgrupoId: '',
+    tecidoId: '',
+    categoria: '',
+    medidas: '',
+    observacoes: '',
+    arquivos: [],
+    fichaTecnica: [],
+    ...produto,
+    etapas: etapasDoProduto(produto || {})
+  });
+  const set = (k, v) => setF(prev => ({
+    ...prev,
+    [k]: v
+  }));
+
+  // descrição = categoria + grupo + subgrupo + tipo de tecido + medida
+  function montarDescricao(x) {
+    const cat = (db.categoriasProduto || []).find(c => c.id === x.categoriaId);
+    const g = (db.gruposProduto || []).find(y => y.id === x.grupoId);
+    const sg = (db.subgruposProduto || []).find(y => y.id === x.subgrupoId);
+    const tec = db.materiais.find(m => m.id === x.tecidoId);
+    const base = [cat && cat.nome, g && g.nome, sg && sg.nome, tec && tec.nome, x.medidas].filter(v => v && String(v).trim()).join(' ');
+    const obs = (x.observacoes || '').trim();
+    return obs ? `${base} — ${obs}` : base; // observação entra como complemento informativo
   }
 
-  const [filtroSetorId, setFiltroSetorId] = useState("");
-  const [filtroEtapaId, setFiltroEtapaId] = useState("");
-  const [filtroColaboradorId, setFiltroColaboradorId] = useState("");
-  // Corrigido: usa a "foto" do nome guardada no registro (snapshot) como
-  // reserva quando o item de cadastro foi renomeado ou excluído depois.
-  const nomeProduto = (r) => produtos.find(p => p.id === r.produtoId)?.nome || r.produtoNomeSnap || "—";
-  const nomeEtapa = (r) => etapas.find(e => e.id === r.etapaId)?.nome || r.etapaNomeSnap || "—";
-  const nomeSetor = (r) => setores.find(s => s.id === r.setorId)?.nome || r.setorNomeSnap || "—";
-  const nomeColab = (id) => colaboradores.find(c => c.id === id)?.nome || "—";
-
-  // Adicionado: filtros por setor, colaborador e etapa na lista de
-  // processos em aberto, montados a partir do que realmente está em
-  // aberto no momento (evita listar setores/etapas sem nenhum item aqui).
-  const opcoesSetor = useMemo(() => {
-    const map = new Map();
-    abertos.forEach(r => { if (r.setorId && !map.has(r.setorId)) map.set(r.setorId, nomeSetor(r)); });
-    return Array.from(map.entries()).sort((a, b) => a[1].localeCompare(b[1]));
-  }, [abertos, setores]);
-  const opcoesEtapa = useMemo(() => {
-    const map = new Map();
-    abertos.forEach(r => { if (r.etapaId && !map.has(r.etapaId)) map.set(r.etapaId, nomeEtapa(r)); });
-    return Array.from(map.entries()).sort((a, b) => a[1].localeCompare(b[1]));
-  }, [abertos, etapas]);
-  const opcoesColaborador = useMemo(() => {
-    const map = new Map();
-    abertos.forEach(r => (r.colaboradorIds || []).forEach(id => { if (!map.has(id)) map.set(id, nomeColab(id)); }));
-    return Array.from(map.entries()).sort((a, b) => a[1].localeCompare(b[1]));
-  }, [abertos, colaboradores]);
-
-  const filtrados = ordenarRegistrosRelatorio(
-    abertos.filter(r =>
-      (!filtroSetorId || r.setorId === filtroSetorId)
-      && (!filtroEtapaId || r.etapaId === filtroEtapaId)
-      && (!filtroColaboradorId || (r.colaboradorIds || []).includes(filtroColaboradorId))
-    ),
-    { hora: r => r.inicio, etapa: nomeEtapa, operador: r => (r.colaboradorIds || []).map(nomeColab).join(", ") }
-  );
-  const temFiltroAtivo = filtroSetorId || filtroEtapaId || filtroColaboradorId;
-  function limparFiltros() { setFiltroSetorId(""); setFiltroEtapaId(""); setFiltroColaboradorId(""); }
-
-  // Adicionado: agrupa os processos em aberto pela Ordem de Produção a
-  // que pertencem, com uma chave para minimizar/maximizar cada OP — útil
-  // quando uma ordem tem vários departamentos abertos ao mesmo tempo,
-  // pra recolher o que já foi conferido e focar só no que falta olhar.
-  const [opsColapsadas, setOpsColapsadas] = useState(() => new Set());
-  function alternarColapsoOP(id) {
-    setOpsColapsadas(atual => {
-      const novo = new Set(atual);
-      if (novo.has(id)) novo.delete(id); else novo.add(id);
+  // gera o código sequencial a partir de categoria + grupo + subgrupo
+  function gerarCodigo(catId, grupoId, subId) {
+    const cat = (db.categoriasProduto || []).find(c => c.id === catId);
+    if (!cat) return '';
+    const g = (db.gruposProduto || []).find(x => x.id === grupoId);
+    const sg = (db.subgruposProduto || []).find(x => x.id === subId);
+    const prefixo = [cat.codigo, g && g.codigo, sg && sg.codigo].filter(Boolean).join('.');
+    return proximoSequencial(db.produtos, prefixo);
+  }
+  function setClassificacao(patch) {
+    setF(prev => {
+      const novo = {
+        ...prev,
+        ...patch
+      };
+      const cat = (db.categoriasProduto || []).find(c => c.id === novo.categoriaId);
+      novo.categoria = cat ? cat.nome : '';
+      if (!prev.id) novo.codigo = gerarCodigo(novo.categoriaId, novo.grupoId, novo.subgrupoId);
+      novo.nome = montarDescricao(novo);
       return novo;
     });
   }
-  const gruposPorOP = useMemo(() => {
-    const mapa = new Map();
-    const semOP = [];
-    filtrados.forEach(r => {
-      if (!r.ordemProducaoId) { semOP.push(r); return; }
-      if (!mapa.has(r.ordemProducaoId)) {
-        const op = (ordensProducao || []).find(o => o.id === r.ordemProducaoId);
-        mapa.set(r.ordemProducaoId, {
-          ordemProducaoId: r.ordemProducaoId, numero: r.ordemProducaoNumero,
-          clienteNomeSnap: op?.clienteNomeSnap || null, itens: [],
+
+  // itens já escolhidos não podem ser reutilizados em outra linha
+  const etapasUsadas = f.etapas.map(l => l.etapaId).filter(Boolean);
+  const etapasDisponiveis = (db.etapasProducao || []).filter(x => !etapasUsadas.includes(x.id));
+  const materiaisUsados = (f.fichaTecnica || []).map(x => x.materialId).filter(Boolean);
+  const materiaisDisponiveis = db.materiais.filter(m => !materiaisUsados.includes(m.id));
+  function addItemEtapa() {
+    if ((db.etapasProducao || []).length === 0) {
+      alert('Cadastre etapas de produção antes.');
+      return;
+    }
+    if (etapasDisponiveis.length === 0) {
+      alert('Todas as etapas cadastradas já foram adicionadas a este produto.');
+      return;
+    }
+    set('etapas', [...f.etapas, {
+      id: uid(),
+      etapaId: etapasDisponiveis[0].id,
+      equipamentoId: ''
+    }]);
+  }
+  function updItemEtapa(i, patch) {
+    const arr = f.etapas.slice();
+    arr[i] = {
+      ...arr[i],
+      ...patch
+    };
+    set('etapas', arr);
+  }
+  function rmItemEtapa(i) {
+    const arr = f.etapas.slice();
+    arr.splice(i, 1);
+    set('etapas', arr);
+  }
+  async function onArquivo(e) {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = '';
+    if (!file) return;
+    const ehImagem = file.type.startsWith('image/');
+    try {
+      let url;
+      if (ehImagem) {
+        url = await comprimirImagem(file); // redimensiona e comprime para caber no armazenamento
+      } else {
+        if (file.size > 300 * 1024) {
+          alert('Documento muito grande (máx. 300 KB). Anexe um arquivo menor ou use um link.');
+          return;
+        }
+        url = await new Promise((res, rej) => {
+          const r = new FileReader();
+          r.onload = () => res(r.result);
+          r.onerror = () => rej(new Error('Falha ao ler o arquivo.'));
+          r.readAsDataURL(file);
         });
       }
-      mapa.get(r.ordemProducaoId).itens.push(r);
-    });
-    // filtrados já vem ordenado decrescente por hora — o primeiro item de
-    // cada grupo é o mais recente dela, então ordenar os grupos por esse
-    // item mantém a mesma convenção (mais recente primeiro).
-    const grupos = Array.from(mapa.values()).sort((a, b) => new Date(b.itens[0].inicio) - new Date(a.itens[0].inicio));
-    return { grupos, semOP };
-  }, [filtrados, ordensProducao]);
-
-  async function cancelar(id) {
-    if (!window.confirm("Cancelar este processo em aberto? Essa ação não pode ser desfeita.")) return;
-    await onRemoverRegistro(id);
-  }
-
-  // Adicionado: monta a grade (tabela) para impressão dos itens em
-  // aberto, respeitando os filtros aplicados na tela.
-  function imprimirGrade() {
-    onImprimirGrade({
-      titulo: "Operações em aberto",
-      subtitulo: temFiltroAtivo ? "Com filtro aplicado" : "Todos os departamentos",
-      geradoEm: new Date().toLocaleString("pt-BR"),
-      colunas: [
-        { key: "op", label: "OP" }, { key: "produto", label: "Produto" }, { key: "etapa", label: "Etapa" },
-        { key: "setor", label: "Departamento" }, { key: "colaboradores", label: "Colaborador(es)" },
-        { key: "quantidade", label: "Qtd.", align: "right" }, { key: "meta", label: "Meta/h", align: "right" },
-        { key: "inicio", label: "Início", align: "right" },
-      ],
-      linhas: filtrados.map(r => ({
-        op: r.ordemProducaoNumero != null ? `#${String(r.ordemProducaoNumero).padStart(3, "0")}` : "—",
-        produto: nomeProduto(r), etapa: nomeEtapa(r), setor: nomeSetor(r),
-        colaboradores: (r.colaboradorIds || []).map(nomeColab).join(", "),
-        quantidade: r.quantidade,
-        meta: (r.tipoCalculoEtapa !== "lote" && r.tempoEstimadoBaseSeg) ? `${Math.max(1, Math.floor(3600 / r.tempoEstimadoBaseSeg))}/h` : "—",
-        inicio: new Date(r.inicio).toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }),
-      })),
-    });
-  }
-
-  // Adicionado: renderiza o card de um processo em aberto — extraído para
-  // função nomeada (em vez de inline no .map) porque agora é chamado
-  // tanto dentro de cada grupo por OP quanto para os itens sem OP.
-  function renderCardRegistro(r) {
-    const projecao = r.projecaoFimISO ? new Date(r.projecaoFimISO) : null;
-    const atrasado = projecao && new Date() > projecao;
-    const metaHora = r.tipoCalculoEtapa !== "lote" && r.tempoEstimadoBaseSeg ? Math.max(1, Math.floor(3600 / r.tempoEstimadoBaseSeg)) : null;
-    return (
-      <Card key={r.id} style={{ padding: 14, borderLeft: "4px solid #e0a72a" }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8, marginBottom: 8 }}>
-          <div>
-            {r.ordemProducaoNumero != null && (
-              <div style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 10.5, fontWeight: 700, color: "#2f4a63", background: "#f4ecd8", padding: "2px 7px", borderRadius: 999, marginBottom: 4 }}>
-                <ListOrdered size={10} /> OP #{String(r.ordemProducaoNumero).padStart(3, "0")}
-              </div>
-            )}
-            <div style={{ fontWeight: 700, fontSize: 14, color: "#2a2015" }}>{nomeProduto(r)} · {nomeSetor(r)}</div>
-            <div style={{ fontSize: 12.5, color: "#6b5d49" }}>{nomeEtapa(r)} · {r.colaboradorIds.map(nomeColab).join(", ")}</div>
-            <div style={{ fontSize: 12, color: "#a3937a", marginTop: 3 }}>{r.quantidade} peças planejadas · início {new Date(r.inicio).toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}{r.equipamentoNomeSnap ? ` · ${r.equipamentoNomeSnap}` : ""}{metaHora ? ` · meta: ${metaHora} peças/h` : ""}</div>
-          </div>
-          <StatusDot cor="laranja" />
-        </div>
-        {projecao && (
-          <div style={{ fontSize: 12.5, color: atrasado ? "#b13232" : "#6b5d49", marginBottom: 10 }}>
-            Previsão de conclusão: <b>{projecao.toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}</b>{atrasado ? " — já passou do previsto" : ""}
-          </div>
-        )}
-        {(() => {
-          const mats = materiaisDoRegistro(r);
-          if (mats.length === 0) return null;
-          const separados = separadosDoRegistro(r);
-          const podeMarcar = !!r.ordemProducaoId && r.ordemEtapaIndex != null;
-          const totalSeparados = mats.filter(m => separados.includes(m.id)).length;
-          const tudoSeparado = totalSeparados === mats.length;
-          return (
-            <div style={{ marginBottom: 10, paddingTop: 8, borderTop: "1px dashed #d9cfb7" }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 5 }}>
-                <span style={{ fontSize: 11, fontWeight: 700, color: "#6b5d49" }}>Materiais para {r.quantidade} peças</span>
-                {podeMarcar && (
-                  <span style={{
-                    fontSize: 10.5, fontWeight: 700, padding: "2px 8px 2px 7px", borderRadius: "3px 8px 8px 3px",
-                    color: tudoSeparado ? "#1a7a4c" : "#8a6510", background: tudoSeparado ? "#e6f4ec" : "#fdf3e0",
-                    border: `1px dashed ${tudoSeparado ? "#1a7a4c" : "#b5820a"}`,
-                  }}>{tudoSeparado ? "✓ tudo separado" : `${totalSeparados}/${mats.length} separados`}</span>
-                )}
-              </div>
-              <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
-                {mats.map(m => {
-                  const marcado = separados.includes(m.id);
-                  const faltaEstoque = m.estoque != null && m.estoque < m.quantidade;
-                  return (
-                    <label key={m.id} style={{
-                      display: "flex", alignItems: "center", gap: 8, cursor: podeMarcar ? "pointer" : "default",
-                      background: marcado ? "#e6f4ec" : faltaEstoque ? "#f8e6e6" : "#fff",
-                      border: `1px solid ${marcado ? "#bfe3cf" : faltaEstoque ? "#e8c4c4" : "#e6ddc8"}`,
-                      borderRadius: 7, padding: "6px 9px",
-                    }}>
-                      {podeMarcar && (
-                        <input type="checkbox" checked={marcado} onChange={() => alternarSeparado(r, m.id)} style={{ width: 16, height: 16, flexShrink: 0 }} />
-                      )}
-                      <span style={{ flex: 1, fontSize: 12, color: "#2a2015", textDecoration: marcado ? "line-through" : "none", opacity: marcado ? 0.65 : 1 }}>
-                        {m.nome}
-                        {faltaEstoque && !marcado && <span style={{ fontSize: 10.5, color: "#b13232", marginLeft: 6 }}>falta {Math.round((m.quantidade - m.estoque) * 1000) / 1000} {m.unidade}</span>}
-                      </span>
-                      <span style={{ fontSize: 12, fontWeight: 700, color: marcado ? "#1a7a4c" : "#2a2015" }}>{m.quantidade} {m.unidade}</span>
-                    </label>
-                  );
-                })}
-              </div>
-            </div>
-          );
-        })()}
-        <div style={{ display: "flex", gap: 8 }}>
-          <PrimaryButton onClick={() => setConcluindoId(concluindoId === r.id ? null : r.id)} style={{ flex: 1 }}>
-            <Check size={16} /> Concluir
-          </PrimaryButton>
-          <button onClick={() => abrirComentario(r.id)} title="Comentar / anexar" style={{
-            border: "1.5px solid #d9cfb7", background: comentandoId === r.id ? "#f4ecd8" : "#fff", borderRadius: 9,
-            padding: "0 12px", color: "#2f4a63", fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", gap: 5,
-          }}>
-            <MessageCircle size={15} />{(r.comentarios || []).length > 0 ? ` ${(r.comentarios || []).length}` : ""}
-          </button>
-          <IconButton onClick={() => cancelar(r.id)} danger title="Cancelar processo"><Trash2 size={16} /></IconButton>
-        </div>
-
-        {(r.comentarios || []).length > 0 && (
-          <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 6 }}>
-            {(r.comentarios || []).map(c => (
-              <div key={c.id} style={{ background: "#faf6ec", border: "1px solid #e6ddc8", borderRadius: 8, padding: "8px 10px" }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
-                  <div style={{ flex: 1 }}>
-                    {c.texto && <div style={{ fontSize: 12.5, color: "#2a2015", whiteSpace: "pre-wrap" }}>{c.texto}</div>}
-                    <div style={{ fontSize: 10.5, color: "#a3937a", marginTop: 2 }}>
-                      {c.autor} · {new Date(c.criadoEm).toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}
-                    </div>
-                  </div>
-                  <IconButton onClick={() => removerComentario(r, c.id)} danger title="Excluir comentário"><X size={13} /></IconButton>
-                </div>
-                {(c.anexos || []).length > 0 && (
-                  <div style={{ display: "flex", gap: 6, marginTop: 6, flexWrap: "wrap" }}>
-                    {c.anexos.map(a => (
-                      a.tipo && a.tipo.startsWith("image/")
-                        ? <img key={a.id} src={a.dataUrl} alt={a.nome} style={{ width: 54, height: 54, objectFit: "cover", borderRadius: 6, border: "1px solid #e6ddc8" }} />
-                        : <a key={a.id} href={a.dataUrl} download={a.nome} style={{ fontSize: 11, color: "#2f4a63", border: "1px solid #e6ddc8", borderRadius: 6, padding: "4px 8px", textDecoration: "none", display: "inline-flex", alignItems: "center", gap: 4 }}><Paperclip size={11} /> {a.nome}</a>
-                    ))}
-                  </div>
-                )}
-              </div>
-            ))}
-          </div>
-        )}
-
-        {comentandoId === r.id && (
-          <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px solid #efe8d8" }}>
-            <Field label="Comentário / ocorrência">
-              <textarea value={textoComentario} onChange={e => setTextoComentario(e.target.value)} rows={2}
-                placeholder="Ex.: tecido do rolo 3 veio com falha, avisar o corte"
-                style={{ ...inputStyle, resize: "vertical", fontFamily: "inherit" }} />
-            </Field>
-            {anexosComentario.length > 0 && (
-              <div style={{ display: "flex", gap: 6, marginBottom: 8, flexWrap: "wrap" }}>
-                {anexosComentario.map(a => (
-                  <div key={a.id} style={{ position: "relative", border: "1px solid #e6ddc8", borderRadius: 6, overflow: "hidden" }}>
-                    {a.tipo && a.tipo.startsWith("image/")
-                      ? <img src={a.dataUrl} alt={a.nome} style={{ width: 54, height: 54, objectFit: "cover", display: "block" }} />
-                      : <div style={{ width: 54, height: 54, display: "flex", alignItems: "center", justifyContent: "center", color: "#a3937a" }}><Paperclip size={16} /></div>}
-                    <button onClick={() => setAnexosComentario(x => x.filter(y => y.id !== a.id))} style={{ position: "absolute", top: 2, right: 2, background: "rgba(255,255,255,0.9)", border: "none", borderRadius: 999, width: 17, height: 17, cursor: "pointer", color: "#b13232", display: "flex", alignItems: "center", justifyContent: "center" }}><X size={10} /></button>
-                  </div>
-                ))}
-              </div>
-            )}
-            <input ref={anexoComentarioRef} type="file" multiple accept="image/*,video/*,.pdf,.doc,.docx,.xls,.xlsx" style={{ display: "none" }}
-              onChange={e => { anexarNoComentario(e.target.files); e.target.value = ""; }} />
-            <div style={{ display: "flex", gap: 8 }}>
-              <button type="button" onClick={() => anexoComentarioRef.current && anexoComentarioRef.current.click()} style={{
-                fontSize: 12.5, border: "1px dashed #cdb98a", background: "#f4ecd8", borderRadius: 8, padding: "8px 11px",
-                cursor: "pointer", display: "flex", alignItems: "center", gap: 6, color: "#2f4a63", fontWeight: 700,
-              }}><Paperclip size={14} /> Anexar</button>
-              <PrimaryButton onClick={() => salvarComentario(r)} disabled={!textoComentario.trim() && anexosComentario.length === 0} style={{ flex: 1 }}>Salvar comentário</PrimaryButton>
-            </div>
-          </div>
-        )}
-        {concluindoId === r.id && (
-          <ConcluirForm registro={r} onSalvarRegistro={onSalvarRegistro} onFechar={() => setConcluindoId(null)} colaboradores={colaboradores} />
-        )}
-      </Card>
-    );
-  }
-
-  // Corrigido: os filtros de departamento/etapa/colaborador ficavam
-  // escondidos quando não havia nenhum processo em aberto, porque a tela
-  // retornava só a mensagem "Nenhum processo em aberto" antes de chegar
-  // no card de filtros. Agora o card de filtros sempre aparece nesta
-  // tela; a mensagem de vazio aparece só no lugar da lista.
-  return (
-    <div>
-      <Card style={{ marginBottom: 12, padding: 12 }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
-          <div style={{ fontSize: 13, fontWeight: 700, color: "#1c2b39" }}>Filtrar</div>
-          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-            {temFiltroAtivo && (
-              <button onClick={limparFiltros} style={{ background: "transparent", border: "none", color: "#2f4a63", fontSize: 12, fontWeight: 700, cursor: "pointer", padding: 0 }}>Limpar</button>
-            )}
-            <button onClick={imprimirGrade} disabled={filtrados.length === 0} style={{
-              background: "transparent", border: "1px dashed " + (filtrados.length === 0 ? "#d9cfb7" : "#2f4a63"),
-              color: filtrados.length === 0 ? "#a3937a" : "#2f4a63", fontSize: 11.5, fontWeight: 700,
-              cursor: filtrados.length === 0 ? "not-allowed" : "pointer", padding: "4px 9px", borderRadius: "3px 9px 9px 3px",
-            }}>Imprimir</button>
-          </div>
-        </div>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-          <div>
-            <span style={{ display: "block", fontSize: 11.5, fontWeight: 600, color: "#6b5d49", marginBottom: 4 }}>Departamento</span>
-            <Select value={filtroSetorId} onChange={e => setFiltroSetorId(e.target.value)}>
-              <option value="">Todos os departamentos</option>
-              {opcoesSetor.map(([id, nome]) => <option key={id} value={id}>{nome}</option>)}
-            </Select>
-          </div>
-          <div>
-            <span style={{ display: "block", fontSize: 11.5, fontWeight: 600, color: "#6b5d49", marginBottom: 4 }}>Etapa</span>
-            <Select value={filtroEtapaId} onChange={e => setFiltroEtapaId(e.target.value)}>
-              <option value="">Todas as etapas</option>
-              {opcoesEtapa.map(([id, nome]) => <option key={id} value={id}>{nome}</option>)}
-            </Select>
-          </div>
-        </div>
-        <div style={{ marginTop: 8 }}>
-          <span style={{ display: "block", fontSize: 11.5, fontWeight: 600, color: "#6b5d49", marginBottom: 4 }}>Colaborador</span>
-          <Select value={filtroColaboradorId} onChange={e => setFiltroColaboradorId(e.target.value)}>
-            <option value="">Todos os colaboradores</option>
-            {opcoesColaborador.map(([id, nome]) => <option key={id} value={id}>{nome}</option>)}
-          </Select>
-        </div>
-      </Card>
-
-      {filtrados.length === 0 ? (
-        <div style={{ fontSize: 13.5, color: "#a3937a", padding: "8px 2px" }}>
-          {abertos.length === 0 ? "Nenhum processo em aberto no momento." : "Nenhum processo em aberto corresponde a esse filtro."}
-        </div>
-      ) : (
-        <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-          {gruposPorOP.grupos.map(g => {
-            const colapsado = opsColapsadas.has(g.ordemProducaoId);
-            return (
-              <div key={g.ordemProducaoId}>
-                <button onClick={() => alternarColapsoOP(g.ordemProducaoId)} style={{
-                  width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8,
-                  background: "#f4ecd8", border: "1px solid #e6ddc8", borderRadius: 9, padding: "8px 12px",
-                  cursor: "pointer", marginBottom: colapsado ? 0 : 8,
-                }}>
-                  <span style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, fontWeight: 800, color: "#1c2b39" }}>
-                    {colapsado ? <ChevronDown size={15} /> : <ChevronUp size={15} />}
-                    OP #{String(g.numero).padStart(3, "0")} · {g.clienteNomeSnap || "Sem cliente"}
-                  </span>
-                  <span style={{ fontSize: 11, fontWeight: 700, color: "#6b5d49" }}>
-                    {g.itens.length} em aberto
-                  </span>
-                </button>
-                {!colapsado && (
-                  <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                    {g.itens.map(renderCardRegistro)}
-                  </div>
-                )}
-              </div>
-            );
-          })}
-          {gruposPorOP.semOP.length > 0 && (
-            <div>
-              {gruposPorOP.grupos.length > 0 && (
-                <div style={{ fontSize: 12, fontWeight: 700, color: "#a3937a", margin: "0 2px 8px" }}>Sem ordem de produção vinculada</div>
-              )}
-              <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                {gruposPorOP.semOP.map(renderCardRegistro)}
-              </div>
-            </div>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function ConcluirForm({ registro, onSalvarRegistro, onFechar, colaboradores }) {
-  const [fim, setFim] = useState(nowLocalInput());
-  const [quantidadeReal, setQuantidadeReal] = useState(String(registro.quantidade));
-  const [temDefeito, setTemDefeito] = useState(null);
-  const [qtdDefeito, setQtdDefeito] = useState("");
-  const [fotosDefeito, setFotosDefeito] = useState([]);
-  const [temRetrabalho, setTemRetrabalho] = useState(null);
-  const [tempoRetrabalhoMin, setTempoRetrabalhoMin] = useState("");
-  // Adicionado: confirma (ou ajusta) quem de fato executou a atividade
-  // na hora de concluir — por padrão já vem marcado quem foi escalado ao
-  // iniciar, mas dá pra corrigir se quem terminou foi outra pessoa.
-  const [colaboradorIdsExecucao, setColaboradorIdsExecucao] = useState(registro.colaboradorIds || []);
-  const fotoInputRef = useRef(null);
-
-  function toggleColaboradorExecucao(id) {
-    setColaboradorIdsExecucao(ids => ids.includes(id) ? ids.filter(x => x !== id) : [...ids, id]);
-  }
-
-  const qtdNum = parseInt(quantidadeReal || "0", 10);
-  const qtdDefeitoNum = Math.min(parseInt(qtdDefeito || "0", 10), qtdNum);
-  const qtdBoaNum = Math.max(qtdNum - (temDefeito ? qtdDefeitoNum : 0), 0);
-  const tempoRetrabalhoSeg = temRetrabalho ? Math.max(parseFloat(tempoRetrabalhoMin || "0"), 0) * 60 : 0;
-  const tempoRetrabalhoPenalizadoSeg = tempoRetrabalhoSeg * 1.05;
-
-  const podeSalvar = fim && qtdNum > 0 && new Date(fim) > new Date(registro.inicio)
-    && colaboradorIdsExecucao.length > 0
-    && temDefeito !== null && (!temDefeito || qtdDefeitoNum >= 0)
-    && temRetrabalho !== null && (!temRetrabalho || tempoRetrabalhoSeg > 0);
-
-  // Adicionado: ao marcar que houve peças com defeito, é possível anexar
-  // fotos do defeito direto pelo celular (câmera ou galeria), guardadas
-  // junto com o registro para consulta depois no histórico/relatório.
-  async function anexarFotosDefeito(fileList) {
-    const arquivos = Array.from(fileList || []);
-    const novas = [];
-    for (const file of arquivos) {
-      if (file.size > 4.5 * 1024 * 1024) {
-        alert(`"${file.name}" é maior que 4,5MB e não pode ser anexada.`);
-        continue;
-      }
-      const dataUrl = await new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve(reader.result);
-        reader.onerror = reject;
-        reader.readAsDataURL(file);
-      });
-      novas.push({ id: uid(), nome: file.name, tipo: file.type, dataUrl });
+      set('arquivos', [...(f.arquivos || []), {
+        id: uid(),
+        nome: file.name,
+        tipo: ehImagem ? 'imagem' : 'documento',
+        url
+      }]);
+    } catch (err) {
+      alert('Não foi possível anexar o arquivo: ' + (err && err.message ? err.message : 'erro desconhecido'));
     }
-    if (novas.length) setFotosDefeito(fotos => [...fotos, ...novas]);
   }
-  function removerFotoDefeito(id) { setFotosDefeito(fotos => fotos.filter(f => f.id !== id)); }
-
-  async function concluir() {
-    if (!podeSalvar) return;
-    const tempoRealSeg = (new Date(fim) - new Date(registro.inicio)) / 1000;
-    const tempoRealConsideradoSeg = tempoRealSeg + tempoRetrabalhoPenalizadoSeg;
-    // Corrigido: se a etapa não tinha tempo estimado cadastrado (vínculo
-    // ausente), antes o app inventava uma meta igual ao tempo real e
-    // sempre classificava como "A" (100%), escondendo o problema. Agora,
-    // sem meta cadastrada, o registro fica sem eficiência/classificação
-    // e é sinalizado como "sem meta" nos relatórios e no histórico.
-    // Também respeita etapas "por lote" (tempo fixo, ex.: risco/enfesto no
-    // Corte) em vez de sempre multiplicar o tempo estimado pela quantidade.
-    const temMeta = registro.tempoEstimadoBaseSeg != null;
-    const ehPorLote = registro.tipoCalculoEtapa === "lote";
-    const tempoEstimadoSeg = temMeta
-      ? (ehPorLote ? registro.tempoEstimadoBaseSeg : registro.tempoEstimadoBaseSeg * qtdBoaNum)
-      : null;
-    const eficiencia = temMeta && tempoRealConsideradoSeg > 0
-      ? Math.min(100, Math.round((tempoEstimadoSeg / tempoRealConsideradoSeg) * 1000) / 10)
-      : null;
-    const classificacao = eficiencia != null ? classify(eficiencia) : null;
-    const atualizado = {
-      ...registro, status: "concluido", fim,
-      colaboradorIds: colaboradorIdsExecucao,
-      quantidade: qtdNum, quantidadeDefeito: temDefeito ? qtdDefeitoNum : 0, quantidadeBoa: qtdBoaNum,
-      fotosDefeito: temDefeito ? fotosDefeito : [],
-      tempoRetrabalhoMin: temRetrabalho ? Math.max(parseFloat(tempoRetrabalhoMin || "0"), 0) : 0,
-      tempoRealSeg, tempoRealConsideradoSeg, tempoEstimadoSeg, eficiencia, classificacao,
-      semMeta: !temMeta,
-      cor: classificacao ? corDoRegistro("concluido", classificacao) : "laranja",
-      concluidoEm: new Date().toISOString(),
+  function rmArquivo(id) {
+    set('arquivos', (f.arquivos || []).filter(a => a.id !== id));
+  }
+  function addItemFicha() {
+    if (db.materiais.length === 0) {
+      alert('Cadastre materiais antes de montar a ficha técnica.');
+      return;
+    }
+    if (materiaisDisponiveis.length === 0) {
+      alert('Todos os materiais cadastrados já estão na ficha técnica deste produto.');
+      return;
+    }
+    set('fichaTecnica', [...f.fichaTecnica, {
+      materialId: materiaisDisponiveis[0].id,
+      quantidade: 1
+    }]);
+  }
+  function updItemFicha(i, patch) {
+    const arr = f.fichaTecnica.slice();
+    arr[i] = {
+      ...arr[i],
+      ...patch
     };
-    await onSalvarRegistro(atualizado);
-    onFechar();
+    set('fichaTecnica', arr);
   }
-
-  return (
-    <div style={{ marginTop: 12, paddingTop: 12, borderTop: "1px solid #efe8d8" }}>
-      {registro.tempoEstimadoBaseSeg == null && (
-        <div style={{ fontSize: 12.5, color: "#8a6510", background: "#fdf3e0", border: "1px solid #f2ddab", borderRadius: 8, padding: "9px 12px", marginBottom: 14 }}>
-          Esta etapa não tem tempo estimado cadastrado — a conclusão será salva sem cálculo de eficiência (sem nota A/B/C).
-        </div>
-      )}
-      <Field label="Colaborador(es) que executou(aram)">
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-          {colaboradores.map(c => (
-            <ToggleChip key={c.id} ativo={colaboradorIdsExecucao.includes(c.id)} onClick={() => toggleColaboradorExecucao(c.id)}>{c.nome}</ToggleChip>
-          ))}
-        </div>
-        <div style={{ fontSize: 11, color: "#a3937a", marginTop: 5 }}>Já vem marcado quem foi escalado ao iniciar — ajuste se quem concluiu foi outra pessoa.</div>
-      </Field>
-      <Field label="Horário de fim">
-        <input type="datetime-local" value={fim} onChange={e => setFim(e.target.value)} style={inputStyle} />
-      </Field>
-      <Field label="Quantidade produzida (real)">
-        <input type="number" min="1" step="1" value={quantidadeReal} onChange={e => setQuantidadeReal(e.target.value)} style={inputStyle} />
-      </Field>
-
-      {qtdNum > 0 && (
-        <Field label="Teve peças com defeito?">
-          <div style={{ display: "flex", gap: 8 }}>
-            <ToggleChip ativo={temDefeito === false} onClick={() => { setTemDefeito(false); setQtdDefeito(""); }}>Não</ToggleChip>
-            <ToggleChip ativo={temDefeito === true} colorAtivo="#b13232" onClick={() => setTemDefeito(true)}>Sim</ToggleChip>
-          </div>
-        </Field>
-      )}
-      {temDefeito === true && (
-        <Field label="Quantidade com defeito">
-          <input type="number" min="0" max={qtdNum} step="1" value={qtdDefeito} onChange={e => setQtdDefeito(e.target.value)} style={inputStyle} />
-        </Field>
-      )}
-      {temDefeito === true && (
-        <Field label="Foto do defeito (opcional)">
-          {fotosDefeito.length > 0 && (
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8, marginBottom: 10 }}>
-              {fotosDefeito.map(f => (
-                <div key={f.id} style={{ position: "relative", border: "1px solid #e6ddc8", borderRadius: 8, overflow: "hidden", background: "#fff" }}>
-                  <img src={f.dataUrl} alt={f.nome} style={{ width: "100%", height: 70, objectFit: "cover", display: "block" }} />
-                  <button onClick={() => removerFotoDefeito(f.id)} style={{ position: "absolute", top: 3, right: 3, background: "rgba(255,255,255,0.9)", border: "none", borderRadius: 999, width: 20, height: 20, cursor: "pointer", color: "#b13232", display: "flex", alignItems: "center", justifyContent: "center" }}>
-                    <X size={12} />
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
-          <input ref={fotoInputRef} type="file" multiple accept="image/*" capture="environment" style={{ display: "none" }}
-            onChange={e => { anexarFotosDefeito(e.target.files); e.target.value = ""; }} />
-          <button type="button" onClick={() => fotoInputRef.current && fotoInputRef.current.click()} style={{
-            fontSize: 12.5, border: "1px solid #d9cfb7", background: "#fff", borderRadius: 7, padding: "7px 11px",
-            cursor: "pointer", display: "flex", alignItems: "center", gap: 6, color: "#6b5d49",
-          }}><Paperclip size={14} /> Anexar foto do defeito</button>
-        </Field>
-      )}
-      {temDefeito !== null && qtdNum > 0 && (
-        <div style={{ fontSize: 12.5, color: "#6b5d49", marginTop: -8, marginBottom: 14 }}>Peças boas: <b>{qtdBoaNum}</b> de {qtdNum}</div>
-      )}
-
-      {qtdNum > 0 && (
-        <Field label="Houve retrabalho?">
-          <div style={{ display: "flex", gap: 8 }}>
-            <ToggleChip ativo={temRetrabalho === false} onClick={() => { setTemRetrabalho(false); setTempoRetrabalhoMin(""); }}>Não</ToggleChip>
-            <ToggleChip ativo={temRetrabalho === true} colorAtivo="#b13232" onClick={() => setTemRetrabalho(true)}>Sim</ToggleChip>
-          </div>
-        </Field>
-      )}
-      {temRetrabalho === true && (
-        <Field label="Tempo de retrabalho (minutos)">
-          <input type="number" min="0" step="1" value={tempoRetrabalhoMin} onChange={e => setTempoRetrabalhoMin(e.target.value)} style={inputStyle} />
-          {tempoRetrabalhoSeg > 0 && <div style={{ fontSize: 12, color: "#b13232", marginTop: 5 }}>Desperdício considerado: {fmtSec(tempoRetrabalhoPenalizadoSeg)} (+5%)</div>}
-        </Field>
-      )}
-
-      <PrimaryButton onClick={concluir} disabled={!podeSalvar} style={{ width: "100%" }}>Confirmar conclusão</PrimaryButton>
-    </div>
-  );
-}
-
-// ---------- Histórico de concluídos ----------
-function HistoricoConcluidos({ concluidos, produtos, etapas, setores, colaboradores, onImprimirGrade, ordensProducao }) {
-  const nomeProduto = (r) => produtos.find(p => p.id === r.produtoId)?.nome || r.produtoNomeSnap || "—";
-  const nomeEtapa = (r) => etapas.find(e => e.id === r.etapaId)?.nome || r.etapaNomeSnap || "—";
-  const nomeSetor = (r) => setores.find(s => s.id === r.setorId)?.nome || r.setorNomeSnap || "—";
-  const nomeColab = (id) => colaboradores.find(c => c.id === id)?.nome || "—";
-  // Adicionado: cliente não vem direto no registro — vem da Ordem de
-  // Produção a que ele pertence.
-  const clienteDoRegistro = (r) => (ordensProducao || []).find(o => o.id === r.ordemProducaoId)?.clienteNomeSnap || null;
-  const ordenados = [...concluidos].sort((a, b) => new Date(b.fim) - new Date(a.fim));
-
-  // Adicionado: pesquisa do histórico por cliente, por número da Ordem
-  // de Produção e por período (data de conclusão) — útil pra achar
-  // rápido a produção de um pedido/cliente específico sem rolar a lista
-  // inteira.
-  const [buscaCliente, setBuscaCliente] = useState("");
-  const [buscaOP, setBuscaOP] = useState("");
-  const [dataInicio, setDataInicio] = useState("");
-  const [dataFim, setDataFim] = useState("");
-  const temFiltroAtivo = buscaCliente || buscaOP || dataInicio || dataFim;
-  function limparFiltros() { setBuscaCliente(""); setBuscaOP(""); setDataInicio(""); setDataFim(""); }
-
-  const filtrados = ordenados.filter(r => {
-    if (buscaCliente && !(clienteDoRegistro(r) || "sem cliente").toLowerCase().includes(buscaCliente.trim().toLowerCase())) return false;
-    if (buscaOP) {
-      const termo = buscaOP.trim().toLowerCase().replace(/^#/, "");
-      const numeroTxt = r.ordemProducaoNumero != null ? String(r.ordemProducaoNumero) : "";
-      if (!numeroTxt.includes(termo)) return false;
+  function rmItemFicha(i) {
+    const arr = f.fichaTecnica.slice();
+    arr.splice(i, 1);
+    set('fichaTecnica', arr);
+  }
+  return /*#__PURE__*/React.createElement(Modal, {
+    title: produto.id ? 'Editar produto' : 'Novo produto',
+    onClose: onClose,
+    wide: true
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "grid3"
+  }, /*#__PURE__*/React.createElement(SelectComCadastro, {
+    label: "Categoria",
+    valor: f.categoriaId,
+    onChange: v => setClassificacao({
+      categoriaId: v
+    }),
+    lista: cats,
+    campoDb: "categoriasProduto",
+    update: update,
+    placeholderCod: "CAM",
+    placeholderNome: "Camisetas"
+  }), /*#__PURE__*/React.createElement(SelectComCadastro, {
+    label: "Grupo",
+    valor: f.grupoId,
+    onChange: v => setClassificacao({
+      grupoId: v,
+      subgrupoId: ''
+    }),
+    lista: grupos,
+    campoDb: "gruposProduto",
+    update: update,
+    placeholderCod: "MAL",
+    placeholderNome: "Malha"
+  }), /*#__PURE__*/React.createElement(SelectComCadastro, {
+    label: "Subgrupo",
+    valor: f.subgrupoId,
+    onChange: v => setClassificacao({
+      subgrupoId: v
+    }),
+    lista: subgrupos,
+    campoDb: "subgruposProduto",
+    update: update,
+    placeholderCod: "PV",
+    placeholderNome: "Malha PV",
+    pai: {
+      campo: 'grupoId',
+      valor: f.grupoId
+    },
+    filtro: sg => !f.grupoId || sg.grupoId === f.grupoId
+  }), /*#__PURE__*/React.createElement(Field, {
+    label: "Tipo de tecido (do cadastro de materiais)"
+  }, tecidos.length === 0 ? /*#__PURE__*/React.createElement("div", {
+    className: "small muted"
+  }, "Nenhum tecido cadastrado em Materiais (categoria \"Tecidos\" ou \"Malha\").") : /*#__PURE__*/React.createElement("select", {
+    value: f.tecidoId,
+    onChange: e => setClassificacao({
+      tecidoId: e.target.value
+    })
+  }, /*#__PURE__*/React.createElement("option", {
+    value: ""
+  }, "—"), tecidos.map(m => /*#__PURE__*/React.createElement("option", {
+    key: m.id,
+    value: m.id
+  }, m.codigo, " · ", m.nome)))), /*#__PURE__*/React.createElement(Field, {
+    label: "Medida"
+  }, /*#__PURE__*/React.createElement("input", {
+    value: f.medidas,
+    onChange: e => setClassificacao({
+      medidas: e.target.value
+    }),
+    placeholder: "Tam. M / 70x90cm"
+  })), /*#__PURE__*/React.createElement(Field, {
+    label: "Código (gerado pela classificação)"
+  }, /*#__PURE__*/React.createElement("input", {
+    value: f.codigo,
+    onChange: e => set('codigo', e.target.value),
+    placeholder: "Selecione a categoria"
+  }))), /*#__PURE__*/React.createElement("div", {
+    className: "field"
+  }, /*#__PURE__*/React.createElement("label", null, "Descrição do produto — gerada por categoria + grupo + subgrupo + tecido + medida"), /*#__PURE__*/React.createElement("input", {
+    value: f.nome,
+    onChange: e => set('nome', e.target.value),
+    placeholder: "Preencha a classificação acima"
+  }), montarDescricao(f) && montarDescricao(f) !== f.nome && /*#__PURE__*/React.createElement("div", {
+    className: "small muted",
+    style: {
+      marginTop: 6
     }
-    if (dataInicio && new Date(r.fim) < new Date(dataInicio + "T00:00:00")) return false;
-    if (dataFim && new Date(r.fim) > new Date(dataFim + "T23:59:59")) return false;
-    return true;
-  });
-
-  // Adicionado: monta a grade (tabela) para impressão do histórico de
-  // produção concluída filtrado na tela (não só os 40 mais recentes
-  // mostrados abaixo).
-  function imprimirGrade() {
-    onImprimirGrade({
-      titulo: "Histórico de produção",
-      subtitulo: `${filtrados.length} ${filtrados.length !== 1 ? "produções concluídas" : "produção concluída"}${temFiltroAtivo ? " · com filtro aplicado" : ""}`,
-      geradoEm: new Date().toLocaleString("pt-BR"),
-      colunas: [
-        { key: "op", label: "OP" }, { key: "cliente", label: "Cliente" }, { key: "produto", label: "Produto" }, { key: "etapa", label: "Etapa" },
-        { key: "setor", label: "Departamento" }, { key: "colaboradores", label: "Colaborador(es)" },
-        { key: "quantidade", label: "Qtd.", align: "right" }, { key: "eficiencia", label: "%", align: "right" },
-        { key: "fim", label: "Concluído em", align: "right" },
-      ],
-      linhas: filtrados.map(r => ({
-        op: r.ordemProducaoNumero != null ? `#${String(r.ordemProducaoNumero).padStart(3, "0")}` : "—",
-        cliente: clienteDoRegistro(r) || "—",
-        produto: nomeProduto(r), etapa: nomeEtapa(r), setor: nomeSetor(r),
-        colaboradores: (r.colaboradorIds || []).map(nomeColab).join(", "),
-        quantidade: r.quantidade, eficiencia: r.eficiencia != null ? `${Math.min(100, r.eficiencia)}%` : "—",
-        fim: new Date(r.fim).toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }),
-      })),
-    });
-  }
-
-  if (ordenados.length === 0) {
-    return <div style={{ fontSize: 13.5, color: "#a3937a", padding: "8px 2px" }}>Nenhuma produção concluída ainda.</div>;
-  }
-
-  return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-      <Card style={{ padding: 12 }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
-          <div style={{ fontSize: 13, fontWeight: 700, color: "#1c2b39" }}>Pesquisar</div>
-          {temFiltroAtivo && (
-            <button onClick={limparFiltros} style={{ background: "transparent", border: "none", color: "#2f4a63", fontSize: 12, fontWeight: 700, cursor: "pointer", padding: 0 }}>Limpar</button>
-          )}
-        </div>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 8 }}>
-          <div>
-            <span style={{ display: "block", fontSize: 11.5, fontWeight: 600, color: "#6b5d49", marginBottom: 4 }}>Cliente</span>
-            <input value={buscaCliente} onChange={e => setBuscaCliente(e.target.value)} placeholder="Nome do cliente…" style={inputStyle} />
-          </div>
-          <div>
-            <span style={{ display: "block", fontSize: 11.5, fontWeight: 600, color: "#6b5d49", marginBottom: 4 }}>Ordem de Produção</span>
-            <input value={buscaOP} onChange={e => setBuscaOP(e.target.value)} placeholder="Nº da OP…" style={inputStyle} />
-          </div>
-        </div>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-          <div>
-            <span style={{ display: "block", fontSize: 11.5, fontWeight: 600, color: "#6b5d49", marginBottom: 4 }}>Período — de</span>
-            <input type="date" value={dataInicio} onChange={e => setDataInicio(e.target.value)} style={inputStyle} />
-          </div>
-          <div>
-            <span style={{ display: "block", fontSize: 11.5, fontWeight: 600, color: "#6b5d49", marginBottom: 4 }}>até</span>
-            <input type="date" value={dataFim} onChange={e => setDataFim(e.target.value)} style={inputStyle} />
-          </div>
-        </div>
-      </Card>
-      <div style={{ display: "flex", justifyContent: "flex-end" }}>
-        <button onClick={imprimirGrade} disabled={filtrados.length === 0} style={{
-          background: "transparent", border: "1px dashed " + (filtrados.length === 0 ? "#d9cfb7" : "#2f4a63"),
-          color: filtrados.length === 0 ? "#a3937a" : "#2f4a63", fontSize: 11.5, fontWeight: 700,
-          cursor: filtrados.length === 0 ? "not-allowed" : "pointer", padding: "4px 9px", borderRadius: "3px 9px 9px 3px",
-        }}>Imprimir</button>
-      </div>
-      {filtrados.length === 0 && (
-        <div style={{ fontSize: 13.5, color: "#a3937a", padding: "8px 2px" }}>Nenhuma produção concluída encontrada para essa pesquisa.</div>
-      )}
-      {filtrados.slice(0, 40).map(r => {
-        const cor = r.cor || (r.classificacao ? corDoRegistro(r.status, r.classificacao) : "laranja");
-        return (
-          <Card key={r.id} style={{ padding: 12, borderLeft: `4px solid ${COR_INFO[cor].dot}` }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
-              <div>
-                {r.ordemProducaoNumero != null && (
-                  <div style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 10.5, fontWeight: 700, color: "#2f4a63", background: "#f4ecd8", padding: "2px 7px", borderRadius: 999, marginBottom: 4 }}>
-                    <ListOrdered size={10} /> OP #{String(r.ordemProducaoNumero).padStart(3, "0")}
-                  </div>
-                )}
-                <div style={{ fontWeight: 700, fontSize: 14, color: "#2a2015" }}>{nomeProduto(r)} · {nomeSetor(r)}</div>
-                <div style={{ fontSize: 12.5, color: "#6b5d49" }}>{nomeEtapa(r)} · {r.colaboradorIds.map(nomeColab).join(", ")}</div>
-                <div style={{ fontSize: 12, color: "#a3937a", marginTop: 3 }}>
-                  {r.quantidade} peças{r.quantidadeDefeito ? ` (${r.quantidadeDefeito} c/ defeito)` : ""}{r.tempoRetrabalhoMin ? ` · ${r.tempoRetrabalhoMin}min retrabalho` : ""} · {fmtSec(r.tempoRealSeg)} real{r.eficiencia != null ? ` · ${Math.min(100, r.eficiencia)}% da meta` : " · sem meta cadastrada"}{r.equipamentoNomeSnap ? ` · ${r.equipamentoNomeSnap}` : ""}
-                </div>
-              </div>
-              <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 4 }}>
-                {r.classificacao ? <Badge cls={r.classificacao} /> : <span style={{ fontSize: 11, fontWeight: 700, color: "#a3937a" }}>—</span>}
-                <StatusDot cor={cor} />
-              </div>
-            </div>
-            {r.fotosDefeito && r.fotosDefeito.length > 0 && (
-              <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap" }}>
-                {r.fotosDefeito.map(f => (
-                  <img key={f.id} src={f.dataUrl} alt={f.nome} style={{ width: 52, height: 52, objectFit: "cover", borderRadius: 6, border: "1px solid #e6ddc8" }} />
-                ))}
-              </div>
-            )}
-          </Card>
-        );
-      })}
-    </div>
-  );
-}
-
-// ---------- Ordens de Produção (controle sequencial do lote) ----------
-// Adicionado: formulário compacto para o gestor definir apenas "quem" e
-// "quando" de um departamento da OP — o quê (etapa), quanto (quantidade)
-// e a meta de tempo já vêm dimensionados da própria Ordem de Produção.
-function IniciarEtapaOPForm({ passo, setorObj, quantidadeAlvo, colaboradores, equipes, equipamentos, registros, podeAutorizarCargaExtra, feriados, onIniciar, onCancelar }) {
-  const [modoEquipe, setModoEquipe] = useState(false);
-  const [colaboradorIds, setColaboradorIds] = useState([]);
-  const [equipeSalvaId, setEquipeSalvaId] = useState("");
-  const [inicio, setInicio] = useState(nowLocalInput());
-  const [equipamentoId, setEquipamentoId] = useState("");
-  const [tipoTecido, setTipoTecido] = useState("");
-  const [consumo, setConsumo] = useState("");
-  const [fotolitoOk, setFotolitoOk] = useState(null);
-  const [tamanhoArte, setTamanhoArte] = useState("");
-  const [coresPantone, setCoresPantone] = useState([""]);
-  const [autorizacaoConfirmada, setAutorizacaoConfirmada] = useState(false);
-  // Adicionado: quantidade que será programada AGORA — pode ser menor
-  // que o saldo da etapa (quantidadeAlvo); o restante fica em aberto
-  // pra programar depois, com outro colaborador ou outro dia.
-  const [quantidadeProgramar, setQuantidadeProgramar] = useState(String(quantidadeAlvo || 0));
-
-  const tipoSetor = setorObj?.tipo || (
-    (setorObj?.nome || "").trim().toLowerCase() === "corte" ? "corte" :
-    (setorObj?.nome || "").trim().toLowerCase() === "silk" ? "silk" : "padrao"
-  );
-  const isCorte = tipoSetor === "corte";
-  const isSilk = tipoSetor === "silk";
-  const ehLote = passo.tipoCalculo === "lote";
-  const tempoPorUnidadeSeg = passo.tempoEstimadoSeg || 0;
-  const equipesDoSetor = useMemo(() => equipes.filter(eq => !eq.setorId || eq.setorId === passo.setorId), [equipes, passo.setorId]);
-  // Adicionado: só oferece equipamentos ativos do mesmo departamento da
-  // etapa (ou sem departamento definido), já que uma máquina de Corte não
-  // faz sentido aparecer para uma etapa de Costura.
-  const equipamentosDoSetor = useMemo(
-    () => (equipamentos || []).filter(eq => (!eq.setorId || eq.setorId === passo.setorId) && eq.status !== "inativo"),
-    [equipamentos, passo.setorId]
-  );
-
-  // Adicionado: só dias úteis (segunda a sexta) — domingo e feriado
-  // cadastrado ficam totalmente bloqueados, sem exceção; sábado é
-  // permitido mas sempre exige autorização de Gestor/Administrador,
-  // mesmo dentro de 8h.
-  const dataEscolhidaStr = inicio ? inicio.slice(0, 10) : "";
-  const diaSemana = dataEscolhidaStr ? new Date(dataEscolhidaStr + "T12:00:00").getDay() : null;
-  const ehDomingo = diaSemana === 0;
-  const ehSabado = diaSemana === 6;
-  const feriadoDoDia = dataEscolhidaStr ? (feriados || []).find(f => f.data === dataEscolhidaStr) : null;
-  const diaBloqueadoTotal = ehDomingo || !!feriadoDoDia;
-
-  // Adicionado: quantas horas cada colaborador já tem programadas nesse
-  // dia (de qualquer OP), para calcular quantas peças ainda cabem no dia
-  // dele sem passar de 8h (sem autorização) ou de 12h (teto absoluto).
-  const horasExistentesPorColaborador = useMemo(() => {
-    const map = {};
-    if (!dataEscolhidaStr) return map;
-    colaboradores.forEach(c => {
-      map[c.id] = (registros || [])
-        .filter(r => r.status !== "cancelado" && (r.colaboradorIds || []).includes(c.id) && r.inicio && r.inicio.slice(0, 10) === dataEscolhidaStr)
-        .reduce((s, r) => s + duracaoRegistroSeg(r), 0) / 3600;
-    });
-    return map;
-  }, [colaboradores, dataEscolhidaStr, registros]);
-
-  // Adicionado: bloqueia o mesmo colaborador de iniciar duas produções
-  // (a mesma etapa ou outra qualquer) na mesma data e horário — as
-  // etapas dele são encadeadas: a próxima só pode começar depois que a
-  // anterior termina (previsão de término, se ainda em aberto, ou
-  // término real, se já concluída).
-  const horarioLivrePorColaborador = useMemo(() => {
-    const map = {};
-    if (!dataEscolhidaStr) return map;
-    colaboradores.forEach(c => {
-      const doDia = (registros || []).filter(r => r.status !== "cancelado" && (r.colaboradorIds || []).includes(c.id) && r.inicio && r.inicio.slice(0, 10) === dataEscolhidaStr);
-      if (doDia.length === 0) { map[c.id] = null; return; }
-      const finsMs = doDia.map(r => {
-        if (r.status === "concluido" && r.fim) return new Date(r.fim).getTime();
-        if (r.projecaoFimISO) return new Date(r.projecaoFimISO).getTime();
-        return new Date(r.inicio).getTime() + duracaoRegistroSeg(r) * 1000;
-      });
-      map[c.id] = Math.max(...finsMs);
-    });
-    return map;
-  }, [colaboradores, dataEscolhidaStr, registros]);
-  // Maior "horário livre" entre os colaboradores selecionados — o grupo
-  // inteiro só pode começar quando todo mundo já estiver livre.
-  const horarioMinimoPermitidoMs = colaboradorIds.length
-    ? colaboradorIds.reduce((max, id) => {
-        const livre = horarioLivrePorColaborador[id];
-        return livre != null ? Math.max(max ?? 0, livre) : max;
-      }, null)
-    : null;
-  const colaboradorQueDefineOMinimo = horarioMinimoPermitidoMs
-    ? colaboradorIds.map(id => colaboradores.find(c => c.id === id)).find((c, i) => horarioLivrePorColaborador[colaboradorIds[i]] === horarioMinimoPermitidoMs)
-    : null;
-  const inicioMs = inicio ? new Date(inicio).getTime() : null;
-  const inicioSobrepoe = !!(horarioMinimoPermitidoMs && inicioMs != null && inicioMs < horarioMinimoPermitidoMs);
-
-  useEffect(() => {
-    // Corrigido: quando o colaborador (ou a data) muda e ele já tem
-    // compromisso até mais tarde, o início sobe sozinho pra logo depois
-    // do término previsto — as etapas dele nunca ficam sobrepostas.
-    if (horarioMinimoPermitidoMs && inicioMs != null && inicioMs < horarioMinimoPermitidoMs) {
-      setInicio(toLocalInput(new Date(horarioMinimoPermitidoMs)));
+  }, "Sugestão: ", /*#__PURE__*/React.createElement("strong", null, montarDescricao(f)), ' ', /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "link-btn",
+    onClick: () => set('nome', montarDescricao(f))
+  }, "usar"))), /*#__PURE__*/React.createElement("div", {
+    className: "field"
+  }, /*#__PURE__*/React.createElement("label", null, "Imagens e documentos do produto ", /*#__PURE__*/React.createElement("span", {
+    className: "muted",
+    style: {
+      textTransform: 'none'
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [colaboradorIds.join(","), dataEscolhidaStr]);
-
-  function pecasQueCabem(colaboradorId, tetoHoras) {
-    const existentesSeg = (horasExistentesPorColaborador[colaboradorId] || 0) * 3600;
-    const disponivelSeg = Math.max(0, tetoHoras * 3600 - existentesSeg);
-    if (!tempoPorUnidadeSeg) return quantidadeAlvo;
-    // Etapa "por lote" não dá pra dividir — ou cabe o lote inteiro no
-    // tempo disponível, ou não cabe nada.
-    if (ehLote) return disponivelSeg >= tempoPorUnidadeSeg ? quantidadeAlvo : 0;
-    return Math.min(quantidadeAlvo, Math.floor(disponivelSeg / tempoPorUnidadeSeg));
-  }
-  // Bloqueia a SELEÇÃO da pessoa (não a etapa) quando ela já não cabe
-  // nem uma peça no teto máximo de 12h desse dia.
-  const colaboradorBloqueado = (id) => !!dataEscolhidaStr && pecasQueCabem(id, JORNADA_MAXIMA_HORAS) <= 0;
-
-  const maxSemAutorizacaoGrupo = colaboradorIds.length && dataEscolhidaStr
-    ? Math.min(...colaboradorIds.map(id => pecasQueCabem(id, JORNADA_DIARIA_HORAS)))
-    : quantidadeAlvo;
-  const maxComAutorizacaoGrupo = colaboradorIds.length && dataEscolhidaStr
-    ? Math.min(...colaboradorIds.map(id => pecasQueCabem(id, JORNADA_MAXIMA_HORAS)))
-    : quantidadeAlvo;
-
-  useEffect(() => {
-    // Corrigido: a quantidade a programar nunca passa do teto absoluto de
-    // 12h do dia — se a seleção de colaborador ou a data mudar e reduzir
-    // a capacidade disponível, o campo desce sozinho.
-    setQuantidadeProgramar(q => String(ehLote ? quantidadeAlvo : Math.max(0, Math.min(parseFloat(q || "0") || quantidadeAlvo, maxComAutorizacaoGrupo))));
-    setAutorizacaoConfirmada(false);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [colaboradorIds.join(","), inicio]);
-
-  function toggleColaborador(id) {
-    if (colaboradorBloqueado(id) && !colaboradorIds.includes(id)) return;
-    setColaboradorIds(ids => ids.includes(id) ? ids.filter(x => x !== id) : [...ids, id]);
-  }
-  function usarEquipeSalva(id) {
-    setEquipeSalvaId(id);
-    const eq = equipes.find(e => e.id === id);
-    // Corrigido: se a equipe salva tiver algum membro que não cabe mais
-    // nesse dia, ele é deixado de fora da seleção — só aquele
-    // colaborador fica de fora, o resto da equipe segue normalmente.
-    if (eq) setColaboradorIds(eq.membros.filter(mid => !colaboradorBloqueado(mid)));
-  }
-  function atualizarCorPantone(i, valor) { setCoresPantone(cores => cores.map((c, idx) => idx === i ? valor : c)); }
-  function adicionarCorPantone() { setCoresPantone(cores => [...cores, ""]); }
-  function removerCorPantone(i) { setCoresPantone(cores => cores.filter((_, idx) => idx !== i)); }
-
-  const quantidadeProgramarNum = ehLote ? quantidadeAlvo : Math.max(0, parseFloat(quantidadeProgramar || "0"));
-  const precisaAutorizacaoHoras = quantidadeProgramarNum > maxSemAutorizacaoGrupo;
-  const precisaAutorizacao = precisaAutorizacaoHoras || ehSabado;
-  const saldoQueFicaraAberto = ehLote ? 0 : Math.max(0, Math.round((quantidadeAlvo - quantidadeProgramarNum) * 1000) / 1000);
-
-  // Corrigido: a meta por hora (peças/h) saiu daqui e passou a aparecer
-  // no relatório de itens em aberto — aqui, na Ordem de Produção, o que
-  // interessa é a carga horária que essa escalação deixaria no dia de
-  // cada colaborador selecionado (o que já estava programado + o tempo
-  // desta etapa).
-  const cargaHorariaProgramada = useMemo(() => {
-    if (!inicio || colaboradorIds.length === 0) return [];
-    const horasNovaEtapa = tempoPorUnidadeSeg ? (quantidadeProgramarNum * tempoPorUnidadeSeg) / 3600 : 0;
-    return colaboradorIds.map(id => {
-      const nome = colaboradores.find(c => c.id === id)?.nome || "—";
-      const existentes = Math.round((horasExistentesPorColaborador[id] || 0) * 10) / 10;
-      const total = Math.round((existentes + horasNovaEtapa) * 10) / 10;
-      return { id, nome, existentes, novaEtapa: Math.round(horasNovaEtapa * 10) / 10, total };
-    });
-  }, [inicio, colaboradorIds, horasExistentesPorColaborador, tempoPorUnidadeSeg, quantidadeProgramarNum, colaboradores]);
-
-  const podeIniciar = !diaBloqueadoTotal && !inicioSobrepoe && colaboradorIds.length > 0 && !!inicio
-    && (!isCorte || tipoTecido.trim()) && (!isSilk || fotolitoOk !== null)
-    && quantidadeProgramarNum > 0 && quantidadeProgramarNum <= maxComAutorizacaoGrupo
-    && (!precisaAutorizacao || (podeAutorizarCargaExtra && autorizacaoConfirmada));
-
-  function confirmar() {
-    if (!podeIniciar) return;
-    const equipamentoSelecionado = equipamentoId ? (equipamentos || []).find(e => e.id === equipamentoId) : null;
-    onIniciar({
-      colaboradorIds, inicio, quantidade: quantidadeProgramarNum,
-      extras: {
-        ...(equipamentoId ? { equipamentoId, equipamentoNomeSnap: equipamentoSelecionado?.nome || "—" } : {}),
-        ...(isCorte ? { tipoTecido: tipoTecido.trim(), consumo: parseFloat(consumo || "0") } : {}),
-        ...(isSilk ? { fotolitoOk, tamanhoArte: tamanhoArte.trim(), coresPantone: coresPantone.map(c => c.trim()).filter(Boolean) } : {}),
-      },
-    });
-  }
-
-  return (
-    <div style={{ marginTop: 8, paddingTop: 10, borderTop: "1px solid #efe8d8" }}>
-      <Field label="Colaborador">
-        <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
-          <ToggleChip ativo={!modoEquipe} onClick={() => { setModoEquipe(false); setEquipeSalvaId(""); if (colaboradorIds.length > 1) setColaboradorIds(colaboradorIds.slice(0, 1)); }}>Individual</ToggleChip>
-          <ToggleChip ativo={modoEquipe} onClick={() => setModoEquipe(true)}>Equipe</ToggleChip>
-        </div>
-        {!modoEquipe ? (
-          <Select value={colaboradorIds[0] || ""} onChange={e => setColaboradorIds(e.target.value ? [e.target.value] : [])}>
-            <option value="">Selecione…</option>
-            {colaboradores.map(c => {
-              const bloqueado = colaboradorBloqueado(c.id);
-              return (
-                <option key={c.id} value={c.id} disabled={bloqueado}>
-                  {c.nome}{c.funcao ? ` · ${c.funcao}` : ""}{bloqueado ? ` — bloqueado (sem capacidade nesse dia)` : ""}
-                </option>
-              );
-            })}
-          </Select>
-        ) : (
-          <>
-            {equipesDoSetor.length > 0 && (
-              <Select value={equipeSalvaId} onChange={e => usarEquipeSalva(e.target.value)} style={{ marginBottom: 8 }}>
-                <option value="">Usar equipe salva (opcional)…</option>
-                {equipesDoSetor.map(eq => <option key={eq.id} value={eq.id}>{eq.nome}</option>)}
-              </Select>
-            )}
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-              {colaboradores.map(c => {
-                const bloqueado = colaboradorBloqueado(c.id);
-                return (
-                  <ToggleChip
-                    key={c.id}
-                    ativo={colaboradorIds.includes(c.id)}
-                    colorAtivo={bloqueado ? "#b13232" : undefined}
-                    onClick={() => { if (bloqueado) return; toggleColaborador(c.id); setEquipeSalvaId(""); }}
-                  >
-                    {c.nome}{bloqueado ? " 🚫" : ""}
-                  </ToggleChip>
-                );
-              })}
-            </div>
-            {colaboradores.some(c => colaboradorBloqueado(c.id)) && (
-              <div style={{ fontSize: 11.5, color: "#a3937a", marginTop: 6 }}>🚫 = sem capacidade nesse dia — não pode ser escalado nessa data, mas o restante da equipe pode seguir normalmente.</div>
-            )}
-          </>
-        )}
-      </Field>
-
-      {equipamentosDoSetor.length > 0 && (
-        <Field label="Equipamento (opcional)">
-          <Select value={equipamentoId} onChange={e => setEquipamentoId(e.target.value)}>
-            <option value="">Sem equipamento específico</option>
-            {equipamentosDoSetor.map(eq => <option key={eq.id} value={eq.id}>{eq.nome}{eq.status === "manutencao" ? " (em manutenção)" : ""}</option>)}
-          </Select>
-        </Field>
-      )}
-
-      {!ehLote && (
-        <Field label={`Quantidade a programar agora (de ${quantidadeAlvo} peças no total)`}>
-          <input
-            type="number" min="0" step="1" value={quantidadeProgramar}
-            onChange={e => setQuantidadeProgramar(e.target.value)}
-            max={maxComAutorizacaoGrupo} style={inputStyle}
-          />
-          {saldoQueFicaraAberto > 0 && (
-            <div style={{ fontSize: 11.5, color: "#8a6510", marginTop: 5 }}>
-              Restam {saldoQueFicaraAberto} peças em aberto — dá pra programar depois com outro colaborador ou outro dia.
-            </div>
-          )}
-        </Field>
-      )}
-
-      {cargaHorariaProgramada.length > 0 && (
-        <Field label="Carga horária programada no dia">
-          <div style={{ border: "1px solid #e6ddc8", borderRadius: 8, overflow: "hidden" }}>
-            {cargaHorariaProgramada.map((c, i) => (
-              <div key={c.id} style={{ display: "flex", justifyContent: "space-between", padding: "7px 10px", fontSize: 12.5, color: "#2a2015", borderTop: i > 0 ? "1px solid #f4efe2" : "none" }}>
-                <span>{c.nome}</span>
-                <span><b>{c.total}h</b> {c.existentes > 0 ? `(${c.existentes}h já programadas + ${c.novaEtapa}h desta etapa)` : "no dia"}</span>
-              </div>
-            ))}
-          </div>
-        </Field>
-      )}
-
-      {isCorte && (
-        <>
-          <Field label="Tipo de tecido">
-            <input value={tipoTecido} onChange={e => setTipoTecido(e.target.value)} placeholder="Ex.: Malha 100% algodão" style={inputStyle} />
-          </Field>
-          <Field label="Consumo (metros)">
-            <input type="number" min="0" step="0.1" value={consumo} onChange={e => setConsumo(e.target.value)} placeholder="Ex.: 12.5" style={inputStyle} />
-          </Field>
-        </>
-      )}
-      {isSilk && (
-        <>
-          <Field label="Fotolito conferido?">
-            <div style={{ display: "flex", gap: 8 }}>
-              <ToggleChip ativo={fotolitoOk === false} colorAtivo="#b13232" onClick={() => setFotolitoOk(false)}>Não</ToggleChip>
-              <ToggleChip ativo={fotolitoOk === true} onClick={() => setFotolitoOk(true)}>Sim</ToggleChip>
-            </div>
-          </Field>
-          <Field label="Cores utilizadas (Pantone)">
-            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-              {coresPantone.map((cor, i) => (
-                <div key={i} style={{ display: "flex", gap: 6 }}>
-                  <input value={cor} onChange={e => atualizarCorPantone(i, e.target.value)} placeholder={`Cor ${i + 1} — código Pantone`} style={{ ...inputStyle, flex: 1 }} />
-                  {coresPantone.length > 1 && <IconButton onClick={() => removerCorPantone(i)} danger title="Remover"><X size={16} /></IconButton>}
-                </div>
-              ))}
-              <button type="button" onClick={adicionarCorPantone} style={{ alignSelf: "flex-start", fontSize: 12, border: "1px solid #d9cfb7", background: "#fff", borderRadius: 7, padding: "5px 9px", cursor: "pointer", display: "flex", alignItems: "center", gap: 4, color: "#6b5d49" }}>
-                <Plus size={12} /> adicionar cor
-              </button>
-            </div>
-          </Field>
-          <Field label="Tamanho da arte">
-            <input value={tamanhoArte} onChange={e => setTamanhoArte(e.target.value)} placeholder="Ex.: 20 x 15 cm" style={inputStyle} />
-          </Field>
-        </>
-      )}
-
-      <Field label="Início (quando)">
-        <input type="datetime-local" value={inicio} onChange={e => setInicio(e.target.value)} style={inputStyle} />
-      </Field>
-
-      {diaBloqueadoTotal && (
-        <div style={{ background: "#f8e6e6", border: "1.5px solid #b13232", borderRadius: 8, padding: "10px 12px", marginBottom: 14 }}>
-          <div style={{ fontSize: 12.5, fontWeight: 700, color: "#b13232", marginBottom: 3 }}>Data não permitida</div>
-          <div style={{ fontSize: 12, color: "#6b5d49" }}>
-            {ehDomingo ? "Domingo não é dia útil." : `Feriado${feriadoDoDia?.descricao ? ` — ${feriadoDoDia.descricao}` : ""}.`} Programação de produção só em dias úteis (segunda a sexta) ou sábado com autorização. Escolha outra data.
-          </div>
-        </div>
-      )}
-
-      {!diaBloqueadoTotal && inicioSobrepoe && (
-        <div style={{ background: "#f8e6e6", border: "1.5px solid #b13232", borderRadius: 8, padding: "10px 12px", marginBottom: 14 }}>
-          <div style={{ fontSize: 12.5, fontWeight: 700, color: "#b13232", marginBottom: 3 }}>Horário sobreposto</div>
-          <div style={{ fontSize: 12, color: "#6b5d49" }}>
-            {colaboradorQueDefineOMinimo?.nome || "Esse colaborador"} só fica livre a partir de {new Date(horarioMinimoPermitidoMs).toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })} — as etapas dele são encadeadas, uma só pode começar depois que a anterior termina. Ajuste o horário de início.
-          </div>
-        </div>
-      )}
-
-      {!diaBloqueadoTotal && colaboradorIds.length > 0 && quantidadeProgramarNum > maxComAutorizacaoGrupo && (
-        <div style={{ background: "#f8e6e6", border: "1.5px solid #b13232", borderRadius: 8, padding: "10px 12px", marginBottom: 14 }}>
-          <div style={{ fontSize: 12.5, fontWeight: 700, color: "#b13232", marginBottom: 3 }}>Quantidade acima do possível nesse dia</div>
-          <div style={{ fontSize: 12, color: "#6b5d49" }}>
-            No máximo {maxComAutorizacaoGrupo} peças cabem nesse dia para quem foi selecionado, mesmo com autorização (teto de {JORNADA_MAXIMA_HORAS}h/dia). Reduza a quantidade — o restante fica em aberto para outro colaborador ou outro dia.
-          </div>
-        </div>
-      )}
-      {!diaBloqueadoTotal && precisaAutorizacao && quantidadeProgramarNum > 0 && quantidadeProgramarNum <= maxComAutorizacaoGrupo && (
-        <div style={{ background: "#fdf3e0", border: "1.5px dashed #b5820a", borderRadius: 8, padding: "10px 12px", marginBottom: 14 }}>
-          <div style={{ fontSize: 12.5, fontWeight: 700, color: "#8a6510", marginBottom: 3 }}>
-            {ehSabado && precisaAutorizacaoHoras ? "Sábado e carga acima de 8h" : ehSabado ? "Programação em sábado" : "Carga acima do desejável para o dia"}
-          </div>
-          <div style={{ fontSize: 12, color: "#6b5d49", marginBottom: podeAutorizarCargaExtra ? 8 : 0 }}>
-            {ehSabado && <>Sábados sempre exigem autorização de um Gestor ou Administrador. </>}
-            {precisaAutorizacaoHoras && <>Essa quantidade passa das {JORNADA_DIARIA_HORAS}h recomendadas para quem foi selecionado — até {JORNADA_MAXIMA_HORAS}h/dia exige autorização.</>}
-          </div>
-          {podeAutorizarCargaExtra ? (
-            <label style={{ display: "flex", alignItems: "flex-start", gap: 7, cursor: "pointer" }}>
-              <input type="checkbox" checked={autorizacaoConfirmada} onChange={e => setAutorizacaoConfirmada(e.target.checked)} style={{ marginTop: 3 }} />
-              <span style={{ fontSize: 12, color: "#8a6510", fontWeight: 600 }}>Autorizo esta programação como Gestor/Administrador.</span>
-            </label>
-          ) : (
-            <div style={{ fontSize: 12, color: "#b13232", fontWeight: 600 }}>Peça para um Gestor ou Administrador iniciar esta etapa.</div>
-          )}
-        </div>
-      )}
-
-      <div style={{ display: "flex", gap: 8 }}>
-        <PrimaryButton onClick={confirmar} disabled={!podeIniciar} style={{ flex: 1 }}>
-          <Play size={16} /> Iniciar {passo.etapaNomeSnap}
-        </PrimaryButton>
-        <button onClick={onCancelar} style={{ border: "1.5px solid #d9cfb7", background: "#fff", borderRadius: 9, padding: "0 14px", color: "#6b5d49", fontWeight: 700, cursor: "pointer" }}>Cancelar</button>
-      </div>
-    </div>
-  );
-}
-
-function OrdensProducao({ ordensProducao, produtos, etapas, setores, vinculos, colaboradores, equipes, equipamentos, registros, onSalvarOrdem, onRemoverOrdem, onSalvarRegistro, clientes, onImprimirGrade, podeAutorizarCargaExtra, feriados, consumosMaterial, materiais, ehAdministrador }) {
-  const [clienteIdNovo, setClienteIdNovo] = useState("");
-  const [dataEntregaNova, setDataEntregaNova] = useState("");
-  const [produtoParaAdicionar, setProdutoParaAdicionar] = useState("");
-  const [quantidadeParaAdicionar, setQuantidadeParaAdicionar] = useState("");
-  const [itensNovo, setItensNovo] = useState([]); // [{produtoId, quantidade}]
-  const [expandidoId, setExpandidoId] = useState(null);
-  // Adicionado: o detalhe de uma OP em aberto (expandida) agora é
-  // dividido em 3 folhas — Atividades (cronograma dos departamentos),
-  // Materiais (o que precisa separar) e Arquivos (imagens/vídeos de
-  // referência) — em vez de mostrar tudo empilhado de uma vez.
-  const [abaDetalheOP, setAbaDetalheOP] = useState("atividades");
-  function alternarExpandidoOP(id) {
-    setExpandidoId(atual => (atual === id ? null : id));
-    setAbaDetalheOP("atividades");
-  }
-  // Adicionado: anexar arquivo numa OP já aberta (além do anexo feito na
-  // hora de criar) — usa um único input de arquivo compartilhado entre
-  // todas as OPs da lista, sabendo em qual OP anexar pelo id guardado
-  // em `anexandoOPId`.
-  const [anexandoOPId, setAnexandoOPId] = useState(null);
-  const anexoOPInputRef = useRef(null);
-  async function anexarArquivoOP(op, fileList) {
-    const arquivos = Array.from(fileList || []);
-    const novos = [];
-    for (const file of arquivos) {
-      if (file.size > 4.5 * 1024 * 1024) { alert(`"${file.name}" é maior que 4,5MB e não pode ser anexado.`); continue; }
-      const dataUrl = await new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve(reader.result);
-        reader.onerror = reject;
-        reader.readAsDataURL(file);
-      });
-      novos.push({ id: uid(), nome: file.name, tipo: file.type, dataUrl });
+  }, "(imagens são comprimidas automaticamente)")), /*#__PURE__*/React.createElement("input", {
+    type: "file",
+    accept: "image/*,.pdf,.doc,.docx,.xls,.xlsx",
+    onChange: onArquivo
+  }), (f.arquivos || []).length > 0 && /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexWrap: 'wrap',
+      gap: 10,
+      marginTop: 10
     }
-    if (novos.length) await onSalvarOrdem({ ...op, anexos: [...(op.anexos || []), ...novos] });
-  }
-  async function removerAnexoOP(op, anexoId) {
-    await onSalvarOrdem({ ...op, anexos: (op.anexos || []).filter(a => a.id !== anexoId) });
-  }
-  const [iniciandoChave, setIniciandoChave] = useState(null);
-  // Adicionado: imagem(ns) ou vídeo(s) de referência anexados antes de
-  // abrir a OP (ex.: arte aprovada, foto de amostra, vídeo de instrução)
-  // — aparecem depois no relatório impresso da própria OP.
-  const [anexosNovaOP, setAnexosNovaOP] = useState([]);
-  const anexoNovaOPInputRef = useRef(null);
-  // Adicionado: campo de pesquisa das Ordens de Produção — busca pelo
-  // número da OP, nome do cliente ou nome de algum produto do pedido.
-  const [buscaOP, setBuscaOP] = useState("");
-  function opCorresponde(op, termoBruto) {
-    const termo = termoBruto.trim().toLowerCase();
-    if (!termo) return true;
-    const numeroTxt = `#${String(op.numero).padStart(3, "0")}`.toLowerCase();
-    const clienteTxt = (op.clienteNomeSnap || "sem cliente").toLowerCase();
-    const produtosTxt = (op.itens || []).map(it => it.produtoNomeSnap || "").join(" ").toLowerCase();
-    return numeroTxt.includes(termo) || String(op.numero).includes(termo) || clienteTxt.includes(termo) || produtosTxt.includes(termo);
-  }
-
-  const nomeColab = (id) => colaboradores.find(c => c.id === id)?.nome || "—";
-
-  // Só produtos com etapas vinculadas podem entrar numa OP, já que é dali
-  // que vem a sequência (definida pela ordem cadastrada em Cadastros →
-  // Produtos).
-  const produtosComSequencia = useMemo(
-    () => produtos.filter(p => vinculos.some(v => v.produtoId === p.id)),
-    [produtos, vinculos]
-  );
-  const produtosDisponiveisParaAdicionar = useMemo(
-    () => produtosComSequencia.filter(p => !itensNovo.some(it => it.produtoId === p.id)),
-    [produtosComSequencia, itensNovo]
-  );
-  const qtdParaAdicionarNum = parseInt(quantidadeParaAdicionar || "0", 10);
-  const podeAdicionarItem = produtoParaAdicionar && qtdParaAdicionarNum > 0;
-
-  // Corrigido: ao clicar em "Adicionar", a lista de produtos aparecia na
-  // hora, mudando o layout — e o botão "remover" do item recém-criado
-  // acabava caindo bem embaixo do toque que ainda estava terminando,
-  // removendo o item imediatamente sem querer. Adiar a atualização em um
-  // tick evita que a troca de layout aconteça durante o mesmo clique.
-  function adicionarItem() {
-    if (!podeAdicionarItem) return;
-    const novoItem = { produtoId: produtoParaAdicionar, quantidade: qtdParaAdicionarNum };
-    setTimeout(() => {
-      setItensNovo(itens => [...itens, novoItem]);
-      setProdutoParaAdicionar(""); setQuantidadeParaAdicionar("");
-    }, 0);
-  }
-  function removerItem(produtoId) {
-    setTimeout(() => {
-      setItensNovo(itens => itens.filter(it => it.produtoId !== produtoId));
-    }, 0);
-  }
-
-  // Adicionado: anexa imagem(ns) ou vídeo(s) de referência antes de abrir
-  // a OP (ex.: arte aprovada pelo cliente, foto de amostra, vídeo de
-  // instrução de montagem) — fica salvo na própria OP e aparece depois
-  // no relatório impresso dela.
-  async function anexarArquivoNovaOP(fileList) {
-    const arquivos = Array.from(fileList || []);
-    const novos = [];
-    for (const file of arquivos) {
-      if (file.size > 4.5 * 1024 * 1024) {
-        alert(`"${file.name}" é maior que 4,5MB e não pode ser anexado.`);
-        continue;
+  }, (f.arquivos || []).map(a => /*#__PURE__*/React.createElement("div", {
+    key: a.id,
+    style: {
+      width: 130,
+      border: '1px solid var(--line)',
+      borderRadius: 6,
+      padding: 8,
+      background: '#fff'
+    }
+  }, a.tipo === 'imagem' ? /*#__PURE__*/React.createElement("img", {
+    src: a.url,
+    alt: a.nome,
+    style: {
+      width: '100%',
+      height: 80,
+      objectFit: 'cover',
+      borderRadius: 4
+    }
+  }) : /*#__PURE__*/React.createElement("div", {
+    style: {
+      height: 80,
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      background: '#f0ede6',
+      borderRadius: 4,
+      fontSize: 26
+    }
+  }, "📄"), /*#__PURE__*/React.createElement("div", {
+    className: "small",
+    style: {
+      wordBreak: 'break-word',
+      margin: '6px 0'
+    }
+  }, a.nome), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "btn danger sm",
+    onClick: () => rmArquivo(a.id)
+  }, "Remover"))))), /*#__PURE__*/React.createElement("div", {
+    className: "field"
+  }, /*#__PURE__*/React.createElement("label", null, "Etapas de produção — na ordem de execução"), (db.etapasProducao || []).length === 0 ? /*#__PURE__*/React.createElement("div", {
+    className: "small muted"
+  }, "Nenhuma etapa cadastrada — crie em \"Departamentos & Etapas\".") : /*#__PURE__*/React.createElement("div", null, f.etapas.length === 0 && /*#__PURE__*/React.createElement("div", {
+    className: "small muted",
+    style: {
+      marginBottom: 8
+    }
+  }, "Nenhuma etapa adicionada."), f.etapas.map((linha, i) => {
+    /* etapas já escolhidas em outras linhas — não aparecem de novo no select */
+    const et = (db.etapasProducao || []).find(e => e.id === linha.etapaId);
+    const custo = et ? custoMaoDeObraPorPeca(et, db) : null;
+    return /*#__PURE__*/React.createElement("div", {
+      key: i,
+      style: {
+        display: 'flex',
+        gap: 8,
+        marginBottom: 6,
+        alignItems: 'center',
+        flexWrap: 'wrap'
       }
-      const dataUrl = await new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve(reader.result);
-        reader.onerror = reject;
-        reader.readAsDataURL(file);
-      });
-      novos.push({ id: uid(), nome: file.name, tipo: file.type, dataUrl });
-    }
-    if (novos.length) setAnexosNovaOP(anexos => [...anexos, ...novos]);
-  }
-  function removerAnexoNovaOP(id) { setAnexosNovaOP(anexos => anexos.filter(a => a.id !== id)); }
-
-  // Adicionado: soma o tempo dimensionado (por peça × quantidade, ou fixo
-  // por lote) de todas as etapas de todos os produtos já adicionados ao
-  // pedido, para mostrar de cara o tempo total de produção da OP.
-  const tempoTotalPreview = useMemo(() => {
-    return itensNovo.reduce((somaGeral, item) => {
-      const vinculosDoItem = vinculos.filter(v => v.produtoId === item.produtoId);
-      const somaItem = vinculosDoItem.reduce((soma, v) => {
-        const etapa = etapas.find(e => e.id === v.etapaId);
-        const tipoCalculo = etapa?.tipoCalculo || "peca";
-        return soma + (tipoCalculo === "lote" ? v.tempoEstimadoSeg : v.tempoEstimadoSeg * item.quantidade);
-      }, 0);
-      return somaGeral + somaItem;
-    }, 0);
-  }, [itensNovo, vinculos, etapas]);
-
-  // Adicionado: tempo de produção já comprometido, separado por
-  // departamento (Corte, Silk, Preparação, Costura...). Cada departamento
-  // tem sua própria equipe — a fila da Silk não atrasa o Corte — então
-  // somar tudo junto superestimaria o prazo. Em vez disso: para cada
-  // departamento que este pedido novo vai usar, soma o que já está
-  // comprometido nas demais OPs em aberto + o que este pedido também
-  // vai exigir, e projeta a data considerando {HORAS_PRODUTIVAS_DIA}h de
-  // produção por dia. A entrega real do pedido é definida pelo
-  // departamento mais carregado (o gargalo).
-  const previsaoPorDepartamento = useMemo(() => {
-    const mapa = new Map(); // chave do setor -> { nome, comprometidoSeg, novoSeg }
-    function registrar(setorId, setorNome, campo, segundos) {
-      if (!segundos) return;
-      const chave = setorId || setorNome || "—";
-      if (!mapa.has(chave)) mapa.set(chave, { nome: setorNome || "—", comprometidoSeg: 0, novoSeg: 0 });
-      mapa.get(chave)[campo] += segundos;
-    }
-    (ordensProducao || []).filter(o => o.status === "aberta").forEach(o => {
-      (o.etapas || []).filter(p => !p.concluida).forEach(p => {
-        registrar(p.setorId, p.setorNomeSnap, "comprometidoSeg", p.duracaoEstimadaSeg ?? duracaoEtapaOP(p, p.quantidade || 1));
-      });
-    });
-    itensNovo.forEach(item => {
-      vinculos.filter(v => v.produtoId === item.produtoId).forEach(v => {
-        const etapa = etapas.find(e => e.id === v.etapaId);
-        const tipoCalculo = etapa?.tipoCalculo || "peca";
-        const setor = setores.find(s => s.id === etapa?.setorId);
-        const segundos = tipoCalculo === "lote" ? v.tempoEstimadoSeg : v.tempoEstimadoSeg * item.quantidade;
-        registrar(etapa?.setorId, setor?.nome, "novoSeg", segundos);
-      });
-    });
-    const agora = new Date();
-    return Array.from(mapa.values())
-      .filter(d => d.novoSeg > 0)
-      .map(d => ({ ...d, totalSeg: d.comprometidoSeg + d.novoSeg, previsao: projetarDataUtil(d.comprometidoSeg + d.novoSeg, agora) }))
-      .sort((a, b) => b.previsao - a.previsao);
-  }, [ordensProducao, itensNovo, vinculos, etapas, setores]);
-  const previsaoEntregaComFila = previsaoPorDepartamento[0]?.previsao || null;
-  const previsaoDentroDoPrazo = previsaoEntregaComFila && dataEntregaNova
-    ? previsaoEntregaComFila <= new Date(dataEntregaNova + "T23:59:59")
-    : null;
-
-  const podeAbrir = itensNovo.length > 0 && dataEntregaNova;
-
-  async function abrirOP() {
-    if (!podeAbrir) return;
-    const clienteSelecionado = (clientes || []).find(c => c.id === clienteIdNovo);
-    // Adicionado: a OP agora reúne as etapas de TODOS os produtos do
-    // pedido, cada uma marcada com o produto a que pertence — assim o
-    // gestor acompanha o pedido inteiro (mesmo com produtos diferentes)
-    // numa única Ordem de Produção.
-    const etapasSeq = itensNovo.flatMap(item => {
-      const produto = produtos.find(p => p.id === item.produtoId);
-      const vinculosDoItem = [...vinculos.filter(v => v.produtoId === item.produtoId)].sort((a, b) => (a.ordem ?? 0) - (b.ordem ?? 0));
-      return vinculosDoItem.map(v => {
-        const etapa = etapas.find(e => e.id === v.etapaId);
-        const setor = setores.find(s => s.id === etapa?.setorId);
-        const tipoCalculo = etapa?.tipoCalculo || "peca";
-        return {
-          produtoId: item.produtoId, produtoNomeSnap: produto?.nome || "—", quantidade: item.quantidade,
-          etapaId: v.etapaId,
-          etapaNomeSnap: etapa?.nome || "—",
-          setorId: etapa?.setorId || null,
-          setorNomeSnap: setor?.nome || "—",
-          tipoCalculo,
-          // Adicionado: guarda o tempo estimado (base) e a duração já
-          // dimensionada para a quantidade daquele produto — assim a OP
-          // inteira já nasce com todos os departamentos (Corte, Silk,
-          // Preparação e demais), de todos os produtos, prontos para
-          // receber "quem" e "quando", sem depender do vínculo do
-          // produto mudar depois.
-          tempoEstimadoSeg: v.tempoEstimadoSeg,
-          duracaoEstimadaSeg: tipoCalculo === "lote" ? v.tempoEstimadoSeg : v.tempoEstimadoSeg * item.quantidade,
-          concluida: false,
-        };
-      });
-    });
-    const tempoEstimadoTotalSeg = etapasSeq.reduce((s, p) => s + p.duracaoEstimadaSeg, 0);
-    // Corrigido: o número da OP era sequencial por cliente (cada cliente
-    // tinha sua própria contagem #001, #002...) — isso fazia OPs de
-    // clientes diferentes compartilharem o mesmo número, confundindo
-    // quem olha a lista. Agora é uma sequência única de pedido, contada
-    // entre todas as Ordens de Produção já abertas, não importa o cliente.
-    const numero = ordensProducao.reduce((max, o) => Math.max(max, o.numero || 0), 0) + 1;
-    const novaOP = {
-      id: uid(), numero,
-      clienteId: clienteIdNovo || null,
-      clienteNomeSnap: clienteSelecionado ? clienteSelecionado.nome : null,
-      // Adicionado: uma OP pode reunir mais de um produto — cada um com
-      // sua própria quantidade — dentro do mesmo pedido do cliente.
-      itens: itensNovo.map(it => ({ produtoId: it.produtoId, produtoNomeSnap: produtos.find(p => p.id === it.produtoId)?.nome || "—", quantidade: it.quantidade })),
-      dataEntrega: dataEntregaNova,
-      etapas: etapasSeq,
-      tempoEstimadoTotalSeg,
-      status: "aberta",
-      // Adicionado: imagens/vídeos de referência anexados antes de abrir
-      // a OP — aparecem no relatório impresso dela.
-      anexos: anexosNovaOP,
-      criadaEm: new Date().toISOString(), concluidaEm: null,
-    };
-    await onSalvarOrdem(novaOP);
-    setClienteIdNovo(""); setDataEntregaNova(""); setItensNovo([]); setProdutoParaAdicionar(""); setQuantidadeParaAdicionar(""); setAnexosNovaOP([]);
-  }
-
-  // Adicionado: consolida os materiais necessários da OP inteira —
-  // percorre todos os produtos do pedido, cruza com a ficha de consumo
-  // de cada um (Cadastros → Produtos) e soma por material, para quem vai
-  // separar saber de uma vez tudo que precisa pra aquela ordem.
-  function materiaisDaOP(op) {
-    const soma = {};
-    (op.itens || []).forEach(item => {
-      (consumosMaterial || []).filter(c => c.produtoId === item.produtoId).forEach(c => {
-        const material = (materiais || []).find(m => m.id === c.materialId);
-        const chave = c.materialId;
-        if (!soma[chave]) soma[chave] = { id: chave, nome: material?.nome || "—", unidade: material?.unidade || "", quantidade: 0, estoque: material?.quantidadeEstoque ?? null };
-        soma[chave].quantidade += (c.quantidadePorPeca || 0) * item.quantidade;
-      });
-    });
-    return Object.values(soma)
-      .map(m => ({ ...m, quantidade: Math.round(m.quantidade * 1000) / 1000 }))
-      .sort((a, b) => a.nome.localeCompare(b.nome));
-  }
-
-  // Adicionado: marca ou desmarca um material como separado na etapa de
-  // Preparação — a marcação é gravada na própria etapa da OP, então
-  // persiste ao recarregar e todo mundo que abrir a ordem vê o mesmo
-  // estado da separação.
-  async function alternarMaterialSeparado(op, indexEtapa, consumoId) {
-    const etapasAtualizadas = op.etapas.map((e, i) => {
-      if (i !== indexEtapa) return e;
-      const atuais = e.materiaisSeparados || [];
-      return {
-        ...e,
-        materiaisSeparados: atuais.includes(consumoId)
-          ? atuais.filter(id => id !== consumoId)
-          : [...atuais, consumoId],
-      };
-    });
-    await onSalvarOrdem({ ...op, etapas: etapasAtualizadas });
-  }
-
-  // Adicionado: excluir uma OP é uma ação destrutiva — apaga também todos
-  // os registros de lançamento já feitos em cada departamento dela (ver
-  // removerOrdemComRegistros, em App). Por isso fica restrita a
-  // administrador; a guarda aqui é defensiva, já que o botão nem aparece
-  // pra quem não é administrador (ver renderização mais abaixo).
-  async function cancelarOP(op) {
-    if (!ehAdministrador) return;
-    const registrosDaOP = registros.filter(r => r.ordemProducaoId === op.id).length;
-    const aviso = registrosDaOP > 0
-      ? `Cancelar a OP #${String(op.numero).padStart(3, "0")}? Isso também vai excluir ${registrosDaOP} registro(s) de lançamento já feitos nela. Essa ação não pode ser desfeita.`
-      : `Cancelar a OP #${String(op.numero).padStart(3, "0")}? Essa ação não pode ser desfeita.`;
-    if (!window.confirm(aviso)) return;
-    await onRemoverOrdem(op.id);
-  }
-
-  // Adicionado: monta a grade (tabela) para impressão de todas as etapas
-  // de uma Ordem de Produção específica — mesma tabela sirva para uma OP
-  // ainda em aberto (mostra o que já rodou e o que falta) ou já concluída.
-  function imprimirGradeOP(op) {
-    onImprimirGrade({
-      titulo: `OP #${String(op.numero).padStart(3, "0")} — ${op.clienteNomeSnap || "Sem cliente"}`,
-      subtitulo: (op.itens || []).map(it => `${it.produtoNomeSnap} (${it.quantidade})`).join(", "),
-      geradoEm: new Date().toLocaleString("pt-BR"),
-      anexos: op.anexos || [],
-      // Adicionado: a lista de materiais necessários da OP também vai
-      // para o impresso, pra quem separa os materiais poder levar a folha.
-      materiais: materiaisDaOP(op),
-      colunas: [
-        { key: "ordem", label: "#", align: "right" }, { key: "etapa", label: "Etapa" }, { key: "produto", label: "Produto" },
-        { key: "setor", label: "Departamento" }, { key: "colaboradores", label: "Colaborador(es)" },
-        { key: "status", label: "Status" }, { key: "tempo", label: "Tempo real", align: "right" },
-      ],
-      linhas: op.etapas.map((passo, i) => {
-        const ligados = registros.filter(r => r.ordemProducaoId === op.id && r.ordemEtapaIndex === i);
-        const abertos = ligados.filter(r => r.status === "aberto");
-        const concluidosDaEtapa = ligados.filter(r => r.status === "concluido");
-        const quantidadeConcluida = concluidosDaEtapa.reduce((s, r) => s + (r.quantidadeBoa ?? r.quantidade ?? 0), 0);
-        const tempoTotalReal = concluidosDaEtapa.reduce((s, r) => s + (r.tempoRealSeg || 0), 0);
-        const colaboradoresEnvolvidos = Array.from(new Set(ligados.flatMap(r => r.colaboradorIds || []))).map(nomeColab).join(", ");
-        const status = passo.concluida ? "Concluída" : abertos.length ? `Em aberto (${quantidadeConcluida}/${passo.quantidade})` : quantidadeConcluida > 0 ? `Parcial (${quantidadeConcluida}/${passo.quantidade})` : "Não iniciada";
-        return {
-          ordem: i + 1, etapa: passo.etapaNomeSnap, produto: passo.produtoNomeSnap, setor: passo.setorNomeSnap,
-          colaboradores: colaboradoresEnvolvidos || "—",
-          status, tempo: tempoTotalReal > 0 ? fmtSec(tempoTotalReal) : "—",
-        };
+    }, /*#__PURE__*/React.createElement("span", {
+      className: "small muted",
+      style: {
+        width: 18
+      }
+    }, i + 1, "."), /*#__PURE__*/React.createElement("select", {
+      value: linha.etapaId,
+      onChange: e => updItemEtapa(i, {
+        etapaId: e.target.value,
+        equipamentoId: ''
       }),
+      style: {
+        flex: 1,
+        minWidth: 220
+      }
+    }, /*#__PURE__*/React.createElement("option", {
+      value: ""
+    }, "— selecione a etapa —"), (db.etapasProducao || []).filter(x => x.id === linha.etapaId || !etapasUsadas.includes(x.id)).map(x => {
+      const d2 = db.departamentos.find(d => d.id === x.departamentoId);
+      return /*#__PURE__*/React.createElement("option", {
+        key: x.id,
+        value: x.id
+      }, x.nome, d2 ? ` · ${d2.nome}` : '');
+    })), /*#__PURE__*/React.createElement("span", {
+      className: "small muted",
+      style: {
+        width: 80,
+        textAlign: 'right',
+        fontFamily: 'var(--mono)'
+      }
+    }, et ? `${et.tempoProducao} ${labelUnidadeTempo(et.unidadeTempo)}` : ''), /*#__PURE__*/React.createElement("span", {
+      className: "small",
+      style: {
+        width: 80,
+        textAlign: 'right',
+        fontFamily: 'var(--mono)',
+        fontWeight: 600
+      }
+    }, custo === null ? /*#__PURE__*/React.createElement("span", {
+      className: "muted"
+    }, "informe o lote") : money(custo)), /*#__PURE__*/React.createElement("button", {
+      type: "button",
+      className: "btn danger sm",
+      onClick: () => rmItemEtapa(i)
+    }, "×"));
+  }), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "btn ghost sm",
+    onClick: addItemEtapa,
+    disabled: etapasDisponiveis.length === 0
+  }, etapasDisponiveis.length === 0 ? 'Todas as etapas já foram adicionadas' : '+ Adicionar etapa'), f.etapas.length > 0 && (() => {
+    const linhas = f.etapas.map(l => {
+      const et = (db.etapasProducao || []).find(e => e.id === l.etapaId);
+      if (!et) return null;
+      const dep = db.departamentos.find(d => d.id === et.departamentoId);
+      const min = cargaEtapaMinutos(et, 1, 1); // minutos por peça
+      const media = mediaSalarialDepartamento(db, et.departamentoId);
+      const custoMin = custoPorMinutoDepartamento(db, et.departamentoId);
+      const custo = custoMaoDeObraPorPeca(et, db);
+      return {
+        et,
+        dep,
+        min,
+        media,
+        custoMin,
+        custo
+      };
+    }).filter(Boolean);
+    const totalMin = linhas.reduce((a, l) => a + (l.et.modoTempo === 'peca' ? l.min : 0), 0);
+    const total = linhas.reduce((a, l) => a + (l.custo || 0), 0);
+    const variavel = linhas.some(l => l.et.modoTempo !== 'peca');
+    const semBase = linhas.some(l => l.media === null);
+    return /*#__PURE__*/React.createElement("div", {
+      className: "panel",
+      style: {
+        background: '#fff',
+        marginTop: 10,
+        marginBottom: 0
+      }
+    }, /*#__PURE__*/React.createElement("h3", null, "Custo de produção por peça — tempo × média salarial"), /*#__PURE__*/React.createElement("table", null, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("th", null, "Etapa"), /*#__PURE__*/React.createElement("th", null, "Departamento"), /*#__PURE__*/React.createElement("th", {
+      className: "num"
+    }, "Tempo/peça"), /*#__PURE__*/React.createElement("th", {
+      className: "num"
+    }, "Média salarial"), /*#__PURE__*/React.createElement("th", {
+      className: "num"
+    }, "Custo/min"), /*#__PURE__*/React.createElement("th", {
+      className: "num"
+    }, "Custo/peça"))), /*#__PURE__*/React.createElement("tbody", null, linhas.map((l, i) => /*#__PURE__*/React.createElement("tr", {
+      key: i
+    }, /*#__PURE__*/React.createElement("td", {
+      className: "small"
+    }, l.et.nome), /*#__PURE__*/React.createElement("td", {
+      className: "small muted"
+    }, l.dep ? l.dep.nome : '—'), /*#__PURE__*/React.createElement("td", {
+      className: "num small"
+    }, l.et.modoTempo === 'peca' ? `${l.min.toFixed(2)} min` : /*#__PURE__*/React.createElement("span", {
+      className: "muted"
+    }, "variável")), /*#__PURE__*/React.createElement("td", {
+      className: "num small"
+    }, l.media === null ? /*#__PURE__*/React.createElement("span", {
+      className: "muted"
+    }, "sem equipe") : money(l.media)), /*#__PURE__*/React.createElement("td", {
+      className: "num small"
+    }, l.custoMin === null ? '—' : money(l.custoMin)), /*#__PURE__*/React.createElement("td", {
+      className: "num small"
+    }, /*#__PURE__*/React.createElement("strong", null, l.custo === null ? /*#__PURE__*/React.createElement("span", {
+      className: "muted"
+    }, "—") : money(l.custo))))), /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("td", {
+      colSpan: "2",
+      style: {
+        textAlign: 'right'
+      }
+    }, /*#__PURE__*/React.createElement("strong", null, "Totais")), /*#__PURE__*/React.createElement("td", {
+      className: "num"
+    }, /*#__PURE__*/React.createElement("strong", null, totalMin.toFixed(2), " min")), /*#__PURE__*/React.createElement("td", {
+      colSpan: "2"
+    }), /*#__PURE__*/React.createElement("td", {
+      className: "num"
+    }, /*#__PURE__*/React.createElement("strong", null, money(total)))))), /*#__PURE__*/React.createElement("div", {
+      className: "small muted",
+      style: {
+        marginTop: 8
+      }
+    }, "Base: média salarial dos colaboradores ativos de cada departamento ÷ ", HORAS_MES_PADRAO, "h/mês = custo por minuto, multiplicado pelo tempo da etapa. Total: ", /*#__PURE__*/React.createElement("strong", null, minParaHHMM(totalMin)), " de mão de obra por peça.", variavel && ' Há etapas por lote/equipe cujo custo depende da quantidade da OP.', semBase && ' Há departamentos sem colaboradores cadastrados.'));
+  })())), /*#__PURE__*/React.createElement(Field, {
+    label: "Observações"
+  }, /*#__PURE__*/React.createElement("textarea", {
+    rows: "3",
+    value: f.observacoes,
+    onChange: e => setClassificacao({
+      observacoes: e.target.value
+    }),
+    placeholder: "Detalhes de acabamento, instruções de produção, observações do cliente…"
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "field"
+  }, /*#__PURE__*/React.createElement("label", null, "Ficha técnica — consumo de materiais"), f.fichaTecnica.length === 0 && /*#__PURE__*/React.createElement("div", {
+    className: "small muted",
+    style: {
+      marginBottom: 8
+    }
+  }, "Nenhum material adicionado."), f.fichaTecnica.map((it, i) => {
+    const mat = db.materiais.find(m => m.id === it.materialId);
+    return /*#__PURE__*/React.createElement("div", {
+      key: i,
+      style: {
+        display: 'flex',
+        gap: 8,
+        marginBottom: 6,
+        alignItems: 'center'
+      }
+    }, /*#__PURE__*/React.createElement("select", {
+      value: it.materialId,
+      onChange: e => updItemFicha(i, {
+        materialId: e.target.value
+      }),
+      style: {
+        flex: 2
+      }
+    }, db.materiais.filter(m => m.id === it.materialId || !materiaisUsados.includes(m.id)).map(m => /*#__PURE__*/React.createElement("option", {
+      key: m.id,
+      value: m.id
+    }, m.codigo ? `${m.codigo} · ${m.nome}` : m.nome))), /*#__PURE__*/React.createElement("input", {
+      type: "number",
+      step: "0.001",
+      value: it.quantidade,
+      onChange: e => updItemFicha(i, {
+        quantidade: e.target.value
+      }),
+      style: {
+        flex: 1
+      }
+    }), /*#__PURE__*/React.createElement("span", {
+      className: "small muted",
+      style: {
+        width: 40
+      }
+    }, mat ? mat.unidade : ''), /*#__PURE__*/React.createElement("button", {
+      type: "button",
+      className: "btn danger sm",
+      onClick: () => rmItemFicha(i)
+    }, "×"));
+  }), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "btn ghost sm",
+    onClick: addItemFicha,
+    disabled: materiaisDisponiveis.length === 0
+  }, materiaisDisponiveis.length === 0 ? 'Todos os materiais já foram adicionados' : '+ Adicionar material')), /*#__PURE__*/React.createElement("div", {
+    className: "modal-actions"
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "btn ghost",
+    onClick: onClose
+  }, "Cancelar"), /*#__PURE__*/React.createElement("button", {
+    className: "btn accent",
+    onClick: () => onSave(f),
+    disabled: !f.codigo || !f.nome
+  }, "Salvar")));
+}
+
+/* ==========================================================
+   4. PEDIDOS
+========================================================== */
+// itens do pedido, aceitando o formato antigo (um produto só)
+function itensPedido(p) {
+  if (Array.isArray(p.itens) && p.itens.length) return p.itens;
+  if (p.produtoId) return [{
+    id: 'legado',
+    produtoId: p.produtoId,
+    quantidade: p.quantidade,
+    observacao: ''
+  }];
+  return [];
+}
+function totalPecasPedido(p) {
+  return itensPedido(p).reduce((s, i) => s + num(i.quantidade), 0);
+}
+
+// monta as etapas de uma OP a partir do produto
+function montarEtapasOP(produto, d) {
+  const doProduto = etapasDoProduto(produto);
+  const lista = doProduto.length ? doProduto.map(x => ({
+    def: d.etapasProducao.find(e => e.id === x.etapaId),
+    equipamentoId: x.equipamentoId
+  })).filter(x => x.def) : d.etapasProducao.map(def => ({
+    def,
+    equipamentoId: ''
+  }));
+  return lista.map(({
+    def,
+    equipamentoId
+  }) => ({
+    etapaProducaoId: def.id,
+    departamentoId: def.departamentoId || null,
+    nome: def.nome || '(etapa removida)',
+    modoTempo: def.modoTempo || 'peca',
+    tempoProducao: def.tempoProducao || 0,
+    unidadeTempo: def.unidadeTempo || 'seg',
+    tamanhoEquipe: def.tamanhoEquipe || '',
+    tamanhoLote: def.tamanhoLote || '',
+    equipamentoId: equipamentoId || '',
+    // já vem alocado do cadastro do produto
+    status: 'Não iniciada',
+    qtdRecebida: 0,
+    qtdConcluida: 0,
+    responsaveis: [],
+    dataInicio: '',
+    dataConclusao: '',
+    observacao: ''
+  }));
+}
+
+/* Gera uma OP por produto do pedido.
+   As OPs herdam o número do pedido e recebem sufixo sequencial: 00101a, 00101b, 00101c… */
+function gerarOPsDoPedido(pedido, d) {
+  const itens = itensPedido(pedido);
+  const existentes = d.ops.filter(o => o.pedidoId === pedido.id);
+  // trava de duplicidade: um item só pode ter uma OP
+  const jaExistentes = existentes.length;
+  let criadas = 0;
+  itens.forEach((item, i) => {
+    const produto = d.produtos.find(p => p.id === item.produtoId);
+    if (!produto) return;
+    if (existentes.some(o => o.itemId === item.id)) return; // já tem OP para este item
+    const sufixo = itens.length > 1 ? sufixoPorIndice(jaExistentes + criadas) : '';
+    d.ops.push({
+      id: uid(),
+      numero: pedido.numero,
+      sufixo,
+      pedidoId: pedido.id,
+      itemId: item.id,
+      produtoId: item.produtoId,
+      quantidade: item.quantidade,
+      entrega: pedido.prazoEntrega,
+      observacaoItem: item.observacao || '',
+      etapas: montarEtapasOP(produto, d),
+      anexos: (item.anexos || []).map(a => ({
+        ...a
+      })) // arquivos do produto no pedido seguem para a OP
+    });
+    criadas++;
+  });
+  if (criadas > 0) d.pedidos = d.pedidos.map(p => p.id === pedido.id ? {
+    ...p,
+    status: 'Em produção'
+  } : p);
+  return criadas;
+}
+function Pedidos({
+  db,
+  update,
+  setTab
+}) {
+  const [modal, setModal] = useState(null);
+  const [ficha, setFicha] = useState(null);
+  function save(p) {
+    update(d => {
+      if (p.id) {
+        d.pedidos = d.pedidos.map(x => x.id === p.id ? p : x);
+      } else {
+        const numero = d.seq.pedido++;
+        d.pedidos.push({
+          ...p,
+          id: uid(),
+          numero,
+          status: 'Aberto'
+        });
+      }
+      return d;
+    });
+    setModal(null);
+  }
+  function remove(id) {
+    if (!confirm('Excluir este pedido? As OPs vinculadas continuarão existindo.')) return;
+    update(d => {
+      d.pedidos = d.pedidos.filter(p => p.id !== id);
+      return d;
     });
   }
-
-  // Corrigido/reorganizado: o gestor pode iniciar qualquer departamento da
-  // OP a qualquer momento — não é mais preciso concluir um para liberar o
-  // próximo. Só "quem" (colaborador) e "quando" (início) precisam ser
-  // definidos; o quê, quanto e a meta de tempo já vêm da OP.
-  async function iniciarDepartamento(op, index, dadosForm) {
-    const passo = op.etapas[index];
-    const quantidadeEscolhida = dadosForm.quantidade ?? passo.quantidade;
-    const inicioDate = new Date(dadosForm.inicio);
-    const duracaoSeg = duracaoEtapaOP(passo, quantidadeEscolhida || 1);
-    const projecaoFim = isNaN(inicioDate.getTime()) ? null : new Date(inicioDate.getTime() + duracaoSeg * 1000);
-    const registro = {
-      id: uid(), status: "aberto",
-      setorId: passo.setorId, produtoId: passo.produtoId, etapaId: passo.etapaId,
-      colaboradorIds: dadosForm.colaboradorIds,
-      setorNomeSnap: passo.setorNomeSnap, produtoNomeSnap: passo.produtoNomeSnap, etapaNomeSnap: passo.etapaNomeSnap,
-      quantidade: quantidadeEscolhida, inicio: dadosForm.inicio,
-      projecaoFimISO: projecaoFim ? projecaoFim.toISOString() : null,
-      tempoEstimadoBaseSeg: passo.tempoEstimadoSeg, tipoCalculoEtapa: passo.tipoCalculo,
-      ordemProducaoId: op.id, ordemProducaoNumero: op.numero, ordemEtapaIndex: index,
-      ...(dadosForm.extras || {}),
-      criadoEm: new Date().toISOString(),
-    };
-    await onSalvarRegistro(registro);
-    setIniciandoChave(null);
+  function gerarOP(pedido) {
+    if (db.etapasProducao.length === 0) {
+      alert('Nenhuma etapa de produção cadastrada. Cadastre em "Departamentos & Etapas".');
+      return;
+    }
+    const itens = itensPedido(pedido);
+    if (itens.length === 0) {
+      alert('Este pedido não tem produtos.');
+      return;
+    }
+    if (!podeGerarOP(pedido)) {
+      alert(`Este pedido está como "${pedido.status}". Libere-o para produção antes de gerar a OP.`);
+      return;
+    }
+    const existentes = db.ops.filter(o => o.pedidoId === pedido.id);
+    if (itens.every(it => existentes.some(o => o.itemId === it.id))) {
+      alert('Todos os produtos deste pedido já têm OP. Use a aba Produção para visualizar ou editar.');
+      return;
+    }
+    update(d => {
+      gerarOPsDoPedido(pedido, d);
+      return d;
+    });
+    if (setTab) setTab('producao');
   }
-
-  const abertas = [...ordensProducao.filter(o => o.status === "aberta" && opCorresponde(o, buscaOP))].sort((a, b) => new Date(b.criadaEm) - new Date(a.criadaEm));
-  const concluidas = [...ordensProducao.filter(o => o.status === "concluida" && opCorresponde(o, buscaOP))].sort((a, b) => new Date(b.concluidaEm || 0) - new Date(a.concluidaEm || 0));
-
-  return (
-    <div>
-      <Card style={{ marginBottom: 16 }}>
-        <div style={{ fontSize: 15, fontWeight: 800, fontFamily: FONT_DISPLAY, marginBottom: 6, color: "#1c2b39" }}>Abrir nova Ordem de Produção</div>
-        <div style={{ fontSize: 12.5, color: "#6b5d49", marginBottom: 12 }}>
-          Todo processo de produção começa por aqui: ao abrir a OP, todos os departamentos (Corte, Silk, Preparação e os demais) já ficam prontos com o tempo dimensionado — o gestor só define quem e quando faz cada um, sem perder de vista o prazo de entrega.
-        </div>
-        {produtosComSequencia.length === 0 ? (
-          <div style={{ fontSize: 13.5, color: "#6b5d49", background: "#f4efe2", padding: 12, borderRadius: 8 }}>
-            Nenhum produto tem etapas vinculadas ainda. Cadastre a sequência em Cadastros → Produtos.
-          </div>
-        ) : (
-          <>
-            <Field label="Cliente (opcional)">
-              <Select value={clienteIdNovo} onChange={e => setClienteIdNovo(e.target.value)}>
-                <option value="">Sem cliente definido</option>
-                {(clientes || []).map(c => <option key={c.id} value={c.id}>{c.nome}</option>)}
-              </Select>
-              {(!clientes || clientes.length === 0) && (
-                <div style={{ fontSize: 11.5, color: "#a3937a", marginTop: 5 }}>Cadastre clientes em Cadastros → Clientes.</div>
-              )}
-            </Field>
-
-            <Field label="Produtos do pedido">
-              {produtosDisponiveisParaAdicionar.length > 0 ? (
-                <>
-                  <div style={{ display: "flex", gap: 6 }}>
-                    <Select value={produtoParaAdicionar} onChange={e => setProdutoParaAdicionar(e.target.value)} style={{ flex: 1 }}>
-                      <option value="">Produto…</option>
-                      {produtosDisponiveisParaAdicionar.map(p => <option key={p.id} value={p.id}>{p.nome}</option>)}
-                    </Select>
-                    <input type="number" min="1" step="1" value={quantidadeParaAdicionar} onChange={e => setQuantidadeParaAdicionar(e.target.value)} placeholder="Qtd." style={{ ...inputStyle, width: 78 }} />
-                  </div>
-                  <button type="button" onClick={adicionarItem} disabled={!podeAdicionarItem} style={{
-                    marginTop: 8, width: "100%", border: "1.5px solid " + (podeAdicionarItem ? "#2f4a63" : "#d9cfb7"),
-                    background: podeAdicionarItem ? "#2f4a63" : "#f4efe2", color: podeAdicionarItem ? "#fff" : "#a3937a",
-                    borderRadius: 8, padding: "8px 12px", fontSize: 13, fontWeight: 700,
-                    cursor: podeAdicionarItem ? "pointer" : "not-allowed", display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
-                  }}>
-                    <Plus size={15} /> Adicionar produto ao pedido
-                  </button>
-                  {!podeAdicionarItem && (produtoParaAdicionar || quantidadeParaAdicionar) && (
-                    <div style={{ fontSize: 11.5, color: "#b5820a", marginTop: 5 }}>
-                      {!produtoParaAdicionar ? "Escolha um produto." : "Informe uma quantidade maior que zero."}
-                    </div>
-                  )}
-                </>
-              ) : (
-                <div style={{ fontSize: 11.5, color: "#a3937a" }}>Todos os produtos disponíveis já foram adicionados.</div>
-              )}
-              {/* Corrigido: a lista de produtos já adicionados agora aparece
-                  ABAIXO do formulário de adicionar, não acima. Antes, ao
-                  adicionar um item, a lista surgia empurrando o botão
-                  "Adicionar" para baixo — e o botão "remover" do item novo
-                  acabava ocupando exatamente a posição da tela onde o toque
-                  ainda estava, removendo o item por engano na hora. */}
-              {itensNovo.length > 0 && (
-                <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 10 }}>
-                  {itensNovo.map(it => {
-                    const nomeProd = produtos.find(p => p.id === it.produtoId)?.nome || "—";
-                    return (
-                      <div key={it.produtoId} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", background: "#fff", border: "1px solid #e6ddc8", borderRadius: 8, padding: "7px 10px" }}>
-                        <span style={{ fontSize: 13, color: "#2a2015" }}>{nomeProd} — {it.quantidade} peças</span>
-                        <IconButton onClick={() => removerItem(it.produtoId)} danger title="Remover"><X size={14} /></IconButton>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </Field>
-
-            {tempoTotalPreview > 0 && (
-              <div style={{ background: "#f4ecd8", border: "1px solid #cfe3e0", borderRadius: 8, padding: "9px 12px", marginBottom: 14 }}>
-                <div style={{ fontSize: 12.5, color: "#1c2b39" }}>
-                  Tempo de produção deste pedido: <b>{fmtSec(tempoTotalPreview)}</b> ({itensNovo.length} produto{itensNovo.length !== 1 ? "s" : ""})
-                </div>
-                {previsaoPorDepartamento.length > 0 && (
-                  <div style={{ marginTop: 8, paddingTop: 8, borderTop: "1px dashed #cdb98a" }}>
-                    <div style={{ fontSize: 11, fontWeight: 700, color: "#6b5d49", marginBottom: 4, textTransform: "uppercase", letterSpacing: 0.4 }}>
-                      Por departamento · {HORAS_PRODUTIVAS_DIA}h de produção por dia
-                    </div>
-                    <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                      {previsaoPorDepartamento.map(d => (
-                        <div key={d.nome} style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8, fontSize: 12, color: "#2a2015" }}>
-                          <span>
-                            {d.nome}
-                            {d.comprometidoSeg > 0 && <span style={{ color: "#a3937a" }}> ({fmtSec(d.comprometidoSeg)} já na fila + {fmtSec(d.novoSeg)} deste pedido)</span>}
-                          </span>
-                          <b style={{ whiteSpace: "nowrap" }}>{d.previsao.toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}</b>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-                {previsaoEntregaComFila && (
-                  <div style={{ fontSize: 12.5, color: "#1c2b39", marginTop: 8, paddingTop: 8, borderTop: "1px dashed #cdb98a" }}>
-                    Previsão de entrega (departamento mais carregado): <b>{previsaoEntregaComFila.toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" })}</b>
-                  </div>
-                )}
-              </div>
-            )}
-            <Field label="Data de entrega">
-              <input type="date" value={dataEntregaNova} onChange={e => setDataEntregaNova(e.target.value)} style={inputStyle} />
-              <div style={{ fontSize: 11.5, color: "#a3937a", marginTop: 5 }}>Prazo máximo — usada para classificar a OP como dentro ou fora do prazo.</div>
-              {previsaoDentroDoPrazo != null && (
-                <div style={{
-                  fontSize: 11.5, fontWeight: 700, marginTop: 6, display: "inline-block", padding: "3px 9px", borderRadius: 999,
-                  color: previsaoDentroDoPrazo ? "#1a7a4c" : "#b13232", background: previsaoDentroDoPrazo ? "#e6f4ec" : "#f8e6e6",
-                }}>
-                  {previsaoDentroDoPrazo ? "Prazo compatível com a fila atual" : "Fila atual pode atrasar esse prazo — considere uma data mais folgada"}
-                </div>
-              )}
-            </Field>
-
-            <Field label="Anexo de referência (imagem ou vídeo, opcional)">
-              {anexosNovaOP.length > 0 && (
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8, marginBottom: 10 }}>
-                  {anexosNovaOP.map(a => (
-                    <div key={a.id} style={{ position: "relative", border: "1px solid #e6ddc8", borderRadius: 8, overflow: "hidden", background: "#fff" }}>
-                      {a.tipo && a.tipo.startsWith("image/") ? (
-                        <img src={a.dataUrl} alt={a.nome} style={{ width: "100%", height: 70, objectFit: "cover", display: "block" }} />
-                      ) : a.tipo && a.tipo.startsWith("video/") ? (
-                        <video src={a.dataUrl} style={{ width: "100%", height: 70, objectFit: "cover", display: "block", background: "#000" }} muted />
-                      ) : (
-                        <div style={{ width: "100%", height: 70, display: "flex", alignItems: "center", justifyContent: "center", color: "#a3937a" }}>
-                          <Paperclip size={22} />
-                        </div>
-                      )}
-                      <div style={{ fontSize: 9.5, color: "#6b5d49", padding: "3px 5px", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{a.nome}</div>
-                      <button onClick={() => removerAnexoNovaOP(a.id)} style={{ position: "absolute", top: 3, right: 3, background: "rgba(255,255,255,0.9)", border: "none", borderRadius: 999, width: 20, height: 20, cursor: "pointer", color: "#b13232", display: "flex", alignItems: "center", justifyContent: "center" }}>
-                        <X size={12} />
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              )}
-              <input ref={anexoNovaOPInputRef} type="file" multiple accept="image/*,video/*" style={{ display: "none" }}
-                onChange={e => { anexarArquivoNovaOP(e.target.files); e.target.value = ""; }} />
-              <button type="button" onClick={() => anexoNovaOPInputRef.current && anexoNovaOPInputRef.current.click()} style={{
-                fontSize: 12.5, border: "1px dashed #cdb98a", background: "#f4ecd8", borderRadius: 7, padding: "7px 11px",
-                cursor: "pointer", display: "flex", alignItems: "center", gap: 6, color: "#2f4a63", fontWeight: 700,
-              }}><Paperclip size={14} /> Anexar imagem ou vídeo</button>
-              <div style={{ fontSize: 11.5, color: "#a3937a", marginTop: 5 }}>Ex.: arte aprovada, foto de amostra, vídeo de instrução. Aparece no relatório impresso desta OP.</div>
-            </Field>
-
-            <PrimaryButton onClick={abrirOP} disabled={!podeAbrir} style={{ width: "100%" }}>
-              <ListOrdered size={16} /> Abrir OP
-            </PrimaryButton>
-          </>
-        )}
-      </Card>
-
-      <Card style={{ marginBottom: 16, padding: 12 }}>
-        <Field label="Pesquisar ordens de produção">
-          <input value={buscaOP} onChange={e => setBuscaOP(e.target.value)} placeholder="Nº da OP, cliente ou produto…" style={inputStyle} />
-        </Field>
-      </Card>
-
-      <input
-        ref={anexoOPInputRef} type="file" multiple accept="image/*,video/*" style={{ display: "none" }}
-        onChange={e => {
-          const op = ordensProducao.find(o => o.id === anexandoOPId);
-          if (op) anexarArquivoOP(op, e.target.files);
-          e.target.value = "";
-        }}
-      />
-
-      <div style={{ fontSize: 13, fontWeight: 700, color: "#6b5d49", margin: "4px 2px 8px" }}>Ordens em aberto</div>
-      {abertas.length === 0 && <div style={{ fontSize: 13.5, color: "#a3937a", padding: "8px 2px", marginBottom: 16 }}>{buscaOP ? "Nenhuma ordem em aberto encontrada para essa pesquisa." : "Nenhuma ordem de produção em aberto."}</div>}
-      <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 20 }}>
-        {abertas.map(op => {
-          const prazo = avaliarPrazoOP(op);
-          const cronograma = cronogramaEstaticoOP(op);
-          const tempoTotal = op.tempoEstimadoTotalSeg ?? cronograma.reduce((s, p) => s + p.duracaoEstimadaSeg, 0);
-          const pendentes = op.etapas.filter(e => !e.concluida).length;
-          const expandido = expandidoId === op.id;
-          const materiaisOP = expandido ? materiaisDaOP(op) : [];
-          return (
-            <Card key={op.id} style={{ padding: 14 }}>
-              <div onClick={() => alternarExpandidoOP(op.id)} style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8, marginBottom: 8, cursor: "pointer" }}>
-                <div style={{ display: "flex", alignItems: "flex-start", gap: 6 }}>
-                  {expandido ? <ChevronUp size={16} style={{ marginTop: 3, color: "#a3937a", flexShrink: 0 }} /> : <ChevronDown size={16} style={{ marginTop: 3, color: "#a3937a", flexShrink: 0 }} />}
-                  <div>
-                    <div style={{ fontWeight: 800, fontSize: 14, color: "#1c2b39" }}>OP #{String(op.numero).padStart(3, "0")} · {op.clienteNomeSnap || "Sem cliente"}</div>
-                    <div style={{ fontSize: 12, color: "#a3937a" }}>{(op.itens || []).map(it => `${it.produtoNomeSnap} (${it.quantidade})`).join(", ")} · aberta em {new Date(op.criadaEm).toLocaleDateString("pt-BR")}{op.anexos && op.anexos.length > 0 ? ` · 📎 ${op.anexos.length}` : ""}</div>
-                  </div>
-                </div>
-                <div style={{ display: "flex", flexShrink: 0 }}>
-                  <IconButton onClick={(e) => { e.stopPropagation(); imprimirGradeOP(op); }} title="Imprimir grade da OP"><Printer size={15} /></IconButton>
-                  {ehAdministrador && (
-                    <IconButton onClick={(e) => { e.stopPropagation(); cancelarOP(op); }} danger title="Cancelar OP (exclui também os registros de lançamento)"><Trash2 size={15} /></IconButton>
-                  )}
-                </div>
-              </div>
-
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: expandido ? 10 : 0 }}>
-                {prazo && (
-                  <span style={{ fontSize: 11, fontWeight: 700, color: prazo.color, background: prazo.bg, padding: "3px 9px", borderRadius: 999 }}>{prazo.label}</span>
-                )}
-                {op.dataEntrega && (
-                  <span style={{ fontSize: 11, fontWeight: 700, color: "#6b5d49", background: "#f4efe2", padding: "3px 9px", borderRadius: 999 }}>
-                    Entrega: {new Date(op.dataEntrega + "T12:00:00").toLocaleDateString("pt-BR")}
-                  </span>
-                )}
-                {tempoTotal > 0 && (
-                  <span style={{ fontSize: 11, fontWeight: 700, color: "#6b5d49", background: "#f4efe2", padding: "3px 9px", borderRadius: 999 }}>
-                    Total estimado: {fmtSec(tempoTotal)}
-                  </span>
-                )}
-                <span style={{ fontSize: 11, fontWeight: 700, color: "#6b5d49", background: "#f4efe2", padding: "3px 9px", borderRadius: 999 }}>
-                  {pendentes === 0 ? "Todos os departamentos concluídos" : `${pendentes} departamento${pendentes !== 1 ? "s" : ""} pendente${pendentes !== 1 ? "s" : ""}`}
-                </span>
-              </div>
-
-              {expandido && (
-                <div style={{ display: "flex", gap: 6, marginTop: 4, marginBottom: 4 }}>
-                  {[
-                    { key: "atividades", label: "Atividades" },
-                    { key: "materiais", label: `Materiais${materiaisOP.length ? ` (${materiaisOP.length})` : ""}` },
-                    { key: "arquivos", label: `Arquivos${(op.anexos || []).length ? ` (${op.anexos.length})` : ""}` },
-                  ].map(t => (
-                    <button key={t.key} onClick={(e) => { e.stopPropagation(); setAbaDetalheOP(t.key); }} style={{
-                      flex: 1, border: "1.5px solid " + (abaDetalheOP === t.key ? "#2f4a63" : "#d9cfb7"),
-                      background: abaDetalheOP === t.key ? "#2f4a63" : "#fff", color: abaDetalheOP === t.key ? "#fff" : "#6b5d49",
-                      borderRadius: 8, padding: "7px 4px", fontSize: 12, fontWeight: 700, cursor: "pointer",
-                    }}>{t.label}</button>
-                  ))}
-                </div>
-              )}
-
-              {expandido && abaDetalheOP === "materiais" && (
-                <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px solid #efe8d8" }}>
-                  {materiaisOP.length === 0 ? (
-                    <div style={{ fontSize: 12.5, color: "#a3937a" }}>Nenhum material vinculado aos produtos deste pedido.</div>
-                  ) : (
-                    <div style={{ border: "1px solid #e6ddc8", borderRadius: 8, overflow: "hidden" }}>
-                      {materiaisOP.map((m, idx) => {
-                        const faltando = m.estoque != null && m.estoque < m.quantidade;
-                        return (
-                          <div key={m.id} style={{
-                            display: "flex", justifyContent: "space-between", alignItems: "center",
-                            padding: "6px 10px", fontSize: 12, color: "#2a2015",
-                            borderTop: idx > 0 ? "1px solid #f4efe2" : "none",
-                            background: faltando ? "#f8e6e6" : "transparent",
-                          }}>
-                            <span>{m.nome}</span>
-                            <span style={{ textAlign: "right" }}>
-                              <b>{m.quantidade} {m.unidade}</b>
-                              {m.estoque != null && (
-                                <span style={{ fontSize: 10.5, color: faltando ? "#b13232" : "#a3937a", marginLeft: 6 }}>
-                                  {faltando ? `falta ${Math.round((m.quantidade - m.estoque) * 1000) / 1000} ${m.unidade}` : `estoque: ${m.estoque} ${m.unidade}`}
-                                </span>
-                              )}
-                            </span>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {expandido && abaDetalheOP === "arquivos" && (
-                <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px solid #efe8d8" }}>
-                  {(op.anexos || []).length === 0 ? (
-                    <div style={{ fontSize: 12.5, color: "#a3937a", marginBottom: 10 }}>Nenhum arquivo anexado a este pedido ainda.</div>
-                  ) : (
-                    <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8, marginBottom: 10 }}>
-                      {op.anexos.map(a => (
-                        <div key={a.id} style={{ position: "relative", border: "1px solid #e6ddc8", borderRadius: 8, overflow: "hidden", background: "#fff" }}>
-                          {a.tipo && a.tipo.startsWith("image/") ? (
-                            <a href={a.dataUrl} download={a.nome}><img src={a.dataUrl} alt={a.nome} style={{ width: "100%", height: 80, objectFit: "cover", display: "block" }} /></a>
-                          ) : a.tipo && a.tipo.startsWith("video/") ? (
-                            <video src={a.dataUrl} controls style={{ width: "100%", height: 80, objectFit: "cover", display: "block", background: "#000" }} />
-                          ) : (
-                            <a href={a.dataUrl} download={a.nome} style={{ width: "100%", height: 80, display: "flex", alignItems: "center", justifyContent: "center", color: "#a3937a" }}><Paperclip size={22} /></a>
-                          )}
-                          <div style={{ fontSize: 9.5, color: "#6b5d49", padding: "3px 5px", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{a.nome}</div>
-                          <button onClick={(e) => { e.stopPropagation(); removerAnexoOP(op, a.id); }} style={{ position: "absolute", top: 3, right: 3, background: "rgba(255,255,255,0.9)", border: "none", borderRadius: 999, width: 20, height: 20, cursor: "pointer", color: "#b13232", display: "flex", alignItems: "center", justifyContent: "center" }}>
-                            <X size={12} />
-                          </button>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                  <button type="button" onClick={(e) => { e.stopPropagation(); setAnexandoOPId(op.id); anexoOPInputRef.current && anexoOPInputRef.current.click(); }} style={{
-                    fontSize: 12.5, border: "1px dashed #cdb98a", background: "#f4ecd8", borderRadius: 7, padding: "7px 11px",
-                    cursor: "pointer", display: "flex", alignItems: "center", gap: 6, color: "#2f4a63", fontWeight: 700,
-                  }}><Paperclip size={14} /> Anexar imagem ou vídeo</button>
-                </div>
-              )}
-
-              {expandido && abaDetalheOP === "atividades" && (
-              <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 10, paddingTop: 10, borderTop: "1px solid #efe8d8" }}>
-                {cronograma.map((passo, i) => {
-                  const chave = `${op.id}:${i}`;
-                  const registrosDaEtapa = registros.filter(r => r.ordemProducaoId === op.id && r.ordemEtapaIndex === i);
-                  const abertosDaEtapa = registrosDaEtapa.filter(r => r.status === "aberto");
-                  const concluidosDaEtapa = registrosDaEtapa.filter(r => r.status === "concluido");
-                  const quantidadeConcluida = concluidosDaEtapa.reduce((s, r) => s + (r.quantidadeBoa ?? r.quantidade ?? 0), 0);
-                  const quantidadeAlocadaAberta = abertosDaEtapa.reduce((s, r) => s + (r.quantidade ?? 0), 0);
-                  // Corrigido: uma etapa "por peça" agora pode ser dividida
-                  // entre mais de um colaborador/dia — o saldo que ainda
-                  // não foi nem concluído nem alocado num registro em
-                  // aberto continua disponível pra "Iniciar" de novo.
-                  const saldoRestante = Math.max(0, Math.round((passo.quantidade - quantidadeConcluida - quantidadeAlocadaAberta) * 1000) / 1000);
-                  const setorObj = setores.find(s => s.id === passo.setorId);
-                  const emAndamento = abertosDaEtapa.length > 0;
-                  // Adicionado: na etapa de Preparação, mostra a lista de
-                  // materiais necessários pra essa quantidade — cruza a
-                  // ficha de consumo do produto (Cadastros → Produtos)
-                  // com a quantidade pedida nessa etapa da OP, pra quem
-                  // for separar os materiais já saber quanto pegar.
-                  const ehPreparacao = (passo.setorNomeSnap || "").toLowerCase().includes("preparaç") || (passo.setorNomeSnap || "").toLowerCase().includes("preparac");
-                  const materiaisNecessarios = ehPreparacao
-                    ? (consumosMaterial || []).filter(c => c.produtoId === passo.produtoId).map(c => {
-                        const material = (materiais || []).find(m => m.id === c.materialId);
-                        return {
-                          id: c.id, nome: material?.nome || "—", unidade: material?.unidade || "",
-                          quantidadeNecessaria: Math.round((c.quantidadePorPeca || 0) * passo.quantidade * 1000) / 1000,
-                        };
-                      })
-                    : [];
-                  return (
-                    <div key={i} style={{
-                      borderRadius: 8, padding: "8px 10px",
-                      background: passo.concluida ? "#e6f4ec" : emAndamento ? "#fdf3e0" : "#f7f2e6",
-                      border: passo.concluida ? "1px solid #bfe3cf" : emAndamento ? "1px solid #f2ddab" : "1px solid #efe8d8",
-                    }}>
-                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
-                        <div>
-                          <div style={{ fontSize: 12.5, fontWeight: 700, color: passo.concluida ? "#1a7a4c" : emAndamento ? "#8a6510" : "#2a2015" }}>
-                            {passo.concluida ? "✓ " : ""}{i + 1}. {passo.etapaNomeSnap} <span style={{ fontWeight: 500, color: "#a3937a" }}>({passo.setorNomeSnap} · {passo.produtoNomeSnap})</span>
-                          </div>
-                          <div style={{ fontSize: 11, color: "#a3937a" }}>
-                            {fmtSec(passo.duracaoEstimadaSeg)} · prev. {passo.inicioPlanejado.toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit" })} {passo.inicioPlanejado.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}
-                            {!passo.concluida && (quantidadeConcluida > 0 || quantidadeAlocadaAberta > 0) && ` · ${quantidadeConcluida}/${passo.quantidade} peças concluídas`}
-                          </div>
-                        </div>
-                        {passo.concluida ? (
-                          <StatusDot cor="verde" />
-                        ) : saldoRestante <= 0 ? (
-                          <span style={{ fontSize: 10.5, fontWeight: 700, color: "#8a6510" }}>Em aberto</span>
-                        ) : (
-                          <button onClick={() => setIniciandoChave(iniciandoChave === chave ? null : chave)} style={{
-                            fontSize: 11.5, fontWeight: 700, color: "#fff", background: "#2f4a63", border: "none",
-                            borderRadius: 7, padding: "6px 10px", cursor: "pointer", display: "flex", alignItems: "center", gap: 4,
-                          }}>
-                            <Play size={12} /> {quantidadeConcluida > 0 || quantidadeAlocadaAberta > 0 ? `Iniciar restante (${saldoRestante})` : "Iniciar"}
-                          </button>
-                        )}
-                      </div>
-                      {materiaisNecessarios.length > 0 && (() => {
-                        // Adicionado: checklist de separação — cada material
-                        // pode ser marcado como separado, e a marcação fica
-                        // salva na própria etapa da OP (persiste ao recarregar
-                        // e é vista por qualquer pessoa que abrir a ordem).
-                        const separados = passo.materiaisSeparados || [];
-                        const totalSeparados = materiaisNecessarios.filter(m => separados.includes(m.id)).length;
-                        const tudoSeparado = totalSeparados === materiaisNecessarios.length;
-                        return (
-                          <div style={{ marginTop: 8, paddingTop: 8, borderTop: "1px dashed #d9cfb7" }}>
-                            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 5 }}>
-                              <span style={{ fontSize: 11, fontWeight: 700, color: "#6b5d49" }}>Separação de materiais para {passo.quantidade} peças</span>
-                              <span style={{
-                                fontSize: 10.5, fontWeight: 700, padding: "2px 8px 2px 7px", borderRadius: "3px 8px 8px 3px",
-                                color: tudoSeparado ? "#1a7a4c" : "#8a6510", background: tudoSeparado ? "#e6f4ec" : "#fdf3e0",
-                                border: `1px dashed ${tudoSeparado ? "#1a7a4c" : "#b5820a"}`,
-                              }}>
-                                {tudoSeparado ? "✓ tudo separado" : `${totalSeparados}/${materiaisNecessarios.length} separados`}
-                              </span>
-                            </div>
-                            <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
-                              {materiaisNecessarios.map(m => {
-                                const marcado = separados.includes(m.id);
-                                return (
-                                  <label key={m.id} style={{
-                                    display: "flex", alignItems: "center", gap: 8, cursor: "pointer",
-                                    background: marcado ? "#e6f4ec" : "#fff", border: `1px solid ${marcado ? "#bfe3cf" : "#e6ddc8"}`,
-                                    borderRadius: 7, padding: "6px 9px",
-                                  }}>
-                                    <input
-                                      type="checkbox" checked={marcado}
-                                      onChange={() => alternarMaterialSeparado(op, i, m.id)}
-                                      style={{ width: 16, height: 16, flexShrink: 0 }}
-                                    />
-                                    <span style={{ flex: 1, fontSize: 12, color: "#2a2015", textDecoration: marcado ? "line-through" : "none", opacity: marcado ? 0.65 : 1 }}>{m.nome}</span>
-                                    <span style={{ fontSize: 12, fontWeight: 700, color: marcado ? "#1a7a4c" : "#2a2015" }}>{m.quantidadeNecessaria} {m.unidade}</span>
-                                  </label>
-                                );
-                              })}
-                            </div>
-                          </div>
-                        );
-                      })()}
-                      {abertosDaEtapa.length > 0 && (
-                        <div style={{ marginTop: 6, display: "flex", flexDirection: "column", gap: 3 }}>
-                          {abertosDaEtapa.map(r => (
-                            <div key={r.id} style={{ fontSize: 11, color: "#8a6510" }}>
-                              {(r.colaboradorIds || []).map(nomeColab).join(", ")} · {r.quantidade} peças em aberto
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                      {iniciandoChave === chave && (
-                        <IniciarEtapaOPForm
-                          passo={passo} setorObj={setorObj} quantidadeAlvo={saldoRestante}
-                          colaboradores={colaboradores} equipes={equipes} equipamentos={equipamentos}
-                          registros={registros} podeAutorizarCargaExtra={podeAutorizarCargaExtra} feriados={feriados}
-                          onIniciar={(dadosForm) => iniciarDepartamento(op, i, dadosForm)}
-                          onCancelar={() => setIniciandoChave(null)}
-                        />
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-              )}
-            </Card>
-          );
-        })}
-      </div>
-
-      <div style={{ fontSize: 13, fontWeight: 700, color: "#6b5d49", margin: "4px 2px 8px" }}>Ordens concluídas</div>
-      {concluidas.length === 0 && <div style={{ fontSize: 13.5, color: "#a3937a", padding: "8px 2px" }}>{buscaOP ? "Nenhuma ordem concluída encontrada para essa pesquisa." : "Nenhuma ordem de produção concluída ainda."}</div>}
-      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-        {concluidas.slice(0, 30).map(op => {
-          const expandido = expandidoId === op.id;
-          const duracaoSeg = op.concluidaEm ? (new Date(op.concluidaEm) - new Date(op.criadaEm)) / 1000 : null;
-          const prazo = avaliarPrazoOP(op);
-          return (
-            <Card key={op.id} style={{ padding: 0, overflow: "hidden" }}>
-              <div onClick={() => setExpandidoId(expandido ? null : op.id)} style={{ padding: "12px 14px", display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer" }}>
-                <div style={{ display: "flex", alignItems: "flex-start", gap: 6 }}>
-                  {expandido ? <ChevronUp size={16} style={{ marginTop: 2, color: "#a3937a", flexShrink: 0 }} /> : <ChevronDown size={16} style={{ marginTop: 2, color: "#a3937a", flexShrink: 0 }} />}
-                  <div>
-                    <div style={{ fontWeight: 700, fontSize: 14, color: "#2a2015" }}>OP #{String(op.numero).padStart(3, "0")} · {op.clienteNomeSnap || "Sem cliente"}</div>
-                    <div style={{ fontSize: 12, color: "#a3937a" }}>{(op.itens || []).map(it => `${it.produtoNomeSnap} (${it.quantidade})`).join(", ")} · {duracaoSeg != null ? `concluída em ${fmtSec(duracaoSeg)}` : "—"}{op.anexos && op.anexos.length > 0 ? ` · 📎 ${op.anexos.length}` : ""}</div>
-                    {prazo && (
-                      <div style={{ marginTop: 4 }}>
-                        <span style={{ fontSize: 10.5, fontWeight: 700, color: prazo.color, background: prazo.bg, padding: "2px 8px", borderRadius: 999 }}>{prazo.label}</span>
-                      </div>
-                    )}
-                  </div>
-                </div>
-                <div style={{ display: "flex", alignItems: "center", gap: 4, flexShrink: 0 }}>
-                  <IconButton onClick={(e) => { e.stopPropagation(); imprimirGradeOP(op); }} title="Imprimir grade da OP"><Printer size={15} /></IconButton>
-                  <StatusDot cor="verde" />
-                </div>
-              </div>
-              {expandido && (
-                <div style={{ borderTop: "1px solid #efe8d8", padding: 14, background: "#faf6ec" }}>
-                  <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                    {op.etapas.map((passo, i) => {
-                      const concluidosDaEtapa = registros.filter(r => r.ordemProducaoId === op.id && r.ordemEtapaIndex === i && r.status === "concluido");
-                      const tempoTotalReal = concluidosDaEtapa.reduce((s, r) => s + (r.tempoRealSeg || 0), 0);
-                      const eficienciaMedia = concluidosDaEtapa.length ? mediaEficiencia(concluidosDaEtapa.filter(r => r.eficiencia != null)) : null;
-                      return (
-                        <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", background: "#fff", border: "1px solid #e6ddc8", borderRadius: 8, padding: "7px 10px" }}>
-                          <span style={{ fontSize: 12.5, color: "#2a2015" }}>{i + 1}. {passo.etapaNomeSnap} <span style={{ color: "#a3937a" }}>({passo.produtoNomeSnap})</span></span>
-                          <span style={{ fontSize: 12, color: "#6b5d49", fontWeight: 600 }}>
-                            {concluidosDaEtapa.length ? `${fmtSec(tempoTotalReal)}${eficienciaMedia != null ? ` · ${Math.min(100, eficienciaMedia)}%` : ""}` : "—"}
-                          </span>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              )}
-            </Card>
-          );
-        })}
-      </div>
-    </div>
-  );
+  return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    className: "page-head"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "eyebrow"
+  }, "Pedidos de venda"), /*#__PURE__*/React.createElement("button", {
+    className: "btn accent",
+    onClick: () => setModal({}),
+    disabled: db.produtos.length === 0
+  }, "+ Novo pedido")), db.produtos.length === 0 && /*#__PURE__*/React.createElement("div", {
+    className: "empty",
+    style: {
+      marginBottom: 16
+    }
+  }, "Cadastre ao menos um produto antes de lançar pedidos."), /*#__PURE__*/React.createElement("div", {
+    className: "panel",
+    style: {
+      padding: 0
+    }
+  }, db.pedidos.length === 0 ? /*#__PURE__*/React.createElement("div", {
+    style: {
+      padding: 20
+    }
+  }, /*#__PURE__*/React.createElement(Empty, {
+    text: "Nenhum pedido lançado."
+  })) : /*#__PURE__*/React.createElement("table", null, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("th", null, "Nº"), /*#__PURE__*/React.createElement("th", null, "Cliente"), /*#__PURE__*/React.createElement("th", null, "Vendedor"), /*#__PURE__*/React.createElement("th", null, "Produtos"), /*#__PURE__*/React.createElement("th", {
+    className: "num"
+  }, "Total peças"), /*#__PURE__*/React.createElement("th", null, "Data pedido"), /*#__PURE__*/React.createElement("th", null, "Entrega"), /*#__PURE__*/React.createElement("th", null, "Status"), /*#__PURE__*/React.createElement("th", null, "OPs"), /*#__PURE__*/React.createElement("th", null))), /*#__PURE__*/React.createElement("tbody", null, db.pedidos.slice().sort((a, b) => b.numero - a.numero).map(p => {
+    const itens = itensPedido(p);
+    const ops = db.ops.filter(op => op.pedidoId === p.id);
+    return /*#__PURE__*/React.createElement("tr", {
+      key: p.id
+    }, /*#__PURE__*/React.createElement("td", {
+      className: "small muted"
+    }, "#", String(p.numero).padStart(5, '0')), /*#__PURE__*/React.createElement("td", null, p.cliente), /*#__PURE__*/React.createElement("td", {
+      className: "small muted"
+    }, p.vendedor || '—'), /*#__PURE__*/React.createElement("td", {
+      className: "small"
+    }, itens.map((it, i) => {
+      const prod = db.produtos.find(x => x.id === it.produtoId);
+      return /*#__PURE__*/React.createElement("div", {
+        key: i
+      }, prod ? prod.nome : '—', " ", /*#__PURE__*/React.createElement("span", {
+        className: "muted"
+      }, "(", num(it.quantidade), ")"));
+    })), /*#__PURE__*/React.createElement("td", {
+      className: "num"
+    }, totalPecasPedido(p)), /*#__PURE__*/React.createElement("td", {
+      className: "small"
+    }, fmtDate(p.dataPedido)), /*#__PURE__*/React.createElement("td", {
+      className: "small"
+    }, fmtDate(p.prazoEntrega)), /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement(StatusPedidoBadge, {
+      status: p.status
+    })), /*#__PURE__*/React.createElement("td", {
+      className: "small muted"
+    }, ops.length === 0 ? '—' : ops.map(o => rotuloOP(o)).join(', ')), /*#__PURE__*/React.createElement("td", {
+      className: "row-actions"
+    }, /*#__PURE__*/React.createElement("button", {
+      className: "btn ghost sm",
+      onClick: () => setModal(p)
+    }, "Editar"), /*#__PURE__*/React.createElement("button", {
+      className: "btn ghost sm",
+      onClick: () => setFicha(p)
+    }, "Ficha"), itens.some(it => !ops.some(o => o.itemId === it.id)) && podeGerarOP(p) && /*#__PURE__*/React.createElement("button", {
+      className: "btn accent sm",
+      onClick: () => gerarOP(p)
+    }, "Gerar OP"), /*#__PURE__*/React.createElement("button", {
+      className: "btn danger sm",
+      onClick: () => remove(p.id)
+    }, "Excluir")));
+  })))), modal !== null && /*#__PURE__*/React.createElement(PedidoModal, {
+    pedido: modal,
+    db: db,
+    onClose: () => setModal(null),
+    onSave: save
+  }), ficha && /*#__PURE__*/React.createElement(FichaPedidoModal, {
+    pedido: ficha,
+    db: db,
+    onClose: () => setFicha(null)
+  }));
 }
 
-// ---------- Avaliação (falta, atraso, comportamento, descrição) ----------
-function Avaliacao({ colaboradores, avaliacoes, onSalvarAvaliacao, onRemoverAvaliacao }) {
-  const [colaboradorId, setColaboradorId] = useState("");
-  const [data, setData] = useState(todayStr());
-  const [temFalta, setTemFalta] = useState(false);
-  const [tipoFalta, setTipoFalta] = useState("horas");
-  const [qtdFalta, setQtdFalta] = useState("");
-  const [temAtraso, setTemAtraso] = useState(false);
-  const [minutosAtraso, setMinutosAtraso] = useState("");
-  const [comportamento, setComportamento] = useState("");
-  const [descricao, setDescricao] = useState("");
-  // Adicionado: anexo de arquivo na avaliação (ex.: atestado médico,
-  // advertência assinada, foto de uma ocorrência) — mesma mecânica de
-  // anexo usada no chat e nos comentários de produção.
-  const [anexosAvaliacao, setAnexosAvaliacao] = useState([]);
-  const anexoAvaliacaoRef = useRef(null);
+/* ==========================================================
+   MOTOR DE PROGRAMAÇÃO — FIFO com alocação de horários
+   Respeita a jornada, evita o mesmo colaborador ou o mesmo
+   equipamento em dois trabalhos no mesmo horário.
+========================================================== */
+function hhmm(min) {
+  const m = Math.round(min),
+    h = Math.floor(m / 60),
+    r = m % 60;
+  return `${String(h).padStart(2, '0')}:${String(r).padStart(2, '0')}`;
+}
+function somaDias(dataISO, n) {
+  const d = new Date(dataISO + 'T12:00:00');
+  d.setDate(d.getDate() + n);
+  return d.toISOString().slice(0, 10);
+}
+// janelas de trabalho do dia, em minutos desde 00:00
+// máquinas disponíveis para uma etapa: as do departamento dela
+function maquinasDaEtapa(et, db) {
+  return (db.equipamentos || []).filter(q => (q.status || 'Operando') !== 'Baixado' && (!et.departamentoId || q.departamentoId === et.departamentoId));
+}
 
-  const infoFalta = faltaInfo(tipoFalta);
-  const qtdFaltaNum = parseFloat(qtdFalta || "0");
-  const minutosAtrasoNum = parseFloat(minutosAtraso || "0");
+/* Cronograma alimentado pelos lançamentos de produção.
+   Cada apontamento (em aberto ou concluído) vira um bloco na agenda. */
+function segmentosCronograma(db) {
+  const segs = [];
+  (db.apontamentos || []).forEach(ap => {
+    const op = db.ops.find(o => o.id === ap.opId);
+    const produto = op ? db.produtos.find(p => p.id === op.produtoId) : null;
+    const pedido = op ? db.pedidos.find(p => p.id === op.pedidoId) : null;
+    const dep = db.departamentos.find(x => x.id === ap.departamentoId);
+    const maq = (db.equipamentos || []).find(q => q.id === ap.equipamentoId);
+    const et = op ? op.etapas[ap.etapaIdx] : null;
+    const iniTxt = String(ap.inicio || '').replace('T', ' ');
+    const data = iniTxt.slice(0, 10);
+    if (!data) return;
+    const hh = Number(iniTxt.slice(11, 13)) || 0,
+      mm = Number(iniTxt.slice(14, 16)) || 0;
+    const ini = hh * 60 + mm;
+    const dur = ap.fim ? num(ap.minReais) : num(ap.minPrevistos);
+    const fim = ini + Math.max(dur, 1);
+    segs.push({
+      ap,
+      op,
+      etapa: et || {
+        nome: ap.etapaNome,
+        status: ap.fim ? 'Concluída' : 'Em andamento'
+      },
+      etapaIdx: ap.etapaIdx,
+      pedido,
+      produto,
+      dep,
+      maq,
+      responsaveis: (ap.equipe || [ap.colaborador]).filter(Boolean),
+      data,
+      ini,
+      fim,
+      min: Math.max(dur, 1),
+      concluido: !!ap.fim
+    });
+  });
+  return segs.sort((a, b) => a.data === b.data ? a.ini - b.ini : a.data.localeCompare(b.data));
+}
 
-  const podeSalvar = colaboradorId && data && descricao.trim().length > 0
-    && (!temFalta || qtdFaltaNum > 0)
-    && (!temAtraso || minutosAtrasoNum > 0);
+/* Detecta dias em que a carga programada passa da jornada de um colaborador. */
+function sobrecargaPorDia(segs) {
+  const mapa = {};
+  segs.forEach(sg => {
+    sg.responsaveis.forEach(n => {
+      const k = sg.data + '|' + n;
+      if (!mapa[k]) mapa[k] = {
+        data: sg.data,
+        colaborador: n,
+        min: 0
+      };
+      mapa[k].min += sg.min / sg.responsaveis.length;
+    });
+  });
+  return Object.values(mapa).map(x => {
+    const cap = capacidadeDoDia(x.data);
+    const limite = cap.normal || cap.maximo;
+    return {
+      ...x,
+      limite,
+      excedente: x.min - limite,
+      cap
+    };
+  }).filter(x => x.excedente > 1).sort((a, b) => b.excedente - a.excedente);
+}
 
-  async function anexarNaAvaliacao(fileList) {
-    const arquivos = Array.from(fileList || []);
-    const novos = [];
-    for (const file of arquivos) {
-      if (file.size > 4.5 * 1024 * 1024) { alert(`"${file.name}" é maior que 4,5MB e não pode ser anexado.`); continue; }
-      const dataUrl = await new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve(reader.result);
-        reader.onerror = reject;
-        reader.readAsDataURL(file);
+// total já apontado numa etapa
+function totalApontado(et) {
+  return (et.apontamentos || []).reduce((s, a) => s + num(a.quantidade), 0);
+}
+
+/* ==========================================================
+   FICHA DE PEDIDO DE VENDA — impressão / PDF
+========================================================== */
+function FichaPedidoModal({
+  pedido,
+  db,
+  onClose
+}) {
+  const cliente = db.clientes.find(c => c.id === pedido.clienteId);
+  const itens = itensPedido(pedido);
+  const ops = db.ops.filter(o => o.pedidoId === pedido.id);
+  const anexos = pedido.anexos || [];
+  const imagens = anexos.filter(a => a.tipo === 'imagem');
+  const documentos = anexos.filter(a => a.tipo !== 'imagem');
+  const linhas = itens.map(it => {
+    const prod = db.produtos.find(p => p.id === it.produtoId);
+    const custo = prod ? custoUnitarioProduto(prod, db) : {
+      total: 0
+    };
+    const qtd = num(it.quantidade);
+    return {
+      it,
+      prod,
+      qtd,
+      custoUnit: custo.total,
+      custoTotal: custo.total * qtd
+    };
+  });
+  const totalPecas = linhas.reduce((s, l) => s + l.qtd, 0);
+  const totalCusto = linhas.reduce((s, l) => s + l.custoTotal, 0);
+  return /*#__PURE__*/React.createElement(Modal, {
+    title: `Pedido de venda #${String(pedido.numero).padStart(5, '0')}`,
+    onClose: onClose,
+    wide: true
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginBottom: 12
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "btn accent sm",
+    onClick: () => window.print()
+  }, "🖨️ Imprimir / salvar como PDF")), /*#__PURE__*/React.createElement("div", {
+    className: "report-doc"
+  }, /*#__PURE__*/React.createElement("h2", null, "Pedido de Venda"), /*#__PURE__*/React.createElement("div", {
+    className: "rep-sub"
+  }, "Nº ", String(pedido.numero).padStart(5, '0'), " · Confecção ERP · Emitido em ", fmtDate(todayISO())), /*#__PURE__*/React.createElement("div", {
+    className: "rep-grid"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "rep-box"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "k"
+  }, "Cliente"), /*#__PURE__*/React.createElement("div", {
+    className: "v"
+  }, pedido.cliente || '—')), /*#__PURE__*/React.createElement("div", {
+    className: "rep-box"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "k"
+  }, "Vendedor"), /*#__PURE__*/React.createElement("div", {
+    className: "v"
+  }, pedido.vendedor || '—')), /*#__PURE__*/React.createElement("div", {
+    className: "rep-box"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "k"
+  }, "Data do pedido"), /*#__PURE__*/React.createElement("div", {
+    className: "v"
+  }, fmtDate(pedido.dataPedido))), /*#__PURE__*/React.createElement("div", {
+    className: "rep-box"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "k"
+  }, "Prazo de entrega"), /*#__PURE__*/React.createElement("div", {
+    className: "v"
+  }, fmtDate(pedido.prazoEntrega))), /*#__PURE__*/React.createElement("div", {
+    className: "rep-box"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "k"
+  }, "Status"), /*#__PURE__*/React.createElement("div", {
+    className: "v"
+  }, pedido.status || 'Aberto'))), cliente && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("h4", null, "Dados do cliente"), /*#__PURE__*/React.createElement("div", {
+    className: "small"
+  }, cliente.nomeFantasia && /*#__PURE__*/React.createElement(React.Fragment, null, "Nome fantasia: ", /*#__PURE__*/React.createElement("strong", null, cliente.nomeFantasia), /*#__PURE__*/React.createElement("br", null)), cliente.documento && /*#__PURE__*/React.createElement(React.Fragment, null, cliente.tipo === 'PJ' ? 'CNPJ' : 'CPF', ": ", cliente.documento, cliente.ie ? ` · IE: ${cliente.ie}` : '', /*#__PURE__*/React.createElement("br", null)), (cliente.responsavel || cliente.celular || cliente.telefone) && /*#__PURE__*/React.createElement(React.Fragment, null, "Contato: ", [cliente.responsavel, cliente.celular || cliente.telefone, cliente.email].filter(Boolean).join(' · '), /*#__PURE__*/React.createElement("br", null)), (cliente.endereco || cliente.cidade) && /*#__PURE__*/React.createElement(React.Fragment, null, "Endereço: ", [cliente.endereco, cliente.numero, cliente.complemento, cliente.bairro, cliente.cidade && `${cliente.cidade}${cliente.uf ? '/' + cliente.uf : ''}`, cliente.cep].filter(Boolean).join(', ')))), imagens.length > 0 && /*#__PURE__*/React.createElement("div", {
+    className: "ficha-hero"
+  }, /*#__PURE__*/React.createElement("img", {
+    src: imagens[0].url,
+    alt: imagens[0].nome
+  }), imagens.length > 1 && /*#__PURE__*/React.createElement("div", {
+    className: "ficha-hero-mini"
+  }, imagens.slice(1).map(a => /*#__PURE__*/React.createElement("img", {
+    key: a.id,
+    src: a.url,
+    alt: a.nome
+  })))), /*#__PURE__*/React.createElement("h4", null, "Itens do pedido"), /*#__PURE__*/React.createElement("table", null, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("th", null, "#"), /*#__PURE__*/React.createElement("th", null, "Código"), /*#__PURE__*/React.createElement("th", null, "Produto"), /*#__PURE__*/React.createElement("th", {
+    className: "num"
+  }, "Qtd."), /*#__PURE__*/React.createElement("th", {
+    className: "num"
+  }, "Custo unit."), /*#__PURE__*/React.createElement("th", {
+    className: "num"
+  }, "Custo total"), /*#__PURE__*/React.createElement("th", null, "Observação"))), /*#__PURE__*/React.createElement("tbody", null, linhas.map((l, i) => /*#__PURE__*/React.createElement("tr", {
+    key: i
+  }, /*#__PURE__*/React.createElement("td", {
+    className: "small muted"
+  }, i + 1), /*#__PURE__*/React.createElement("td", {
+    className: "small muted"
+  }, l.prod ? l.prod.codigo : '—'), /*#__PURE__*/React.createElement("td", null, l.prod ? l.prod.nome : '(produto removido)'), /*#__PURE__*/React.createElement("td", {
+    className: "num"
+  }, l.qtd), /*#__PURE__*/React.createElement("td", {
+    className: "num"
+  }, money(l.custoUnit)), /*#__PURE__*/React.createElement("td", {
+    className: "num"
+  }, money(l.custoTotal)), /*#__PURE__*/React.createElement("td", {
+    className: "small muted"
+  }, l.it.observacao || '—', (l.it.anexos || []).length > 0 && /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 6,
+      flexWrap: 'wrap',
+      marginTop: 6
+    }
+  }, (l.it.anexos || []).map(a => a.tipo === 'imagem' ? /*#__PURE__*/React.createElement("img", {
+    key: a.id,
+    src: a.url,
+    alt: a.nome,
+    style: {
+      width: 70,
+      height: 70,
+      objectFit: 'cover',
+      border: '1px solid var(--line)',
+      borderRadius: 4
+    }
+  }) : /*#__PURE__*/React.createElement("span", {
+    key: a.id,
+    className: "small"
+  }, "📄 ", a.nome)))))), /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("td", {
+    colSpan: "3",
+    style: {
+      textAlign: 'right'
+    }
+  }, /*#__PURE__*/React.createElement("strong", null, "Totais")), /*#__PURE__*/React.createElement("td", {
+    className: "num"
+  }, /*#__PURE__*/React.createElement("strong", null, totalPecas)), /*#__PURE__*/React.createElement("td", null), /*#__PURE__*/React.createElement("td", {
+    className: "num"
+  }, /*#__PURE__*/React.createElement("strong", null, money(totalCusto))), /*#__PURE__*/React.createElement("td", null)))), ops.length > 0 && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("h4", null, "Ordens de produção geradas"), /*#__PURE__*/React.createElement("table", null, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("th", null, "OP"), /*#__PURE__*/React.createElement("th", null, "Produto"), /*#__PURE__*/React.createElement("th", {
+    className: "num"
+  }, "Qtd."), /*#__PURE__*/React.createElement("th", null, "Entrega"), /*#__PURE__*/React.createElement("th", null, "Situação"))), /*#__PURE__*/React.createElement("tbody", null, ops.map(o => {
+    const prod = db.produtos.find(p => p.id === o.produtoId);
+    const info = opStatusInfo(o);
+    return /*#__PURE__*/React.createElement("tr", {
+      key: o.id
+    }, /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement("strong", null, rotuloOP(o))), /*#__PURE__*/React.createElement("td", {
+      className: "small"
+    }, prod ? prod.nome : '—'), /*#__PURE__*/React.createElement("td", {
+      className: "num"
+    }, o.quantidade), /*#__PURE__*/React.createElement("td", {
+      className: "small"
+    }, fmtDate(o.entrega)), /*#__PURE__*/React.createElement("td", {
+      className: "small"
+    }, info.label, " · ", info.etapaAtual));
+  })))), pedido.observacoes && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("h4", null, "Observações"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 12.5
+    }
+  }, pedido.observacoes)), documentos.length > 0 && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("h4", null, "Documentos anexados"), /*#__PURE__*/React.createElement("ul", {
+    style: {
+      margin: 0,
+      paddingLeft: 18
+    }
+  }, documentos.map(a => /*#__PURE__*/React.createElement("li", {
+    key: a.id,
+    className: "small"
+  }, a.nome)))), /*#__PURE__*/React.createElement("div", {
+    className: "rep-sign"
+  }, /*#__PURE__*/React.createElement("div", null, pedido.vendedor ? `Vendedor: ${pedido.vendedor}` : 'Assinatura do vendedor'), /*#__PURE__*/React.createElement("div", null, "Aprovação do cliente"))), /*#__PURE__*/React.createElement("div", {
+    className: "modal-actions"
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "btn ghost",
+    onClick: onClose
+  }, "Fechar")));
+}
+function StatusPedidoBadge({
+  status
+}) {
+  const mapa = {
+    'Aberto': 'idle',
+    'Liberado para produção': 'warn',
+    'Em produção': 'info',
+    'Concluído': 'ok',
+    'Expedição': 'info',
+    'Encerrado': 'ok',
+    'Cancelado': 'bad'
+  };
+  return /*#__PURE__*/React.createElement(Badge, {
+    tone: mapa[status] || 'idle'
+  }, status);
+}
+function PedidoModal({
+  pedido,
+  db,
+  onClose,
+  onSave
+}) {
+  const [f, setF] = useState(() => ({
+    cliente: '',
+    clienteId: '',
+    vendedor: '',
+    vendedorId: '',
+    dataPedido: todayISO(),
+    prazoEntrega: '',
+    observacoes: '',
+    status: 'Aberto',
+    itens: [],
+    anexos: [],
+    ...pedido,
+    itens: pedido && pedido.id ? itensPedido(pedido) : [{
+      id: uid(),
+      produtoId: db.produtos[0]?.id || '',
+      quantidade: 1,
+      observacao: '',
+      anexos: []
+    }]
+  }));
+  const set = (k, v) => setF(prev => ({
+    ...prev,
+    [k]: v
+  }));
+  function addItem() {
+    if (db.produtos.length === 0) {
+      alert('Cadastre produtos antes.');
+      return;
+    }
+    set('itens', [...f.itens, {
+      id: uid(),
+      produtoId: db.produtos[0].id,
+      quantidade: 1,
+      observacao: '',
+      anexos: []
+    }]);
+  }
+
+  // anexos vinculados ao produto dentro do pedido
+  async function anexarNoItem(i, e) {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = '';
+    if (!file) return;
+    const ehImagem = file.type.startsWith('image/');
+    try {
+      let url;
+      if (ehImagem) url = await comprimirImagem(file);else {
+        if (file.size > 300 * 1024) {
+          alert('Documento muito grande (máx. 300 KB).');
+          return;
+        }
+        url = await new Promise((res, rej) => {
+          const r = new FileReader();
+          r.onload = () => res(r.result);
+          r.onerror = () => rej(new Error('Falha ao ler o arquivo.'));
+          r.readAsDataURL(file);
+        });
+      }
+      const atuais = f.itens[i].anexos || [];
+      updItem(i, {
+        anexos: [...atuais, {
+          id: uid(),
+          nome: file.name,
+          tipo: ehImagem ? 'imagem' : 'documento',
+          url,
+          quando: agoraISO()
+        }]
       });
-      novos.push({ id: uid(), nome: file.name, tipo: file.type, dataUrl });
+    } catch (err) {
+      alert('Não foi possível anexar: ' + (err && err.message));
     }
-    if (novos.length) setAnexosAvaliacao(a => [...a, ...novos]);
   }
-  function removerAnexoAvaliacao(id) { setAnexosAvaliacao(a => a.filter(x => x.id !== id)); }
-
-  async function salvar() {
-    if (!podeSalvar) return;
-    const registro = {
-      id: uid(), colaboradorId, data,
-      temFalta, tipoFalta: temFalta ? tipoFalta : null, qtdFalta: temFalta ? qtdFaltaNum : 0, unidadeFalta: temFalta ? infoFalta.unidade : null,
-      pesoFalta: temFalta ? Math.round(qtdFaltaNum * infoFalta.pesoPorUnidade * 10) / 10 : 0,
-      temAtraso, minutosAtraso: temAtraso ? minutosAtrasoNum : 0,
-      pesoAtraso: temAtraso ? Math.max(1, Math.round(minutosAtraso / 15)) : 0,
-      comportamento: comportamento || null,
-      descricao: descricao.trim(),
-      anexos: anexosAvaliacao,
-      criadoEm: new Date().toISOString(),
+  function rmAnexoItem(i, anexoId) {
+    const atuais = f.itens[i].anexos || [];
+    updItem(i, {
+      anexos: atuais.filter(a => a.id !== anexoId)
+    });
+  }
+  function updItem(i, patch) {
+    const a = f.itens.slice();
+    a[i] = {
+      ...a[i],
+      ...patch
     };
-    await onSalvarAvaliacao(registro);
-    setTemFalta(false); setQtdFalta(""); setTemAtraso(false); setMinutosAtraso(""); setComportamento(""); setDescricao(""); setAnexosAvaliacao([]);
+    set('itens', a);
   }
-  async function excluir(id) {
-    if (!window.confirm("Excluir esta avaliação?")) return;
-    await onRemoverAvaliacao(id);
+  function rmItem(i) {
+    const a = f.itens.slice();
+    a.splice(i, 1);
+    set('itens', a);
   }
-  const nomeColab = (id) => colaboradores.find(c => c.id === id)?.nome || "—";
-
-  return (
-    <div>
-      <Card style={{ marginBottom: 16 }}>
-        <div style={{ fontSize: 15, fontWeight: 800, fontFamily: FONT_DISPLAY, marginBottom: 12, color: "#1c2b39" }}>Nova avaliação</div>
-        {colaboradores.length === 0 ? (
-          <div style={{ fontSize: 13.5, color: "#6b5d49", background: "#f4efe2", padding: 12, borderRadius: 8 }}>Cadastre colaboradores em Cadastros antes de lançar uma avaliação.</div>
-        ) : (
-          <>
-            <Field label="Colaborador">
-              <Select value={colaboradorId} onChange={e => setColaboradorId(e.target.value)}>
-                <option value="">Selecione…</option>
-                {colaboradores.map(c => <option key={c.id} value={c.id}>{c.nome}</option>)}
-              </Select>
-            </Field>
-            <Field label="Data">
-              <input type="date" value={data} onChange={e => setData(e.target.value)} style={inputStyle} />
-            </Field>
-
-            <Field label="Falta">
-              <div style={{ display: "flex", gap: 8, marginBottom: temFalta ? 10 : 0 }}>
-                <ToggleChip ativo={!temFalta} onClick={() => setTemFalta(false)}>Não houve</ToggleChip>
-                <ToggleChip ativo={temFalta} colorAtivo="#b13232" onClick={() => setTemFalta(true)}>Houve falta</ToggleChip>
-              </div>
-              {temFalta && (
-                <>
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6, marginBottom: 8 }}>
-                    {FALTA_TIPOS.map(t => (
-                      <ToggleChip key={t.key} ativo={tipoFalta === t.key} onClick={() => setTipoFalta(t.key)}>{t.label}</ToggleChip>
-                    ))}
-                  </div>
-                  <input type="number" min="0" step={infoFalta.unidade === "hora(s)" ? "0.5" : "1"} value={qtdFalta} onChange={e => setQtdFalta(e.target.value)} placeholder={`Quantidade em ${infoFalta.unidade}`} style={inputStyle} />
-                </>
-              )}
-            </Field>
-
-            <Field label="Atraso">
-              <div style={{ display: "flex", gap: 8, marginBottom: temAtraso ? 10 : 0 }}>
-                <ToggleChip ativo={!temAtraso} onClick={() => setTemAtraso(false)}>Não houve</ToggleChip>
-                <ToggleChip ativo={temAtraso} colorAtivo="#b5820a" onClick={() => setTemAtraso(true)}>Houve atraso</ToggleChip>
-              </div>
-              {temAtraso && (
-                <input type="number" min="0" step="1" value={minutosAtraso} onChange={e => setMinutosAtraso(e.target.value)} placeholder="Minutos de atraso" style={inputStyle} />
-              )}
-            </Field>
-
-            <Field label="Comportamento (opcional)">
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
-                {COMPORTAMENTO_OPCOES.map(o => (
-                  <ToggleChip key={o.key} ativo={comportamento === o.key} colorAtivo={o.color} onClick={() => setComportamento(comportamento === o.key ? "" : o.key)}>{o.label}</ToggleChip>
-                ))}
-              </div>
-            </Field>
-
-            <Field label="Descrição da avaliação (obrigatório)">
-              <textarea value={descricao} onChange={e => setDescricao(e.target.value)} placeholder="Descreva o contexto da avaliação" rows={3} style={{ ...inputStyle, resize: "vertical", fontFamily: "inherit" }} />
-            </Field>
-
-            <Field label="Anexo (opcional)">
-              {anexosAvaliacao.length > 0 && (
-                <div style={{ display: "flex", gap: 6, marginBottom: 8, flexWrap: "wrap" }}>
-                  {anexosAvaliacao.map(a => (
-                    <div key={a.id} style={{ position: "relative", border: "1px solid #e6ddc8", borderRadius: 6, overflow: "hidden", background: "#fff" }}>
-                      {a.tipo && a.tipo.startsWith("image/")
-                        ? <img src={a.dataUrl} alt={a.nome} style={{ width: 56, height: 56, objectFit: "cover", display: "block" }} />
-                        : <div style={{ width: 56, height: 56, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", color: "#a3937a", gap: 2 }}>
-                            <Paperclip size={15} />
-                            <span style={{ fontSize: 8, padding: "0 3px", textAlign: "center", overflow: "hidden", whiteSpace: "nowrap", textOverflow: "ellipsis", maxWidth: 52 }}>{a.nome}</span>
-                          </div>}
-                      <button onClick={() => removerAnexoAvaliacao(a.id)} style={{ position: "absolute", top: 2, right: 2, background: "rgba(255,255,255,0.92)", border: "none", borderRadius: 999, width: 17, height: 17, cursor: "pointer", color: "#b13232", display: "flex", alignItems: "center", justifyContent: "center" }}><X size={10} /></button>
-                    </div>
-                  ))}
-                </div>
-              )}
-              <input ref={anexoAvaliacaoRef} type="file" multiple accept="image/*,video/*,.pdf,.doc,.docx,.xls,.xlsx" style={{ display: "none" }}
-                onChange={e => { anexarNaAvaliacao(e.target.files); e.target.value = ""; }} />
-              <button type="button" onClick={() => anexoAvaliacaoRef.current && anexoAvaliacaoRef.current.click()} style={{
-                fontSize: 12.5, border: "1px dashed #cdb98a", background: "#f4ecd8", borderRadius: 7, padding: "7px 11px",
-                cursor: "pointer", display: "flex", alignItems: "center", gap: 6, color: "#2f4a63", fontWeight: 700,
-              }}><Paperclip size={14} /> Anexar arquivo</button>
-              <div style={{ fontSize: 11.5, color: "#a3937a", marginTop: 5 }}>Ex.: atestado, advertência assinada, foto de uma ocorrência.</div>
-            </Field>
-
-            <PrimaryButton onClick={salvar} disabled={!podeSalvar} style={{ width: "100%" }}><Plus size={16} /> Salvar avaliação</PrimaryButton>
-          </>
-        )}
-      </Card>
-
-      <div style={{ fontSize: 13, fontWeight: 700, color: "#6b5d49", margin: "4px 2px 8px" }}>Avaliações registradas</div>
-      {avaliacoes.length === 0 && <div style={{ fontSize: 13.5, color: "#a3937a", padding: "8px 2px" }}>Nenhuma avaliação registrada.</div>}
-      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-        {avaliacoes.slice(0, 20).map(a => (
-          <Card key={a.id} style={{ padding: 12 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
-              <div>
-                <div style={{ fontWeight: 700, fontSize: 14, color: "#2a2015" }}>{nomeColab(a.colaboradorId)}</div>
-                <div style={{ fontSize: 12, color: "#a3937a", marginTop: 2 }}>{new Date(a.data + "T12:00:00").toLocaleDateString("pt-BR")}</div>
-                <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 6 }}>
-                  {a.temFalta && <span style={{ fontSize: 11, fontWeight: 700, color: "#b13232", background: "#f8e6e6", padding: "2px 8px", borderRadius: 999 }}>Falta: {faltaInfo(a.tipoFalta).label} ({a.qtdFalta} {a.unidadeFalta})</span>}
-                  {a.temAtraso && <span style={{ fontSize: 11, fontWeight: 700, color: "#b5820a", background: "#faf1dc", padding: "2px 8px", borderRadius: 999 }}>Atraso: {a.minutosAtraso}min</span>}
-                  {a.comportamento && comportamentoInfo(a.comportamento) && (
-                    <span style={{ fontSize: 11, fontWeight: 700, color: comportamentoInfo(a.comportamento).color, background: comportamentoInfo(a.comportamento).bg, padding: "2px 8px", borderRadius: 999 }}>{comportamentoInfo(a.comportamento).label}</span>
-                  )}
-                </div>
-                <div style={{ fontSize: 12, color: "#6b5d49", marginTop: 6 }}>{a.descricao}</div>
-                {(a.anexos || []).length > 0 && (
-                  <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap" }}>
-                    {a.anexos.map(anexo => (
-                      anexo.tipo && anexo.tipo.startsWith("image/")
-                        ? <a key={anexo.id} href={anexo.dataUrl} download={anexo.nome}><img src={anexo.dataUrl} alt={anexo.nome} style={{ width: 54, height: 54, objectFit: "cover", borderRadius: 6, border: "1px solid #e6ddc8", display: "block" }} /></a>
-                        : <a key={anexo.id} href={anexo.dataUrl} download={anexo.nome} style={{ fontSize: 11, color: "#2f4a63", border: "1px solid #e6ddc8", borderRadius: 6, padding: "4px 8px", textDecoration: "none", display: "inline-flex", alignItems: "center", gap: 4 }}><Paperclip size={11} /> {anexo.nome}</a>
-                    ))}
-                  </div>
-                )}
-              </div>
-              <IconButton onClick={() => excluir(a.id)} danger title="Excluir"><Trash2 size={15} /></IconButton>
-            </div>
-          </Card>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-// ---------- Estúdio de posicionamento (encaixa a arte do cliente na foto
-// do produto, com perspectiva) ----------
-// Adicionado: não é uma simulação 3D de verdade (isso exigiria modelo 3D
-// da peça, que o sistema não tem) — é um "warp" de perspectiva: a arte é
-// deformada para encaixar no quadrilátero que o solicitante desenha por
-// cima da foto, arrastando os 4 cantos com o mouse. Como o canvas 2D só
-// faz transformações afins (sem perspectiva), a arte é desenhada em uma
-// malha de pequenos triângulos, cada um com sua própria transformação
-// afim — a técnica padrão para simular um warp de perspectiva sem WebGL.
-
-// Mapeia o quadrado unitário (0,0)-(1,0)-(1,1)-(0,1) para um
-// quadrilátero qualquer — fórmula clássica de "unit square to quad"
-// (Heckbert). Usada porque a origem (a arte) sempre parte de um
-// retângulo simples; só o destino (o que o usuário desenhou) é livre.
-function mapaQuadrilatero(quad) {
-  const [p0, p1, p2, p3] = quad;
-  const dx1 = p1.x - p2.x, dx2 = p3.x - p2.x, dx3 = p0.x - p1.x + p2.x - p3.x;
-  const dy1 = p1.y - p2.y, dy2 = p3.y - p2.y, dy3 = p0.y - p1.y + p2.y - p3.y;
-  let g = 0, h = 0;
-  if (Math.abs(dx3) > 1e-9 || Math.abs(dy3) > 1e-9) {
-    const den = dx1 * dy2 - dx2 * dy1;
-    if (Math.abs(den) > 1e-9) {
-      g = (dx3 * dy2 - dx2 * dy3) / den;
-      h = (dx1 * dy3 - dy1 * dx3) / den;
+  async function onArquivo(e) {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = '';
+    if (!file) return;
+    const ehImagem = file.type.startsWith('image/');
+    try {
+      let url;
+      if (ehImagem) {
+        url = await comprimirImagem(file);
+      } else {
+        if (file.size > 300 * 1024) {
+          alert('Documento muito grande (máx. 300 KB).');
+          return;
+        }
+        url = await new Promise((res, rej) => {
+          const r = new FileReader();
+          r.onload = () => res(r.result);
+          r.onerror = () => rej(new Error('Falha ao ler.'));
+          r.readAsDataURL(file);
+        });
+      }
+      set('anexos', [...(f.anexos || []), {
+        id: uid(),
+        nome: file.name,
+        tipo: ehImagem ? 'imagem' : 'documento',
+        url
+      }]);
+    } catch (err) {
+      alert('Não foi possível anexar: ' + (err && err.message));
     }
   }
+  function rmAnexo(id) {
+    set('anexos', (f.anexos || []).filter(a => a.id !== id));
+  }
+  const totalPecas = f.itens.reduce((s, i) => s + num(i.quantidade), 0);
+  const totalCusto = f.itens.reduce((s, i) => {
+    const prod = db.produtos.find(p => p.id === i.produtoId);
+    return s + (prod ? custoUnitarioProduto(prod, db).total * num(i.quantidade) : 0);
+  }, 0);
+  return /*#__PURE__*/React.createElement(Modal, {
+    title: pedido.id ? 'Editar pedido' : 'Novo pedido de venda',
+    onClose: onClose,
+    wide: true
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "grid3"
+  }, /*#__PURE__*/React.createElement(Field, {
+    label: "Cliente"
+  }, /*#__PURE__*/React.createElement("select", {
+    value: f.clienteId || '',
+    onChange: e => {
+      const cli = db.clientes.find(x => x.id === e.target.value);
+      setF(prev => ({
+        ...prev,
+        clienteId: e.target.value,
+        cliente: cli ? cli.nome : ''
+      }));
+    }
+  }, /*#__PURE__*/React.createElement("option", {
+    value: ""
+  }, f.cliente && !f.clienteId ? f.cliente : '— selecione —'), db.clientes.map(c => /*#__PURE__*/React.createElement("option", {
+    key: c.id,
+    value: c.id
+  }, c.nome)))), /*#__PURE__*/React.createElement(Field, {
+    label: "Vendedor"
+  }, (() => {
+    const vendedores = db.colaboradores.filter(c => c.status !== 'Inativo' && ehVendedor(c));
+    const lista = vendedores.length ? vendedores : db.colaboradores.filter(c => c.status !== 'Inativo');
+    return /*#__PURE__*/React.createElement("select", {
+      value: f.vendedorId || '',
+      onChange: e => {
+        const v = db.colaboradores.find(x => x.id === e.target.value);
+        setF(prev => ({
+          ...prev,
+          vendedorId: e.target.value,
+          vendedor: v ? v.nome : ''
+        }));
+      }
+    }, /*#__PURE__*/React.createElement("option", {
+      value: ""
+    }, f.vendedor && !f.vendedorId ? f.vendedor : '— selecione —'), lista.map(c => /*#__PURE__*/React.createElement("option", {
+      key: c.id,
+      value: c.id
+    }, c.nome)));
+  })()), /*#__PURE__*/React.createElement(Field, {
+    label: "Status"
+  }, /*#__PURE__*/React.createElement("select", {
+    value: f.status,
+    onChange: e => set('status', e.target.value)
+  }, STATUS_PEDIDO.map(st => /*#__PURE__*/React.createElement("option", {
+    key: st,
+    value: st
+  }, st)))), /*#__PURE__*/React.createElement(Field, {
+    label: "Data do pedido"
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "date",
+    value: f.dataPedido,
+    onChange: e => set('dataPedido', e.target.value)
+  })), /*#__PURE__*/React.createElement(Field, {
+    label: "Prazo de entrega"
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "date",
+    value: f.prazoEntrega,
+    onChange: e => set('prazoEntrega', e.target.value)
+  }))), /*#__PURE__*/React.createElement("div", {
+    className: "field"
+  }, /*#__PURE__*/React.createElement("label", null, "Produtos do pedido — cada produto gera uma Ordem de Produção própria"), f.itens.length === 0 && /*#__PURE__*/React.createElement("div", {
+    className: "small muted",
+    style: {
+      marginBottom: 8
+    }
+  }, "Nenhum produto adicionado."), f.itens.map((it, i) => {
+    const prod = db.produtos.find(p => p.id === it.produtoId);
+    const custo = prod ? custoUnitarioProduto(prod, db).total : 0;
+    return /*#__PURE__*/React.createElement("div", {
+      key: it.id || i,
+      className: "panel",
+      style: {
+        background: '#fff',
+        padding: '10px 12px',
+        marginBottom: 8
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: 'flex',
+        gap: 8,
+        alignItems: 'center',
+        marginBottom: 6
+      }
+    }, /*#__PURE__*/React.createElement("span", {
+      className: "small muted",
+      style: {
+        width: 60,
+        fontFamily: 'var(--mono)'
+      }
+    }, "OP …", f.itens.length > 1 ? sufixoPorIndice(i) : ''), /*#__PURE__*/React.createElement("select", {
+      value: it.produtoId,
+      onChange: e => updItem(i, {
+        produtoId: e.target.value
+      }),
+      style: {
+        flex: 2
+      }
+    }, db.produtos.map(p => /*#__PURE__*/React.createElement("option", {
+      key: p.id,
+      value: p.id
+    }, p.codigo, " · ", p.nome))), /*#__PURE__*/React.createElement("input", {
+      type: "number",
+      min: "1",
+      value: it.quantidade,
+      onChange: e => updItem(i, {
+        quantidade: e.target.value
+      }),
+      style: {
+        width: 100
+      }
+    }), /*#__PURE__*/React.createElement("span", {
+      className: "small muted",
+      style: {
+        width: 110,
+        textAlign: 'right',
+        fontFamily: 'var(--mono)'
+      }
+    }, money(custo * num(it.quantidade))), /*#__PURE__*/React.createElement("button", {
+      type: "button",
+      className: "btn danger sm",
+      onClick: () => rmItem(i)
+    }, "×")), /*#__PURE__*/React.createElement("input", {
+      value: it.observacao || '',
+      onChange: e => updItem(i, {
+        observacao: e.target.value
+      }),
+      placeholder: "Observação deste item (grade, cores, estampa…)"
+    }), /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: 'flex',
+        gap: 8,
+        alignItems: 'center',
+        marginTop: 8,
+        flexWrap: 'wrap'
+      }
+    }, /*#__PURE__*/React.createElement("label", {
+      className: "btn ghost sm",
+      style: {
+        cursor: 'pointer'
+      }
+    }, "📎 Anexar arquivo do item", /*#__PURE__*/React.createElement("input", {
+      type: "file",
+      accept: "image/*,.pdf,.doc,.docx,.xls,.xlsx",
+      style: {
+        display: 'none'
+      },
+      onChange: e => anexarNoItem(i, e)
+    })), /*#__PURE__*/React.createElement("label", {
+      className: "btn ghost sm",
+      style: {
+        cursor: 'pointer'
+      }
+    }, "📷 Foto", /*#__PURE__*/React.createElement("input", {
+      type: "file",
+      accept: "image/*",
+      capture: "environment",
+      style: {
+        display: 'none'
+      },
+      onChange: e => anexarNoItem(i, e)
+    })), /*#__PURE__*/React.createElement("span", {
+      className: "small muted"
+    }, (it.anexos || []).length > 0 ? `${(it.anexos || []).length} arquivo(s) neste produto` : 'layout, arte, medidas aprovadas…')), (it.anexos || []).length > 0 && /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: 'flex',
+        flexWrap: 'wrap',
+        gap: 8,
+        marginTop: 8
+      }
+    }, (it.anexos || []).map(a => /*#__PURE__*/React.createElement("div", {
+      key: a.id,
+      style: {
+        width: 110,
+        border: '1px solid var(--line)',
+        borderRadius: 6,
+        padding: 6,
+        background: 'var(--canvas-panel)'
+      }
+    }, a.tipo === 'imagem' ? /*#__PURE__*/React.createElement("a", {
+      href: a.url,
+      target: "_blank",
+      rel: "noopener noreferrer"
+    }, /*#__PURE__*/React.createElement("img", {
+      src: a.url,
+      alt: a.nome,
+      style: {
+        width: '100%',
+        height: 64,
+        objectFit: 'cover',
+        borderRadius: 4
+      }
+    })) : /*#__PURE__*/React.createElement("div", {
+      style: {
+        height: 64,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        background: '#f0ede6',
+        borderRadius: 4,
+        fontSize: 22
+      }
+    }, "📄"), /*#__PURE__*/React.createElement("div", {
+      className: "small",
+      style: {
+        wordBreak: 'break-word',
+        margin: '4px 0'
+      }
+    }, a.nome), /*#__PURE__*/React.createElement("button", {
+      type: "button",
+      className: "btn danger sm",
+      onClick: () => rmAnexoItem(i, a.id)
+    }, "Remover")))));
+  }), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "btn ghost sm",
+    onClick: addItem
+  }, "+ Adicionar produto"), f.itens.length > 0 && /*#__PURE__*/React.createElement("div", {
+    className: "small muted",
+    style: {
+      marginTop: 8
+    }
+  }, f.itens.length, " produto(s) · ", /*#__PURE__*/React.createElement("strong", null, totalPecas), " peças · custo estimado ", /*#__PURE__*/React.createElement("strong", null, money(totalCusto)), f.itens.length > 1 && ' · serão geradas ' + f.itens.length + ' OPs (sufixos a, b, c…)')), /*#__PURE__*/React.createElement("div", {
+    className: "field"
+  }, /*#__PURE__*/React.createElement("label", null, "Imagens e arquivos do pedido ", /*#__PURE__*/React.createElement("span", {
+    className: "muted",
+    style: {
+      textTransform: 'none'
+    }
+  }, "(imagens são comprimidas automaticamente)")), /*#__PURE__*/React.createElement("input", {
+    type: "file",
+    accept: "image/*,.pdf,.doc,.docx,.xls,.xlsx",
+    onChange: onArquivo
+  }), (f.anexos || []).length > 0 && /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexWrap: 'wrap',
+      gap: 10,
+      marginTop: 10
+    }
+  }, (f.anexos || []).map(a => /*#__PURE__*/React.createElement("div", {
+    key: a.id,
+    style: {
+      width: 130,
+      border: '1px solid var(--line)',
+      borderRadius: 6,
+      padding: 8,
+      background: '#fff'
+    }
+  }, a.tipo === 'imagem' ? /*#__PURE__*/React.createElement("img", {
+    src: a.url,
+    alt: a.nome,
+    style: {
+      width: '100%',
+      height: 80,
+      objectFit: 'cover',
+      borderRadius: 4
+    }
+  }) : /*#__PURE__*/React.createElement("div", {
+    style: {
+      height: 80,
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      background: '#f0ede6',
+      borderRadius: 4,
+      fontSize: 26
+    }
+  }, "📄"), /*#__PURE__*/React.createElement("div", {
+    className: "small",
+    style: {
+      wordBreak: 'break-word',
+      margin: '6px 0'
+    }
+  }, a.nome), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "btn danger sm",
+    onClick: () => rmAnexo(a.id)
+  }, "Remover"))))), /*#__PURE__*/React.createElement(Field, {
+    label: "Observações do pedido"
+  }, /*#__PURE__*/React.createElement("textarea", {
+    rows: "2",
+    value: f.observacoes,
+    onChange: e => set('observacoes', e.target.value)
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "modal-actions"
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "btn ghost",
+    onClick: onClose
+  }, "Cancelar"), /*#__PURE__*/React.createElement("button", {
+    className: "btn accent",
+    onClick: () => onSave(f),
+    disabled: !f.cliente || !f.prazoEntrega || f.itens.length === 0 || f.itens.some(i => !i.produtoId)
+  }, "Salvar")));
+}
+function opNecessidades(op, db) {
+  const produto = db.produtos.find(p => p.id === op.produtoId);
+  if (!produto) return [];
+  return (produto.fichaTecnica || []).map(it => {
+    const mat = db.materiais.find(m => m.id === it.materialId);
+    const necessario = num(it.quantidade) * num(op.quantidade);
+    const disponivel = mat ? num(mat.estoqueAtual) : 0;
+    const consumido = db.movimentacoes.filter(mv => mv.opId === op.id && mv.materialId === it.materialId && mv.tipo === 'Saída').reduce((s, mv) => s + num(mv.quantidade), 0);
+    const sobra = db.movimentacoes.filter(mv => mv.opId === op.id && mv.materialId === it.materialId && mv.tipo === 'Devolução').reduce((s, mv) => s + num(mv.quantidade), 0);
+    const falta = Math.max(necessario - disponivel, 0);
+    return {
+      materialId: it.materialId,
+      nome: mat ? mat.nome : '(removido)',
+      unidade: mat ? mat.unidade : '',
+      necessario,
+      disponivel,
+      falta,
+      consumido,
+      sobra
+    };
+  });
+}
+function opStatusInfo(op) {
+  const etapas = op.etapas;
+  const allDone = etapas.every(e => e.status === 'Concluída');
+  const anyStarted = etapas.some(e => e.status !== 'Não iniciada');
+  const hoje = new Date();
+  hoje.setHours(0, 0, 0, 0);
+  const entrega = op.entrega ? new Date(op.entrega + 'T00:00:00') : null;
+  let tone = 'idle',
+    label = 'Não iniciado';
+  if (allDone) {
+    tone = 'ok';
+    label = 'Concluída';
+  } else if (!anyStarted) {
+    tone = 'idle';
+    label = 'Não iniciado';
+  } else if (entrega) {
+    const diff = (entrega - hoje) / (1000 * 60 * 60 * 24);
+    if (diff < 0) {
+      tone = 'bad';
+      label = 'Atrasado';
+    } else if (diff <= 3) {
+      tone = 'warn';
+      label = 'Atenção';
+    } else {
+      tone = 'ok';
+      label = 'No prazo';
+    }
+  } else {
+    tone = 'warn';
+    label = 'Em andamento';
+  }
+  const etapaAtualObj = etapas.find(e => e.status !== 'Concluída');
   return {
-    a: p1.x - p0.x + g * p1.x, b: p3.x - p0.x + h * p3.x, c: p0.x,
-    d: p1.y - p0.y + g * p1.y, e: p3.y - p0.y + h * p3.y, f: p0.y,
-    g, h,
+    tone,
+    label,
+    etapaAtual: etapaAtualObj ? etapaAtualObj.nome : 'Concluída',
+    etapaAtualDepId: etapaAtualObj ? etapaAtualObj.departamentoId : null,
+    produzido: etapaAtualObj ? num(etapaAtualObj.qtdConcluida) : num(op.quantidade)
   };
 }
-function aplicarMapaQuad(coef, u, v) {
-  const denom = coef.g * u + coef.h * v + 1;
-  return { x: (coef.a * u + coef.b * v + coef.c) / denom, y: (coef.d * u + coef.e * v + coef.f) / denom };
-}
-// Resolve o sistema 3x3 M·x = b por Cramer — usado para achar a
-// transformação afim que leva um triângulo de origem a um de destino.
-function resolverSistema3x3(M, b) {
-  const det3 = (m) => (
-    m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1]) -
-    m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0]) +
-    m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0])
-  );
-  const D = det3(M);
-  if (Math.abs(D) < 1e-9) return null;
-  const substituir = (col) => M.map((linha, i) => linha.map((v, j) => j === col ? b[i] : v));
-  return [det3(substituir(0)) / D, det3(substituir(1)) / D, det3(substituir(2)) / D];
-}
-function afimDeTriangulo(S0, S1, S2, D0, D1, D2) {
-  const M = [[S0.x, S0.y, 1], [S1.x, S1.y, 1], [S2.x, S2.y, 1]];
-  const solX = resolverSistema3x3(M, [D0.x, D1.x, D2.x]);
-  const solY = resolverSistema3x3(M, [D0.y, D1.y, D2.y]);
-  if (!solX || !solY) return null;
-  return [solX[0], solY[0], solX[1], solY[1], solX[2], solY[2]];
-}
-function desenharTrianguloWarp(ctx, img, S0, S1, S2, D0, D1, D2) {
-  const m = afimDeTriangulo(S0, S1, S2, D0, D1, D2);
-  if (!m) return;
-  ctx.save();
-  ctx.beginPath();
-  ctx.moveTo(D0.x, D0.y); ctx.lineTo(D1.x, D1.y); ctx.lineTo(D2.x, D2.y);
-  ctx.closePath();
-  ctx.clip();
-  ctx.transform(...m);
-  ctx.drawImage(img, 0, 0);
-  ctx.restore();
-}
-// Desenha a imagem `img` inteira deformada para caber no quadrilátero
-// `quad` (4 pontos, na ordem: topo-esq, topo-dir, baixo-dir, baixo-esq),
-// subdividindo em uma malha `grid` x `grid` de triângulos.
-function desenharLogoWarpeada(ctx, img, quad, grid) {
-  const coef = mapaQuadrilatero(quad);
-  const passo = 1 / grid;
-  for (let j = 0; j < grid; j++) {
-    for (let i = 0; i < grid; i++) {
-      const u0 = i * passo, u1 = (i + 1) * passo, v0 = j * passo, v1 = (j + 1) * passo;
-      const P00 = aplicarMapaQuad(coef, u0, v0), P10 = aplicarMapaQuad(coef, u1, v0);
-      const P11 = aplicarMapaQuad(coef, u1, v1), P01 = aplicarMapaQuad(coef, u0, v1);
-      const S00 = { x: u0 * img.width, y: v0 * img.height }, S10 = { x: u1 * img.width, y: v0 * img.height };
-      const S11 = { x: u1 * img.width, y: v1 * img.height }, S01 = { x: u0 * img.width, y: v1 * img.height };
-      desenharTrianguloWarp(ctx, img, S00, S10, S11, P00, P10, P11);
-      desenharTrianguloWarp(ctx, img, S00, S11, S01, P00, P11, P01);
+function RelatorioOP({
+  op,
+  db,
+  pedido,
+  produto,
+  necessidades
+}) {
+  const info = opStatusInfo(op);
+  const anexos = op.anexos || [];
+  const imagens = anexos.filter(a => a.tipo === 'imagem');
+  return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginBottom: 12
     }
-  }
-}
-const LARGURA_EDICAO_MOCKUP = 320;
-function carregarImagemDeDataUrl(dataUrl) {
-  return new Promise((resolve, reject) => {
-    const img = new Image();
-    img.onload = () => resolve({ img, width: img.naturalWidth, height: img.naturalHeight });
-    img.onerror = reject;
-    img.src = dataUrl;
-  });
-}
-
-// Adicionado: em vez de pedir upload próprio dentro da ferramenta, o
-// Estúdio de posicionamento usa direto as fotos do produto e as artes do
-// cliente que já foram anexadas mais acima no formulário — escolhe uma
-// de cada (se houver mais de uma) e arrasta os 4 cantos com o mouse.
-function EstudioPosicionamento({ fotosProduto, arquivosLogo, tamanhoEstampa, onSalvar }) {
-  const fotosImagem = (fotosProduto || []).filter(a => a.tipo && a.tipo.startsWith("image/"));
-  const logosImagem = (arquivosLogo || []).filter(a => a.tipo && a.tipo.startsWith("image/"));
-  const [fotoId, setFotoId] = useState("");
-  const [logoId, setLogoId] = useState("");
-  const [imagemProduto, setImagemProduto] = useState(null);
-  const [logo, setLogo] = useState(null);
-  const [cantos, setCantos] = useState(null);
-  const [arrastando, setArrastando] = useState(null);
-  const [salvo, setSalvo] = useState(false);
-  const canvasRef = useRef(null);
-
-  useEffect(() => {
-    if (fotosImagem.length > 0 && !fotosImagem.some(a => a.id === fotoId)) setFotoId(fotosImagem[0].id);
-    if (logosImagem.length > 0 && !logosImagem.some(a => a.id === logoId)) setLogoId(logosImagem[0].id);
-  }, [fotosImagem, logosImagem]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  useEffect(() => {
-    const arquivo = fotosImagem.find(a => a.id === fotoId);
-    if (!arquivo) { setImagemProduto(null); return; }
-    let vivo = true;
-    carregarImagemDeDataUrl(arquivo.dataUrl).then(img => { if (vivo) { setImagemProduto(img); setCantos(null); } });
-    return () => { vivo = false; };
-  }, [fotoId]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  useEffect(() => {
-    const arquivo = logosImagem.find(a => a.id === logoId);
-    if (!arquivo) { setLogo(null); return; }
-    let vivo = true;
-    carregarImagemDeDataUrl(arquivo.dataUrl).then(img => { if (vivo) { setLogo(img); setCantos(null); } });
-    return () => { vivo = false; };
-  }, [logoId]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const alturaEdicao = imagemProduto ? Math.round(LARGURA_EDICAO_MOCKUP * imagemProduto.height / imagemProduto.width) : 0;
-
-  // Posição inicial da arte: um retângulo no centro da foto, na
-  // proporção do campo "Tamanho da estampa/logo" (ex.: "20 x 15 cm"),
-  // quando preenchido — em vez de sempre um quadrado genérico. O
-  // reposicionamento com o mouse continua livre depois disso.
-  useEffect(() => {
-    if (imagemProduto && logo && !cantos && alturaEdicao > 0) {
-      const medida = (tamanhoEstampa || "").match(/(\d+(?:[.,]\d+)?)\s*[x×X]\s*(\d+(?:[.,]\d+)?)/);
-      const proporcao = medida
-        ? parseFloat(medida[1].replace(",", ".")) / parseFloat(medida[2].replace(",", "."))
-        : (logo.width / logo.height) || 1;
-      let w = LARGURA_EDICAO_MOCKUP * 0.4, h = w / proporcao;
-      const alturaMax = alturaEdicao * 0.8;
-      if (h > alturaMax) { w *= alturaMax / h; h = alturaMax; }
-      const cx = LARGURA_EDICAO_MOCKUP / 2, cy = alturaEdicao / 2;
-      setCantos([
-        { x: cx - w / 2, y: cy - h / 2 }, { x: cx + w / 2, y: cy - h / 2 },
-        { x: cx + w / 2, y: cy + h / 2 }, { x: cx - w / 2, y: cy + h / 2 },
-      ]);
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "btn accent sm",
+    onClick: () => window.print()
+  }, "🖨️ Imprimir / salvar como PDF")), /*#__PURE__*/React.createElement("div", {
+    className: "report-doc"
+  }, /*#__PURE__*/React.createElement("h2", null, "Ordem de Produção — ", rotuloOP(op)), /*#__PURE__*/React.createElement("div", {
+    className: "rep-sub"
+  }, "Confecção ERP · Emitido em ", fmtDate(todayISO())), /*#__PURE__*/React.createElement("div", {
+    className: "rep-grid"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "rep-box"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "k"
+  }, "Cliente"), /*#__PURE__*/React.createElement("div", {
+    className: "v"
+  }, pedido ? pedido.cliente : '—')), /*#__PURE__*/React.createElement("div", {
+    className: "rep-box"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "k"
+  }, "Produto"), /*#__PURE__*/React.createElement("div", {
+    className: "v"
+  }, produto ? produto.nome : '—')), /*#__PURE__*/React.createElement("div", {
+    className: "rep-box"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "k"
+  }, "Quantidade"), /*#__PURE__*/React.createElement("div", {
+    className: "v"
+  }, op.quantidade)), /*#__PURE__*/React.createElement("div", {
+    className: "rep-box"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "k"
+  }, "Entrega"), /*#__PURE__*/React.createElement("div", {
+    className: "v"
+  }, fmtDate(op.entrega)))), /*#__PURE__*/React.createElement("div", {
+    className: "small muted",
+    style: {
+      marginBottom: 6
     }
-  }, [imagemProduto, logo, cantos, alturaEdicao, tamanhoEstampa]);
+  }, "Situação geral: ", /*#__PURE__*/React.createElement("strong", null, info.label), " · Etapa atual: ", /*#__PURE__*/React.createElement("strong", null, info.etapaAtual)), /*#__PURE__*/React.createElement("h4", null, "Etapas de produção — responsáveis e projeção"), /*#__PURE__*/React.createElement("table", null, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("th", null, "#"), /*#__PURE__*/React.createElement("th", null, "Etapa"), /*#__PURE__*/React.createElement("th", null, "Departamento"), /*#__PURE__*/React.createElement("th", null, "Colaborador responsável"), /*#__PURE__*/React.createElement("th", null, "Equipamento"), /*#__PURE__*/React.createElement("th", {
+    className: "num"
+  }, "Qtd."), /*#__PURE__*/React.createElement("th", {
+    className: "num"
+  }, "Tempo padrão"), /*#__PURE__*/React.createElement("th", null, "Início previsto"), /*#__PURE__*/React.createElement("th", null, "Conclusão prevista"), /*#__PURE__*/React.createElement("th", {
+    className: "num"
+  }, "Concluída"), /*#__PURE__*/React.createElement("th", null, "Status"))), /*#__PURE__*/React.createElement("tbody", null, (() => {
+    let totalMin = 0;
+    const linhas = op.etapas.map((et, i) => {
+      const dep = db.departamentos.find(d => d.id === et.departamentoId);
+      const maq = (db.equipamentos || []).find(q => q.id === et.equipamentoId);
+      const base = num(et.qtdRecebida) > 0 ? num(et.qtdRecebida) : num(op.quantidade);
+      const restante = Math.max(base - num(et.qtdConcluida), 0);
+      const carga = cargaEtapaOP(et, restante || base, op.quantidade, db);
+      const minPeca = cargaEtapaOP(et, 1, op.quantidade, db);
+      totalMin += carga;
 
-  useEffect(() => {
-    if (!imagemProduto || !canvasRef.current || alturaEdicao === 0) return;
-    const canvas = canvasRef.current;
-    canvas.width = LARGURA_EDICAO_MOCKUP; canvas.height = alturaEdicao;
-    const ctx = canvas.getContext("2d");
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    ctx.drawImage(imagemProduto.img, 0, 0, canvas.width, canvas.height);
-    if (logo && cantos) {
-      desenharLogoWarpeada(ctx, logo.img, cantos, 18);
-      ctx.beginPath();
-      ctx.moveTo(cantos[0].x, cantos[0].y);
-      cantos.slice(1).forEach(p => ctx.lineTo(p.x, p.y));
-      ctx.closePath();
-      ctx.strokeStyle = "rgba(47,74,99,0.55)";
-      ctx.lineWidth = 1;
-      ctx.stroke();
-      cantos.forEach(p => {
-        ctx.beginPath();
-        ctx.arc(p.x, p.y, 7, 0, Math.PI * 2);
-        ctx.fillStyle = "#fff";
-        ctx.fill();
-        ctx.lineWidth = 2;
-        ctx.strokeStyle = "#2f4a63";
-        ctx.stroke();
-      });
-    }
-  }, [imagemProduto, logo, cantos, alturaEdicao]);
-
-  function posicaoDoEvento(e) {
-    const rect = canvasRef.current.getBoundingClientRect();
-    const ponto = e.touches && e.touches[0] ? e.touches[0] : e;
-    return {
-      x: (ponto.clientX - rect.left) * (canvasRef.current.width / rect.width),
-      y: (ponto.clientY - rect.top) * (canvasRef.current.height / rect.height),
-    };
-  }
-  function aoPressionar(e) {
-    if (!cantos) return;
-    const pos = posicaoDoEvento(e);
-    const idx = cantos.findIndex(p => Math.hypot(p.x - pos.x, p.y - pos.y) < 18);
-    if (idx >= 0) { setArrastando(idx); e.preventDefault(); }
-  }
-  function aoMover(e) {
-    if (arrastando == null) return;
-    e.preventDefault();
-    const pos = posicaoDoEvento(e);
-    setCantos(atual => atual.map((p, i) => i === arrastando
-      ? { x: Math.max(0, Math.min(LARGURA_EDICAO_MOCKUP, pos.x)), y: Math.max(0, Math.min(alturaEdicao, pos.y)) }
-      : p));
-  }
-  function aoSoltar() { setArrastando(null); }
-
-  function salvarComposicao() {
-    if (!imagemProduto || !logo || !cantos) return;
-    // Refaz o desenho na resolução real da foto (não na de exibição),
-    // pra sair com qualidade melhor no anexo salvo.
-    const escala = imagemProduto.width / LARGURA_EDICAO_MOCKUP;
-    const cantosReais = cantos.map(p => ({ x: p.x * escala, y: p.y * escala }));
-    const canvasFinal = document.createElement("canvas");
-    canvasFinal.width = imagemProduto.width; canvasFinal.height = imagemProduto.height;
-    const ctx = canvasFinal.getContext("2d");
-    ctx.drawImage(imagemProduto.img, 0, 0);
-    desenharLogoWarpeada(ctx, logo.img, cantosReais, 24);
-    onSalvar({ id: uid(), nome: `mockup-${Date.now()}.png`, tipo: "image/png", dataUrl: canvasFinal.toDataURL("image/png") });
-    setSalvo(true);
-    setTimeout(() => setSalvo(false), 2500);
-  }
-
-  if (fotosImagem.length === 0 || logosImagem.length === 0) {
-    return (
-      <Card style={{ marginTop: 4, marginBottom: 14, background: "#faf6ec" }}>
-        <div style={{ fontSize: 13, fontWeight: 800, color: "#1c2b39", marginBottom: 4 }}>Posicionar arte na foto (opcional)</div>
-        <div style={{ fontSize: 11.5, color: "#6b5d49" }}>
-          Envie uma foto do produto e um arquivo de imagem da arte do cliente (PNG/JPG) acima pra poder posicionar com o mouse.
-        </div>
-      </Card>
-    );
-  }
-
-  return (
-    <Card style={{ marginTop: 4, marginBottom: 14, background: "#faf6ec" }}>
-      <div style={{ fontSize: 13, fontWeight: 800, color: "#1c2b39", marginBottom: 4 }}>Posicionar arte na foto (opcional)</div>
-      <div style={{ fontSize: 11.5, color: "#6b5d49", marginBottom: 10 }}>
-        Escolha a foto do produto e a arte do cliente, depois arraste os 4 cantos com o mouse até encaixar na posição e na perspectiva do produto. Não é uma simulação 3D — é um posicionamento com perspectiva sobre a própria foto.
-      </div>
-      {(fotosImagem.length > 1 || logosImagem.length > 1) && (
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 10 }}>
-          <Field label="Foto do produto">
-            <Select value={fotoId} onChange={e => setFotoId(e.target.value)}>
-              {fotosImagem.map(a => <option key={a.id} value={a.id}>{a.nome}</option>)}
-            </Select>
-          </Field>
-          <Field label="Arte do cliente">
-            <Select value={logoId} onChange={e => setLogoId(e.target.value)}>
-              {logosImagem.map(a => <option key={a.id} value={a.id}>{a.nome}</option>)}
-            </Select>
-          </Field>
-        </div>
-      )}
-      {imagemProduto && (
-        <div style={{ display: "flex", justifyContent: "center", marginBottom: 10 }}>
-          <canvas
-            ref={canvasRef}
-            style={{ width: LARGURA_EDICAO_MOCKUP, height: alturaEdicao, borderRadius: 8, border: "1px solid #e6ddc8", touchAction: "none", cursor: arrastando != null ? "grabbing" : logo ? "grab" : "default" }}
-            onMouseDown={aoPressionar} onMouseMove={aoMover} onMouseUp={aoSoltar} onMouseLeave={aoSoltar}
-            onTouchStart={aoPressionar} onTouchMove={aoMover} onTouchEnd={aoSoltar}
-          />
-        </div>
-      )}
-      {imagemProduto && logo && (
-        <PrimaryButton onClick={salvarComposicao} style={{ width: "100%" }}>
-          <Check size={16} /> {salvo ? "Salvo ✓" : "Salvar posicionamento"}
-        </PrimaryButton>
-      )}
-    </Card>
-  );
-}
-
-// ---------- Criação (solicitação de arte) ----------
-// Adicionado: fila de solicitações de arte para o(a) arte-finalista,
-// seguindo um modelo fixo de informações (cliente, produtos, medidas,
-// personalização, arquivos, texto e observações) — o mesmo modelo que
-// já era usado manualmente para pedir arte pelo grupo, agora dentro do
-// sistema. Cada solicitação pode ser copiada como texto pronto (no
-// mesmo formato) ou impressa trazendo a grade de informações + os
-// arquivos do produto e do cliente.
-const TIPOS_PERSONALIZACAO = ["Silk", "Bordado", "Sublimação", "Outro"];
-// Corrigido: lista de locais de personalização ampliada, incluindo
-// posições mais específicas (lateral, centralizado, cantos).
-const LOCAIS_PERSONALIZACAO = ["Frente", "Costas", "Manga", "Bolso", "Lateral", "Centralizado", "Canto superior direito", "Canto superior esquerdo", "Outro"];
-
-function resumoItens(itens) {
-  return (itens || []).map(it => `${it.produtoNomeSnap} (${it.quantidade})`).join(", ") || "—";
-}
-
-function gerarTextoSolicitacaoArte(s) {
-  const personalizacao = s.tipoPersonalizacao === "Outro" ? (s.tipoPersonalizacaoOutro || "Outro") : (s.tipoPersonalizacao || "—");
-  const local = s.localPersonalizacao === "Outro" ? (s.localPersonalizacaoOutro || "Outro") : (s.localPersonalizacao || "—");
-  const linhas = [
-    "📌 SOLICITAÇÃO DE ARTE", "",
-    `👤 Cliente: ${s.clienteNomeSnap || "—"}`,
-    "📦 Produto(s):",
-    ...(s.itens || []).map(it => ` - ${it.produtoNomeSnap} — ${it.quantidade}`),
-    `📏 Tamanho/medida do produto: ${s.tamanhoProduto || "—"}`,
-    `🎨 Cor do produto: ${s.corProduto || "—"}`,
-    `🧵 Tecido/material: ${s.tecidoMaterial || "—"}`,
-    `🖨️ Tipo de personalização: ${personalizacao}`,
-    `📍 Local da personalização: ${local}`,
-    `📐 Tamanho da estampa/logo: ${s.tamanhoEstampa || "—"}`,
-    `🎨 Cor da estampa: ${s.corEstampa || "—"}`, "",
-    "🖼️ FOTO DO PRODUTO:",
-    (s.fotosProduto || []).length > 0 ? `${s.fotosProduto.length} arquivo(s) anexado(s).` : "Nenhuma foto anexada ainda.", "",
-    "🖼️ LOGO/ARQUIVO DO CLIENTE:",
-    (s.arquivosLogo || []).length > 0 ? `${s.arquivosLogo.length} arquivo(s) anexado(s) na solicitação.` : "Nenhum arquivo anexado ainda.", "",
-    "✍️ TEXTO QUE DEVE ENTRAR NA ARTE:",
-    s.textoArte || "—", "",
-    "📷 REFERÊNCIA:",
-    (s.arquivosReferencia || []).length > 0 ? `${s.arquivosReferencia.length} arquivo(s) anexado(s).` : "Nenhuma referência anexada.", "",
-    "📝 OBSERVAÇÕES DO CLIENTE:",
-    s.observacoesCliente || "—",
-  ];
-  return linhas.join("\n");
-}
-function gerarTextoAlteracaoArte(s) {
-  const linhas = [
-    "📌 ALTERAÇÃO DE ARTE", "",
-    `👤 Cliente: ${s.clienteNomeSnap || "—"}`,
-    "📦 Produto(s):",
-    ...(s.itens || []).map(it => ` - ${it.produtoNomeSnap} — ${it.quantidade}`), "",
-    "✏️ O QUE PRECISA SER ALTERADO:",
-    s.descricaoAlteracao || "—",
-  ];
-  if ((s.observacoesCliente || "").trim()) linhas.push("", "📝 OBSERVAÇÕES:", s.observacoesCliente);
-  return linhas.join("\n");
-}
-async function copiarTexto(texto) {
-  try {
-    await navigator.clipboard.writeText(texto);
-    return true;
-  } catch (e) {
-    return false;
-  }
-}
-
-function Criacao({ solicitacoes, onSalvarSolicitacao, onRemoverSolicitacao, produtos, setProdutos, clientes, setClientes, onImprimirGrade }) {
-  const [ehAlteracao, setEhAlteracao] = useState(false);
-  const [clienteId, setClienteId] = useState("");
-  const [novoClienteAberto, setNovoClienteAberto] = useState(false);
-  const [novoClienteNome, setNovoClienteNome] = useState("");
-  // Adicionado: agora dá pra pedir arte para mais de um produto na mesma
-  // solicitação, cada um com sua própria quantidade — mesmo padrão de
-  // "itens" já usado nas Ordens de Produção.
-  const [itens, setItens] = useState([]);
-  const [produtoParaAdicionar, setProdutoParaAdicionar] = useState("");
-  const [quantidadeParaAdicionar, setQuantidadeParaAdicionar] = useState("");
-  const [novoProdutoAberto, setNovoProdutoAberto] = useState(false);
-  const [novoProdutoNome, setNovoProdutoNome] = useState("");
-  // Nova arte
-  const [tamanhoProduto, setTamanhoProduto] = useState("");
-  const [corProduto, setCorProduto] = useState("");
-  const [tecidoMaterial, setTecidoMaterial] = useState("");
-  const [tipoPersonalizacao, setTipoPersonalizacao] = useState("");
-  const [tipoPersonalizacaoOutro, setTipoPersonalizacaoOutro] = useState("");
-  const [localPersonalizacao, setLocalPersonalizacao] = useState("");
-  const [localPersonalizacaoOutro, setLocalPersonalizacaoOutro] = useState("");
-  const [tamanhoEstampa, setTamanhoEstampa] = useState("");
-  const [corEstampa, setCorEstampa] = useState("");
-  // Adicionado: foto do produto — separada do arquivo do cliente — usada
-  // tanto na impressão quanto no Estúdio de posicionamento.
-  const [fotosProduto, setFotosProduto] = useState([]);
-  const fotoProdutoRef = useRef(null);
-  const [arquivosLogo, setArquivosLogo] = useState([]);
-  const arquivoLogoRef = useRef(null);
-  const [mockupsGerados, setMockupsGerados] = useState([]);
-  const [textoArte, setTextoArte] = useState("");
-  const [arquivosReferencia, setArquivosReferencia] = useState([]);
-  const arquivoReferenciaRef = useRef(null);
-  const [observacoesCliente, setObservacoesCliente] = useState("");
-  // Alteração de arte
-  const [descricaoAlteracao, setDescricaoAlteracao] = useState("");
-
-  const [busca, setBusca] = useState("");
-  const [expandidoId, setExpandidoId] = useState(null);
-  const [copiadoId, setCopiadoId] = useState(null);
-
-  async function criarClienteRapido(nomeBruto, aoCriar) {
-    const nomeCriado = nomeBruto.trim();
-    if (!nomeCriado) return;
-    const existente = (clientes || []).find(c => c.nome.trim().toLowerCase() === nomeCriado.toLowerCase());
-    if (existente) { aoCriar(existente.id); return; }
-    const novo = { id: uid(), nome: nomeCriado, contato: "", observacao: "" };
-    await setClientes([...(clientes || []), novo]);
-    aoCriar(novo.id);
-  }
-  async function criarProduto() {
-    if (!novoProdutoNome.trim()) return;
-    const sequencia = produtos.reduce((max, p) => Math.max(max, p.sequencia || 0), 0) + 1;
-    // Adicionado rapidamente por aqui, sem grupo/tecido/tamanho — por isso
-    // ainda não tem um código completo (isso fica pendente até alguém
-    // terminar o cadastro em Cadastros → Produtos).
-    const p = { id: uid(), sequencia, codigo: null, nome: novoProdutoNome.trim().toUpperCase() };
-    await setProdutos([...produtos, p]);
-    setProdutoParaAdicionar(p.id);
-    setNovoProdutoNome(""); setNovoProdutoAberto(false);
-  }
-  const produtosDisponiveisParaAdicionar = useMemo(
-    () => [...produtos].sort((a, b) => a.nome.localeCompare(b.nome)).filter(p => !itens.some(it => it.produtoId === p.id)),
-    [produtos, itens]
-  );
-  const qtdParaAdicionarNum = parseInt(quantidadeParaAdicionar || "0", 10);
-  const podeAdicionarItem = !!produtoParaAdicionar && qtdParaAdicionarNum > 0;
-  function adicionarItem() {
-    if (!podeAdicionarItem) return;
-    const produto = produtos.find(p => p.id === produtoParaAdicionar);
-    setItens(atual => [...atual, { produtoId: produtoParaAdicionar, produtoNomeSnap: produto?.nome || "—", quantidade: qtdParaAdicionarNum }]);
-    setProdutoParaAdicionar(""); setQuantidadeParaAdicionar("");
-  }
-  function removerItem(produtoId) { setItens(atual => atual.filter(it => it.produtoId !== produtoId)); }
-
-  async function lerArquivos(fileList) {
-    const arquivos = Array.from(fileList || []);
-    const novos = [];
-    for (const file of arquivos) {
-      if (file.size > 4.5 * 1024 * 1024) { alert(`"${file.name}" é maior que 4,5MB e não pode ser anexado.`); continue; }
-      const dataUrl = await new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve(reader.result);
-        reader.onerror = reject;
-        reader.readAsDataURL(file);
-      });
-      novos.push({ id: uid(), nome: file.name, tipo: file.type, dataUrl });
-    }
-    return novos;
-  }
-  async function anexarFotoProduto(fileList) { const novos = await lerArquivos(fileList); if (novos.length) setFotosProduto(a => [...a, ...novos]); }
-  async function anexarLogo(fileList) { const novos = await lerArquivos(fileList); if (novos.length) setArquivosLogo(a => [...a, ...novos]); }
-  async function anexarReferencia(fileList) { const novos = await lerArquivos(fileList); if (novos.length) setArquivosReferencia(a => [...a, ...novos]); }
-  function removerFotoProduto(id) { setFotosProduto(a => a.filter(x => x.id !== id)); }
-  function removerArquivoLogo(id) { setArquivosLogo(a => a.filter(x => x.id !== id)); }
-  function removerArquivoReferencia(id) { setArquivosReferencia(a => a.filter(x => x.id !== id)); }
-  function removerMockup(id) { setMockupsGerados(a => a.filter(x => x.id !== id)); }
-
-  // Adicionado: cliente e ao menos 1 produto (com quantidade) são
-  // obrigatórios sempre — pra alteração de arte, também é preciso
-  // descrever claramente o que precisa mudar.
-  const podeCriar = !!clienteId && itens.length > 0 && (!ehAlteracao || descricaoAlteracao.trim().length > 0);
-
-  function limparFormulario() {
-    setClienteId(""); setItens([]); setProdutoParaAdicionar(""); setQuantidadeParaAdicionar("");
-    setTamanhoProduto(""); setCorProduto(""); setTecidoMaterial("");
-    setTipoPersonalizacao(""); setTipoPersonalizacaoOutro("");
-    setLocalPersonalizacao(""); setLocalPersonalizacaoOutro("");
-    setTamanhoEstampa(""); setCorEstampa("");
-    setFotosProduto([]); setArquivosLogo([]); setMockupsGerados([]);
-    setTextoArte(""); setArquivosReferencia([]); setObservacoesCliente("");
-    setDescricaoAlteracao(""); setEhAlteracao(false);
-  }
-
-  async function criarSolicitacao() {
-    if (!podeCriar) return;
-    const cliente = (clientes || []).find(c => c.id === clienteId);
-    // Adicionado: numeração sequencial da fila — sempre o maior número já
-    // usado + 1, igual às Ordens de Produção.
-    const numero = solicitacoes.reduce((max, s) => Math.max(max, s.numero || 0), 0) + 1;
-    const nova = {
-      id: uid(), numero,
-      ehAlteracao,
-      clienteId, clienteNomeSnap: cliente?.nome || "—",
-      itens,
-      status: "pendente",
-      ...(ehAlteracao ? {
-        descricaoAlteracao: descricaoAlteracao.trim(),
-        observacoesCliente: observacoesCliente.trim(),
-        arquivosReferencia,
-      } : {
-        tamanhoProduto: tamanhoProduto.trim(), corProduto: corProduto.trim(), tecidoMaterial: tecidoMaterial.trim(),
-        tipoPersonalizacao, tipoPersonalizacaoOutro: tipoPersonalizacaoOutro.trim(),
-        localPersonalizacao, localPersonalizacaoOutro: localPersonalizacaoOutro.trim(),
-        tamanhoEstampa: tamanhoEstampa.trim(), corEstampa: corEstampa.trim(),
-        fotosProduto, arquivosLogo, mockupsGerados,
-        textoArte: textoArte.trim(), arquivosReferencia, observacoesCliente: observacoesCliente.trim(),
-      }),
-      criadaEm: new Date().toISOString(), concluidaEm: null,
-    };
-    await onSalvarSolicitacao(nova);
-    limparFormulario();
-  }
-
-  async function alternarConcluida(s) {
-    await onSalvarSolicitacao({
-      ...s,
-      status: s.status === "concluida" ? "pendente" : "concluida",
-      concluidaEm: s.status === "concluida" ? null : new Date().toISOString(),
+      // projeção: usa a programação do PCP quando existir, senão o apontamento em curso
+      const aps = (db.apontamentos || []).filter(a => a.opId === op.id && a.etapaIdx === i);
+      const ap = aps.find(a => !a.fim) || aps[aps.length - 1];
+      const iniPrev = ap ? String(ap.inicio).replace('T', ' ') : et.dataInicio ? fmtDate(et.dataInicio) : '—';
+      const fimPrev = ap ? String(ap.fim || ap.previsaoFim || '').replace('T', ' ') || '—' : '—';
+      const resp = responsaveisEtapa(et);
+      const respAp = ap ? ap.equipe || [ap.colaborador] : [];
+      const nomes = Array.from(new Set([...resp, ...respAp]));
+      return /*#__PURE__*/React.createElement("tr", {
+        key: i
+      }, /*#__PURE__*/React.createElement("td", {
+        className: "small muted"
+      }, i + 1), /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement("strong", null, et.nome)), /*#__PURE__*/React.createElement("td", {
+        className: "small"
+      }, dep ? dep.nome : '—'), /*#__PURE__*/React.createElement("td", {
+        className: "small"
+      }, nomes.length ? nomes.join(', ') : /*#__PURE__*/React.createElement("span", {
+        className: "muted"
+      }, "a definir"), ap && !ap.fim && /*#__PURE__*/React.createElement("div", {
+        className: "small",
+        style: {
+          color: 'var(--thread-dark)'
+        }
+      }, "em produção")), /*#__PURE__*/React.createElement("td", {
+        className: "small muted"
+      }, maq ? `${maq.codigo} · ${maq.nome}` : '—'), /*#__PURE__*/React.createElement("td", {
+        className: "num"
+      }, base), /*#__PURE__*/React.createElement("td", {
+        className: "num small"
+      }, minPeca > 0 ? minParaHHMM(carga) : /*#__PURE__*/React.createElement("span", {
+        className: "muted"
+      }, "sem tempo"), minPeca > 0 && /*#__PURE__*/React.createElement("div", {
+        className: "muted",
+        style: {
+          fontSize: 10
+        }
+      }, Math.floor(60 / minPeca), " pç/h")), /*#__PURE__*/React.createElement("td", {
+        className: "small"
+      }, iniPrev), /*#__PURE__*/React.createElement("td", {
+        className: "small"
+      }, fimPrev), /*#__PURE__*/React.createElement("td", {
+        className: "num"
+      }, et.qtdConcluida || 0), /*#__PURE__*/React.createElement("td", {
+        className: "small"
+      }, et.status));
     });
-  }
-  async function excluir(id) {
-    if (!window.confirm("Excluir esta solicitação?")) return;
-    await onRemoverSolicitacao(id);
-  }
-  async function aoCopiar(s) {
-    const texto = s.ehAlteracao ? gerarTextoAlteracaoArte(s) : gerarTextoSolicitacaoArte(s);
-    const ok = await copiarTexto(texto);
-    if (ok) { setCopiadoId(s.id); setTimeout(() => setCopiadoId(null), 2000); }
-    else alert("Não foi possível copiar automaticamente. Selecione e copie o texto manualmente.");
-  }
-  // Adicionado: impressão trazendo a grade de informações (com o nome do
-  // cliente na primeira linha) e, em folha separada, os arquivos do
-  // produto + do cliente — reaproveita o mesmo impresso já usado pelas
-  // Ordens de Produção.
-  function imprimirSolicitacao(s) {
-    const linhas = [
-      { campo: "Cliente", valor: s.clienteNomeSnap || "—" },
-      { campo: "Produto(s)", valor: resumoItens(s.itens) },
-    ];
-    if (s.ehAlteracao) {
-      linhas.push({ campo: "O que precisa ser alterado", valor: s.descricaoAlteracao || "—" });
-    } else {
-      linhas.push(
-        { campo: "Tamanho/medida do produto", valor: s.tamanhoProduto || "—" },
-        { campo: "Cor do produto", valor: s.corProduto || "—" },
-        { campo: "Tecido/material", valor: s.tecidoMaterial || "—" },
-        { campo: "Tipo de personalização", valor: (s.tipoPersonalizacao === "Outro" ? s.tipoPersonalizacaoOutro : s.tipoPersonalizacao) || "—" },
-        { campo: "Local da personalização", valor: (s.localPersonalizacao === "Outro" ? s.localPersonalizacaoOutro : s.localPersonalizacao) || "—" },
-        { campo: "Tamanho da estampa/logo", valor: s.tamanhoEstampa || "—" },
-        { campo: "Cor da estampa", valor: s.corEstampa || "—" },
-        { campo: "Texto que deve entrar na arte", valor: s.textoArte || "—" },
-      );
-    }
-    if ((s.observacoesCliente || "").trim()) linhas.push({ campo: "Observações do cliente", valor: s.observacoesCliente });
-    // Corrigido: quando existe um posicionamento gerado (a mesma foto do
-    // produto já com a arte do cliente encaixada), a foto crua do
-    // produto fica redundante no impresso — mostrava a mesma peça duas
-    // vezes. Com posicionamento, só ele entra (além da arte original e
-    // da referência); sem posicionamento, a foto crua continua entrando.
-    const temMockup = (s.mockupsGerados || []).length > 0;
-    const anexos = [
-      ...(temMockup ? [] : (s.fotosProduto || [])),
-      ...(s.arquivosLogo || []),
-      ...(s.mockupsGerados || []),
-      ...(s.arquivosReferencia || []),
-    ];
-    onImprimirGrade({
-      titulo: `${s.ehAlteracao ? "Alteração" : "Solicitação"} de arte #${String(s.numero).padStart(3, "0")} — ${s.clienteNomeSnap || "Sem cliente"}`,
-      subtitulo: resumoItens(s.itens),
-      geradoEm: new Date().toLocaleString("pt-BR"),
-      orientacao: "retrato",
-      folhaUnica: true,
-      colunas: [{ key: "campo", label: "Campo" }, { key: "valor", label: "Informação" }],
-      linhas,
-      anexos,
-    });
-  }
-
-  const filtradas = solicitacoes.filter(s => {
-    const termo = busca.trim().toLowerCase();
-    if (!termo) return true;
-    return (s.itens || []).some(it => (it.produtoNomeSnap || "").toLowerCase().includes(termo)) || (s.clienteNomeSnap || "").toLowerCase().includes(termo) || `#${String(s.numero).padStart(3, "0")}`.includes(termo);
-  });
-  const pendentes = [...filtradas.filter(s => s.status !== "concluida")].sort((a, b) => (a.numero || 0) - (b.numero || 0));
-  const concluidas = [...filtradas.filter(s => s.status === "concluida")].sort((a, b) => new Date(b.concluidaEm || 0) - new Date(a.concluidaEm || 0));
-
-  function renderGaleriaAnexo(arquivos, onRemover) {
-    if (arquivos.length === 0) return null;
-    return (
-      <div style={{ display: "flex", gap: 6, marginBottom: 8, flexWrap: "wrap" }}>
-        {arquivos.map(a => (
-          <div key={a.id} style={{ position: "relative", border: "1px solid #e6ddc8", borderRadius: 6, overflow: "hidden", background: "#fff" }}>
-            {a.tipo && a.tipo.startsWith("image/")
-              ? <img src={a.dataUrl} alt={a.nome} style={{ width: 56, height: 56, objectFit: "cover", display: "block" }} />
-              : <div style={{ width: 56, height: 56, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", color: "#a3937a", gap: 2 }}>
-                  <Paperclip size={15} />
-                  <span style={{ fontSize: 8, padding: "0 3px", textAlign: "center", overflow: "hidden", whiteSpace: "nowrap", textOverflow: "ellipsis", maxWidth: 52 }}>{a.nome}</span>
-                </div>}
-            <button onClick={() => onRemover(a.id)} style={{ position: "absolute", top: 2, right: 2, background: "rgba(255,255,255,0.92)", border: "none", borderRadius: 999, width: 17, height: 17, cursor: "pointer", color: "#b13232", display: "flex", alignItems: "center", justifyContent: "center" }}><X size={10} /></button>
-          </div>
-        ))}
-      </div>
-    );
-  }
-
-  function renderGaleriaVisualizacao(titulo, arquivos) {
-    if (!arquivos || arquivos.length === 0) return null;
-    return (
-      <>
-        <div style={{ fontSize: 11.5, fontWeight: 700, color: "#6b5d49", marginTop: 10 }}>{titulo}</div>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8, marginTop: 4 }}>
-          {arquivos.map(a => (
-            a.tipo && a.tipo.startsWith("image/")
-              ? <a key={a.id} href={a.dataUrl} download={a.nome}><img src={a.dataUrl} alt={a.nome} style={{ width: "100%", height: 80, objectFit: "cover", borderRadius: 6, border: "1px solid #e6ddc8", display: "block" }} /></a>
-              : <a key={a.id} href={a.dataUrl} download={a.nome} style={{ fontSize: 11, color: "#2f4a63", border: "1px solid #e6ddc8", borderRadius: 6, padding: "4px 8px", textDecoration: "none", display: "inline-flex", alignItems: "center", gap: 4 }}><Paperclip size={11} /> {a.nome}</a>
-          ))}
-        </div>
-      </>
-    );
-  }
-
-  function renderCardSolicitacao(s) {
-    const expandido = expandidoId === s.id;
-    const totalArquivos = (s.fotosProduto || []).length + (s.arquivosLogo || []).length;
-    return (
-      <Card key={s.id} style={{ padding: 14 }}>
-        <div onClick={() => setExpandidoId(expandido ? null : s.id)} style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8, cursor: "pointer" }}>
-          <div style={{ display: "flex", alignItems: "flex-start", gap: 6 }}>
-            {expandido ? <ChevronUp size={16} style={{ marginTop: 3, color: "#a3937a", flexShrink: 0 }} /> : <ChevronDown size={16} style={{ marginTop: 3, color: "#a3937a", flexShrink: 0 }} />}
-            <div>
-              {s.ehAlteracao && (
-                <div style={{ display: "inline-flex", alignItems: "center", fontSize: 10.5, fontWeight: 700, color: "#b5820a", background: "#fbf0da", padding: "2px 7px", borderRadius: 999, marginBottom: 4 }}>
-                  Alteração de arte
-                </div>
-              )}
-              <div style={{ fontWeight: 800, fontSize: 14, color: "#1c2b39" }}>#{String(s.numero).padStart(3, "0")} · {resumoItens(s.itens)}</div>
-              <div style={{ fontSize: 12, color: "#a3937a" }}>
-                {s.clienteNomeSnap ? `${s.clienteNomeSnap} · ` : ""}criada em {new Date(s.criadaEm).toLocaleDateString("pt-BR")}{totalArquivos > 0 ? ` · 📎 ${totalArquivos}` : ""}
-              </div>
-            </div>
-          </div>
-          <StatusDot cor={s.status === "concluida" ? "verde" : "laranja"} />
-        </div>
-        {expandido && (
-          <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px solid #efe8d8" }}>
-            <div style={{ display: "flex", flexDirection: "column", gap: 6, fontSize: 12.5, color: "#2a2015" }}>
-              <div><b>Cliente:</b> {s.clienteNomeSnap || "—"}</div>
-              <div><b>Produto(s):</b> {(s.itens || []).map(it => `${it.produtoNomeSnap} (${it.quantidade})`).join(", ") || "—"}</div>
-              {s.ehAlteracao ? (
-                <>
-                  <div><b>O que precisa ser alterado:</b> <span style={{ whiteSpace: "pre-wrap" }}>{s.descricaoAlteracao}</span></div>
-                  {s.observacoesCliente && <div><b>Observações:</b> {s.observacoesCliente}</div>}
-                </>
-              ) : (
-                <>
-                  {s.tamanhoProduto && <div><b>Tamanho/medida do produto:</b> {s.tamanhoProduto}</div>}
-                  {s.corProduto && <div><b>Cor do produto:</b> {s.corProduto}</div>}
-                  {s.tecidoMaterial && <div><b>Tecido/material:</b> {s.tecidoMaterial}</div>}
-                  {s.tipoPersonalizacao && <div><b>Tipo de personalização:</b> {s.tipoPersonalizacao === "Outro" ? s.tipoPersonalizacaoOutro : s.tipoPersonalizacao}</div>}
-                  {s.localPersonalizacao && <div><b>Local da personalização:</b> {s.localPersonalizacao === "Outro" ? s.localPersonalizacaoOutro : s.localPersonalizacao}</div>}
-                  {s.tamanhoEstampa && <div><b>Tamanho da estampa/logo:</b> {s.tamanhoEstampa}</div>}
-                  {s.corEstampa && <div><b>Cor da estampa:</b> {s.corEstampa}</div>}
-                  {s.textoArte && <div><b>Texto que deve entrar na arte:</b> <span style={{ whiteSpace: "pre-wrap" }}>{s.textoArte}</span></div>}
-                  {s.observacoesCliente && <div><b>Observações do cliente:</b> {s.observacoesCliente}</div>}
-                </>
-              )}
-            </div>
-            {renderGaleriaVisualizacao("Foto do produto", s.fotosProduto)}
-            {renderGaleriaVisualizacao("Logo/arquivo do cliente", s.arquivosLogo)}
-            {renderGaleriaVisualizacao("Posicionamento gerado", s.mockupsGerados)}
-            {renderGaleriaVisualizacao("Referência", s.arquivosReferencia)}
-            <div style={{ display: "flex", gap: 8, marginTop: 12, flexWrap: "wrap" }}>
-              <button type="button" onClick={() => aoCopiar(s)} style={{
-                flex: 1, minWidth: 120, border: "1.5px solid #d9cfb7", background: "#fff", borderRadius: 9, padding: "9px 10px",
-                color: "#2f4a63", fontWeight: 700, cursor: "pointer", fontSize: 13, display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
-              }}>
-                <Paperclip size={14} /> {copiadoId === s.id ? "Texto copiado ✓" : "Copiar texto"}
-              </button>
-              <IconButton onClick={() => imprimirSolicitacao(s)} title="Imprimir ordem de criação"><Printer size={15} /></IconButton>
-              <PrimaryButton onClick={() => alternarConcluida(s)} style={{ flex: 1, minWidth: 140 }}>
-                <Check size={16} /> {s.status === "concluida" ? "Reabrir" : "Marcar concluída"}
-              </PrimaryButton>
-              <IconButton onClick={() => excluir(s.id)} danger title="Excluir"><Trash2 size={16} /></IconButton>
-            </div>
-          </div>
-        )}
-      </Card>
-    );
-  }
-
-  return (
-    <div>
-      <Card style={{ marginBottom: 16 }}>
-        <div style={{ fontSize: 15, fontWeight: 800, fontFamily: FONT_DISPLAY, marginBottom: 6, color: "#1c2b39" }}>Nova solicitação de arte</div>
-        <div style={{ fontSize: 12.5, color: "#6b5d49", marginBottom: 12 }}>
-          Fila de pedidos para o(a) arte-finalista, na ordem em que chegam. Confirme com o cliente todas as informações antes de enviar — pedidos incompletos podem atrasar a criação.
-        </div>
-        <Field label="Tipo de pedido">
-          <div style={{ display: "flex", gap: 8 }}>
-            <ToggleChip ativo={!ehAlteracao} onClick={() => setEhAlteracao(false)}>Nova arte</ToggleChip>
-            <ToggleChip ativo={ehAlteracao} colorAtivo="#b5820a" onClick={() => setEhAlteracao(true)}>Alteração de arte</ToggleChip>
-          </div>
-        </Field>
-
-        <Field label="Cliente">
-          <Select value={clienteId} onChange={e => setClienteId(e.target.value)}>
-            <option value="">Selecione…</option>
-            {[...(clientes || [])].sort((a, b) => a.nome.localeCompare(b.nome)).map(c => <option key={c.id} value={c.id}>{c.nome}</option>)}
-          </Select>
-          <button type="button" onClick={() => setNovoClienteAberto(v => !v)} style={linkButtonStyle}>
-            {novoClienteAberto ? "Cancelar" : "+ Novo cliente"}
-          </button>
-          {novoClienteAberto && (
-            <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
-              <input value={novoClienteNome} onChange={e => setNovoClienteNome(e.target.value)} placeholder="Nome do cliente" style={{ ...inputStyle, flex: 1 }} onKeyDown={e => e.key === "Enter" && criarClienteRapido(novoClienteNome, id => { setClienteId(id); setNovoClienteNome(""); setNovoClienteAberto(false); })} />
-              <PrimaryButton onClick={() => criarClienteRapido(novoClienteNome, id => { setClienteId(id); setNovoClienteNome(""); setNovoClienteAberto(false); })} disabled={!novoClienteNome.trim()}><Plus size={16} /></PrimaryButton>
-            </div>
-          )}
-        </Field>
-
-        <Field label="Produtos e quantidades">
-          {produtosDisponiveisParaAdicionar.length > 0 ? (
-            <>
-              <div style={{ display: "flex", gap: 6 }}>
-                <Select value={produtoParaAdicionar} onChange={e => setProdutoParaAdicionar(e.target.value)} style={{ flex: 1 }}>
-                  <option value="">Produto…</option>
-                  {produtosDisponiveisParaAdicionar.map(p => <option key={p.id} value={p.id}>{p.nome}</option>)}
-                </Select>
-                <input type="number" min="1" step="1" value={quantidadeParaAdicionar} onChange={e => setQuantidadeParaAdicionar(e.target.value)} placeholder="Qtd." style={{ ...inputStyle, width: 78 }} />
-              </div>
-              <button type="button" onClick={adicionarItem} disabled={!podeAdicionarItem} style={{
-                marginTop: 8, width: "100%", border: "1.5px solid " + (podeAdicionarItem ? "#2f4a63" : "#d9cfb7"),
-                background: podeAdicionarItem ? "#2f4a63" : "#f4efe2", color: podeAdicionarItem ? "#fff" : "#a3937a",
-                borderRadius: 8, padding: "8px 12px", fontSize: 13, fontWeight: 700,
-                cursor: podeAdicionarItem ? "pointer" : "not-allowed", display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
-              }}>
-                <Plus size={15} /> Adicionar produto
-              </button>
-            </>
-          ) : (
-            <div style={{ fontSize: 11.5, color: "#a3937a" }}>Todos os produtos cadastrados já foram adicionados.</div>
-          )}
-          <button type="button" onClick={() => setNovoProdutoAberto(v => !v)} style={linkButtonStyle}>
-            {novoProdutoAberto ? "Cancelar" : "+ Cadastrar novo produto"}
-          </button>
-          {novoProdutoAberto && (
-            <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
-              <input value={novoProdutoNome} onChange={e => setNovoProdutoNome(e.target.value)} placeholder="Nome do novo produto" style={{ ...inputStyle, flex: 1 }} onKeyDown={e => e.key === "Enter" && criarProduto()} />
-              <PrimaryButton onClick={criarProduto} disabled={!novoProdutoNome.trim()}><Plus size={16} /></PrimaryButton>
-            </div>
-          )}
-          {itens.length > 0 && (
-            <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 10 }}>
-              {itens.map(it => (
-                <div key={it.produtoId} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", background: "#fff", border: "1px solid #e6ddc8", borderRadius: 8, padding: "7px 10px" }}>
-                  <span style={{ fontSize: 13, color: "#2a2015" }}>{it.produtoNomeSnap} — {it.quantidade} peças</span>
-                  <IconButton onClick={() => removerItem(it.produtoId)} danger title="Remover"><X size={14} /></IconButton>
-                </div>
-              ))}
-            </div>
-          )}
-        </Field>
-
-        {ehAlteracao ? (
-          <>
-            <Field label="O que precisa ser alterado">
-              <textarea value={descricaoAlteracao} onChange={e => setDescricaoAlteracao(e.target.value)} rows={3}
-                placeholder={"Descreva claramente a mudança.\nEx.: Alterar a logo do peito de 10 cm para 8 cm e trocar a cor branca por dourada."}
-                style={{ ...inputStyle, resize: "vertical", fontFamily: "inherit" }} />
-              <div style={{ fontSize: 11, color: "#a3937a", marginTop: 4 }}>
-                ❌ "Cliente pediu para mudar." — evite. ✅ Diga exatamente o que muda.
-              </div>
-            </Field>
-            <Field label="Referência (opcional)">
-              {renderGaleriaAnexo(arquivosReferencia, removerArquivoReferencia)}
-              <input ref={arquivoReferenciaRef} type="file" multiple accept="image/*,.pdf" style={{ display: "none" }}
-                onChange={e => { anexarReferencia(e.target.files); e.target.value = ""; }} />
-              <button type="button" onClick={() => arquivoReferenciaRef.current && arquivoReferenciaRef.current.click()} style={{
-                fontSize: 12.5, border: "1px dashed #cdb98a", background: "#f4ecd8", borderRadius: 7, padding: "7px 11px",
-                cursor: "pointer", display: "flex", alignItems: "center", gap: 6, color: "#2f4a63", fontWeight: 700,
-              }}><Paperclip size={14} /> Anexar arquivo</button>
-            </Field>
-            <Field label="Observações (opcional)">
-              <textarea value={observacoesCliente} onChange={e => setObservacoesCliente(e.target.value)} rows={2}
-                style={{ ...inputStyle, resize: "vertical", fontFamily: "inherit" }} />
-            </Field>
-          </>
-        ) : (
-          <>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-              <Field label="Tamanho/medida do produto">
-                <input value={tamanhoProduto} onChange={e => setTamanhoProduto(e.target.value)} placeholder="Ex.: M" style={inputStyle} />
-              </Field>
-              <Field label="Cor do produto">
-                <input value={corProduto} onChange={e => setCorProduto(e.target.value)} placeholder="Ex.: Preto" style={inputStyle} />
-              </Field>
-            </div>
-            <Field label="Tecido/material">
-              <input value={tecidoMaterial} onChange={e => setTecidoMaterial(e.target.value)} placeholder="Ex.: Malha PV" style={inputStyle} />
-            </Field>
-            <Field label="Tipo de personalização">
-              <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                {TIPOS_PERSONALIZACAO.map(t => <ToggleChip key={t} ativo={tipoPersonalizacao === t} onClick={() => setTipoPersonalizacao(t)}>{t}</ToggleChip>)}
-              </div>
-              {tipoPersonalizacao === "Outro" && (
-                <input value={tipoPersonalizacaoOutro} onChange={e => setTipoPersonalizacaoOutro(e.target.value)} placeholder="Qual?" style={{ ...inputStyle, marginTop: 8 }} />
-              )}
-            </Field>
-            <Field label="Local da personalização">
-              <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                {LOCAIS_PERSONALIZACAO.map(l => <ToggleChip key={l} ativo={localPersonalizacao === l} onClick={() => setLocalPersonalizacao(l)}>{l}</ToggleChip>)}
-              </div>
-              {localPersonalizacao === "Outro" && (
-                <input value={localPersonalizacaoOutro} onChange={e => setLocalPersonalizacaoOutro(e.target.value)} placeholder="Qual?" style={{ ...inputStyle, marginTop: 8 }} />
-              )}
-            </Field>
-            <Field label="Tamanho da estampa/logo">
-              <input value={tamanhoEstampa} onChange={e => setTamanhoEstampa(e.target.value)} placeholder="Ex.: 20 x 15 cm" style={inputStyle} />
-            </Field>
-            <Field label="Cor da estampa">
-              <input value={corEstampa} onChange={e => setCorEstampa(e.target.value)} placeholder="Ex.: Branco" style={inputStyle} />
-            </Field>
-            <Field label="Foto do produto">
-              {renderGaleriaAnexo(fotosProduto, removerFotoProduto)}
-              <input ref={fotoProdutoRef} type="file" multiple accept="image/*" style={{ display: "none" }}
-                onChange={e => { anexarFotoProduto(e.target.files); e.target.value = ""; }} />
-              <button type="button" onClick={() => fotoProdutoRef.current && fotoProdutoRef.current.click()} style={{
-                fontSize: 12.5, border: "1px dashed #cdb98a", background: "#f4ecd8", borderRadius: 7, padding: "7px 11px",
-                cursor: "pointer", display: "flex", alignItems: "center", gap: 6, color: "#2f4a63", fontWeight: 700,
-              }}><Paperclip size={14} /> Anexar foto</button>
-            </Field>
-            <Field label="Logo/arquivo do cliente">
-              {renderGaleriaAnexo(arquivosLogo, removerArquivoLogo)}
-              <input ref={arquivoLogoRef} type="file" multiple accept="image/*,.pdf,.ai,.eps,.cdr,.svg" style={{ display: "none" }}
-                onChange={e => { anexarLogo(e.target.files); e.target.value = ""; }} />
-              <button type="button" onClick={() => arquivoLogoRef.current && arquivoLogoRef.current.click()} style={{
-                fontSize: 12.5, border: "1px dashed #cdb98a", background: "#f4ecd8", borderRadius: 7, padding: "7px 11px",
-                cursor: "pointer", display: "flex", alignItems: "center", gap: 6, color: "#2f4a63", fontWeight: 700,
-              }}><Paperclip size={14} /> Anexar arquivo</button>
-              <div style={{ fontSize: 11, color: "#a3937a", marginTop: 4 }}>De preferência em boa qualidade — PDF, CDR, AI, SVG ou PNG.</div>
-            </Field>
-
-            <EstudioPosicionamento
-              fotosProduto={fotosProduto} arquivosLogo={arquivosLogo} tamanhoEstampa={tamanhoEstampa}
-              onSalvar={arquivo => setMockupsGerados(a => [...a, arquivo])}
-            />
-            {renderGaleriaAnexo(mockupsGerados, removerMockup)}
-
-            <Field label="Texto que deve entrar na arte">
-              <textarea value={textoArte} onChange={e => setTextoArte(e.target.value)} rows={2}
-                placeholder="Escreva exatamente como deverá aparecer" style={{ ...inputStyle, resize: "vertical", fontFamily: "inherit" }} />
-            </Field>
-            <Field label="Referência (opcional)">
-              {renderGaleriaAnexo(arquivosReferencia, removerArquivoReferencia)}
-              <input ref={arquivoReferenciaRef} type="file" multiple accept="image/*,.pdf" style={{ display: "none" }}
-                onChange={e => { anexarReferencia(e.target.files); e.target.value = ""; }} />
-              <button type="button" onClick={() => arquivoReferenciaRef.current && arquivoReferenciaRef.current.click()} style={{
-                fontSize: 12.5, border: "1px dashed #cdb98a", background: "#f4ecd8", borderRadius: 7, padding: "7px 11px",
-                cursor: "pointer", display: "flex", alignItems: "center", gap: 6, color: "#2f4a63", fontWeight: 700,
-              }}><Paperclip size={14} /> Anexar arquivo</button>
-              <div style={{ fontSize: 11, color: "#a3937a", marginTop: 4 }}>Foto, modelo ou exemplo que o cliente tenha enviado.</div>
-            </Field>
-            <Field label="Observações do cliente">
-              <textarea value={observacoesCliente} onChange={e => setObservacoesCliente(e.target.value)} rows={2}
-                placeholder="Qualquer detalhe adicional solicitado" style={{ ...inputStyle, resize: "vertical", fontFamily: "inherit" }} />
-            </Field>
-          </>
-        )}
-
-        <PrimaryButton onClick={criarSolicitacao} disabled={!podeCriar} style={{ width: "100%", marginTop: 4 }}>
-          <Plus size={16} /> Adicionar à fila
-        </PrimaryButton>
-        {!podeCriar && <div style={{ fontSize: 11, color: "#a3937a", marginTop: 6, textAlign: "center" }}>{ehAlteracao ? "Selecione cliente, ao menos 1 produto e descreva o que precisa mudar." : "Selecione o cliente e ao menos 1 produto para poder adicionar."}</div>}
-      </Card>
-
-      <Card style={{ marginBottom: 16, padding: 12 }}>
-        <Field label="Pesquisar">
-          <input value={busca} onChange={e => setBusca(e.target.value)} placeholder="Nº da solicitação, produto ou cliente…" style={inputStyle} />
-        </Field>
-      </Card>
-
-      <div style={{ fontSize: 13, fontWeight: 700, color: "#6b5d49", margin: "4px 2px 8px" }}>Pendentes</div>
-      {pendentes.length === 0 && <div style={{ fontSize: 13.5, color: "#a3937a", padding: "8px 2px", marginBottom: 16 }}>{busca ? "Nenhuma solicitação pendente encontrada para essa pesquisa." : "Nenhuma solicitação pendente."}</div>}
-      <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 20 }}>
-        {pendentes.map(renderCardSolicitacao)}
-      </div>
-
-      <div style={{ fontSize: 13, fontWeight: 700, color: "#6b5d49", margin: "4px 2px 8px" }}>Concluídas</div>
-      {concluidas.length === 0 && <div style={{ fontSize: 13.5, color: "#a3937a", padding: "8px 2px" }}>{busca ? "Nenhuma solicitação concluída encontrada para essa pesquisa." : "Nenhuma solicitação concluída ainda."}</div>}
-      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-        {concluidas.map(renderCardSolicitacao)}
-      </div>
-    </div>
-  );
-}
-// ---------- Chat interno (conversa entre os usuários do sistema) ----------
-// Adicionado: canal único de conversa entre todo mundo que usa o app —
-// colaboradores, gestores e administradores. Como o armazenamento do app
-// não tem um mecanismo de "tempo real", a tela busca mensagens novas a
-// cada poucos segundos (function componentDidMount + intervalo) em vez de
-// esperar o usuário recarregar a página.
-function ChatInterno({ usuarioAtual, ehAdministrador, colaboradores }) {
-  const [mensagens, setMensagens] = useState([]);
-  const [carregado, setCarregado] = useState(false);
-  const [texto, setTexto] = useState("");
-  // Adicionado: anexos no chat — fotos, documentos ou qualquer arquivo,
-  // pra mandar evidência junto com a mensagem (ex.: foto de um defeito,
-  // PDF de uma ficha técnica).
-  const [anexosChat, setAnexosChat] = useState([]);
-  const anexoChatRef = useRef(null);
-  const [enviando, setEnviando] = useState(false);
-  // Adicionado: em muitas confecções o mesmo aparelho fica logado o dia
-  // inteiro (ex.: um tablet fixo no chão de fábrica) — em vez de exigir
-  // "trocar usuário" toda hora só pra mandar uma mensagem, este seletor
-  // deixa claro de qual colaborador a mensagem está sendo enviada.
-  const [remetenteSelecionado, setRemetenteSelecionado] = useState(usuarioAtual?.nome || "");
-  const fimDaListaRef = useRef(null);
-  const primeiraCargaRef = useRef(true);
-
-  async function buscarMensagens() {
-    try {
-      const listaRes = await window.storage.list("mensagem:", true);
-      const chaves = (listaRes && listaRes.keys) || [];
-      const valores = (await Promise.all(chaves.map(async (k) => {
-        try {
-          const r = await window.storage.get(k, true);
-          return r && r.value ? JSON.parse(r.value) : null;
-        } catch (e) { return null; }
-      }))).filter(Boolean);
-      valores.sort((a, b) => new Date(a.criadoEm) - new Date(b.criadoEm));
-      setMensagens(valores);
-    } catch (e) {
-      // sem mensagens ainda, ou falha momentânea de leitura — tenta de novo no próximo ciclo
-    } finally {
-      setCarregado(true);
-    }
-  }
-
-  useEffect(() => {
-    buscarMensagens();
-    const intervalo = setInterval(buscarMensagens, 6000);
-    return () => clearInterval(intervalo);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  useEffect(() => {
-    if (!fimDaListaRef.current) return;
-    // Não força rolagem em toda atualização — só na primeira carga e
-    // quando dá pra assumir que o usuário já está perto do fim da lista.
-    const el = fimDaListaRef.current.parentElement;
-    const pertoDoFim = el ? (el.scrollHeight - el.scrollTop - el.clientHeight) < 200 : true;
-    if (primeiraCargaRef.current || pertoDoFim) {
-      fimDaListaRef.current.scrollIntoView({ block: "end" });
-    }
-    primeiraCargaRef.current = false;
-  }, [mensagens.length]);
-
-  async function anexarNoChat(fileList) {
-    const arquivos = Array.from(fileList || []);
-    const novos = [];
-    for (const file of arquivos) {
-      if (file.size > 4.5 * 1024 * 1024) { alert(`"${file.name}" é maior que 4,5MB e não pode ser anexado.`); continue; }
-      const dataUrl = await new Promise((res, rej) => {
-        const rd = new FileReader();
-        rd.onload = () => res(rd.result); rd.onerror = rej; rd.readAsDataURL(file);
-      });
-      novos.push({ id: uid(), nome: file.name, tipo: file.type, dataUrl });
-    }
-    if (novos.length) setAnexosChat(a => [...a, ...novos]);
-  }
-
-  async function enviar() {
-    const texto2 = texto.trim();
-    // Corrigido: agora dá pra mandar só um anexo, sem escrever nada.
-    if ((!texto2 && anexosChat.length === 0) || enviando) return;
-    setEnviando(true);
-    const nova = {
-      id: uid(), autorNome: remetenteSelecionado || usuarioAtual?.nome || "Usuário", autorPerfil: usuarioAtual?.perfil || "colaborador",
-      texto: texto2, anexos: anexosChat, criadoEm: new Date().toISOString(),
-    };
-    setMensagens(msgs => [...msgs, nova]);
-    setTexto(""); setAnexosChat([]);
-    try {
-      await window.storage.set(`mensagem:${nova.id}`, JSON.stringify(nova), true);
-    } catch (e) {
-      // se falhar o envio, a próxima busca automática não vai trazer essa
-      // mensagem — ela some da tela sozinha em até 6s, sem travar o chat.
-    }
-    setEnviando(false);
-  }
-  async function excluirMensagem(id) {
-    if (!window.confirm("Excluir esta mensagem?")) return;
-    setMensagens(msgs => msgs.filter(m => m.id !== id));
-    try { await window.storage.delete(`mensagem:${id}`, true); } catch (e) {}
-  }
-
-  const labelPerfil = (p) => ({ administrador: "Administrador", gestor: "Gestor", colaborador: "Colaborador" }[p] || "");
-
-  return (
-    <div style={{ display: "flex", flexDirection: "column", height: "calc(100vh - 190px)" }}>
-      <div style={{ fontSize: 12, color: "#a3937a", marginBottom: 8 }}>
-        Conversa interna entre todo mundo que usa o sistema — some a cada mensagem nova em até 6 segundos.
-      </div>
-      <div style={{ flex: 1, overflowY: "auto", background: "#fffdf7", border: "1px solid #e6ddc8", borderRadius: 12, padding: 12, display: "flex", flexDirection: "column", gap: 8 }}>
-        {!carregado ? (
-          <div style={{ fontSize: 13, color: "#a3937a", textAlign: "center", marginTop: 20 }}>Carregando conversa…</div>
-        ) : mensagens.length === 0 ? (
-          <div style={{ fontSize: 13, color: "#a3937a", textAlign: "center", marginTop: 20 }}>Nenhuma mensagem ainda — comece a conversa.</div>
-        ) : (
-          mensagens.map(m => {
-            const propria = m.autorNome === remetenteSelecionado;
-            return (
-              <div key={m.id} style={{ display: "flex", flexDirection: "column", alignItems: propria ? "flex-end" : "flex-start" }}>
-                <div style={{
-                  maxWidth: "80%", padding: "8px 12px", borderRadius: propria ? "12px 12px 3px 12px" : "12px 12px 12px 3px",
-                  background: propria ? "#2f4a63" : "#f4ecd8", color: propria ? "#fff" : "#2a2015",
-                  border: propria ? "none" : "1px dashed #cdb98a",
-                }}>
-                  {!propria && (
-                    <div style={{ fontSize: 11, fontWeight: 700, color: "#8a6510", marginBottom: 2 }}>
-                      {m.autorNome}{labelPerfil(m.autorPerfil) ? ` · ${labelPerfil(m.autorPerfil)}` : ""}
-                    </div>
-                  )}
-                  {m.texto && <div style={{ fontSize: 13.5, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{m.texto}</div>}
-                  {(m.anexos || []).length > 0 && (
-                    <div style={{ display: "flex", gap: 6, marginTop: m.texto ? 6 : 0, flexWrap: "wrap" }}>
-                      {m.anexos.map(a => (
-                        a.tipo && a.tipo.startsWith("image/")
-                          ? <a key={a.id} href={a.dataUrl} download={a.nome}><img src={a.dataUrl} alt={a.nome} style={{ width: 110, maxHeight: 110, objectFit: "cover", borderRadius: 6, display: "block" }} /></a>
-                          : <a key={a.id} href={a.dataUrl} download={a.nome} style={{
-                              fontSize: 11.5, color: propria ? "#fff" : "#2f4a63", textDecoration: "none",
-                              border: `1px solid ${propria ? "rgba(255,255,255,0.4)" : "#cdb98a"}`, borderRadius: 6,
-                              padding: "5px 8px", display: "inline-flex", alignItems: "center", gap: 5,
-                            }}><Paperclip size={12} /> {a.nome}</a>
-                      ))}
-                    </div>
-                  )}
-                </div>
-                <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 2 }}>
-                  <span style={{ fontSize: 10, color: "#a3937a" }}>
-                    {new Date(m.criadoEm).toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}
-                  </span>
-                  {(propria || ehAdministrador) && (
-                    <button onClick={() => excluirMensagem(m.id)} title="Excluir" style={{ background: "transparent", border: "none", cursor: "pointer", color: "#a3937a", padding: 0, display: "flex" }}>
-                      <Trash2 size={11} />
-                    </button>
-                  )}
-                </div>
-              </div>
-            );
-          })
-        )}
-        <div ref={fimDaListaRef} />
-      </div>
-      <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 10 }}>
-        <span style={{ fontSize: 11.5, color: "#6b5d49", fontWeight: 600, whiteSpace: "nowrap" }}>Enviando como</span>
-        <Select value={remetenteSelecionado} onChange={e => setRemetenteSelecionado(e.target.value)} style={{ padding: "6px 8px", fontSize: 12.5 }}>
-          {usuarioAtual?.nome && <option value={usuarioAtual.nome}>{usuarioAtual.nome} (você)</option>}
-          {(colaboradores || [])
-            .filter(c => c.nome !== usuarioAtual?.nome)
-            .map(c => <option key={c.id} value={c.nome}>{c.nome}</option>)}
-        </Select>
-      </div>
-      {anexosChat.length > 0 && (
-        <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap" }}>
-          {anexosChat.map(a => (
-            <div key={a.id} style={{ position: "relative", border: "1px solid #e6ddc8", borderRadius: 6, overflow: "hidden", background: "#fff" }}>
-              {a.tipo && a.tipo.startsWith("image/")
-                ? <img src={a.dataUrl} alt={a.nome} style={{ width: 56, height: 56, objectFit: "cover", display: "block" }} />
-                : <div style={{ width: 56, height: 56, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", color: "#a3937a", gap: 2 }}>
-                    <Paperclip size={15} />
-                    <span style={{ fontSize: 8, padding: "0 3px", textAlign: "center", overflow: "hidden", whiteSpace: "nowrap", textOverflow: "ellipsis", maxWidth: 52 }}>{a.nome}</span>
-                  </div>}
-              <button onClick={() => setAnexosChat(x => x.filter(y => y.id !== a.id))} style={{ position: "absolute", top: 2, right: 2, background: "rgba(255,255,255,0.92)", border: "none", borderRadius: 999, width: 17, height: 17, cursor: "pointer", color: "#b13232", display: "flex", alignItems: "center", justifyContent: "center" }}><X size={10} /></button>
-            </div>
-          ))}
-        </div>
-      )}
-      <input ref={anexoChatRef} type="file" multiple accept="image/*,video/*,.pdf,.doc,.docx,.xls,.xlsx" style={{ display: "none" }}
-        onChange={e => { anexarNoChat(e.target.files); e.target.value = ""; }} />
-      <div style={{ display: "flex", gap: 8, marginTop: 6 }}>
-        <button type="button" onClick={() => anexoChatRef.current && anexoChatRef.current.click()} title="Anexar documento, foto ou arquivo" style={{
-          border: "1.5px solid #d9cfb7", background: "#fff", borderRadius: 8, padding: "0 12px",
-          cursor: "pointer", color: "#2f4a63", display: "flex", alignItems: "center",
-        }}><Paperclip size={16} /></button>
-        <textarea
-          value={texto} onChange={e => setTexto(e.target.value)} placeholder="Escreva uma mensagem…" rows={1}
-          onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); enviar(); } }}
-          style={{ ...inputStyle, flex: 1, resize: "none", fontFamily: "inherit" }}
-        />
-        <PrimaryButton onClick={enviar} disabled={(!texto.trim() && anexosChat.length === 0) || enviando} style={{ paddingLeft: 16, paddingRight: 16 }}>
-          <Send size={16} />
-        </PrimaryButton>
-      </div>
-    </div>
-  );
-}
-
-// ---------- Consumo de produtos (materiais, estoque, movimentações e compras) ----------
-// Adicionado: nova aba que reúne o estoque de materiais, o histórico de
-// baixas automáticas geradas quando uma Ordem de Produção é concluída, e
-// agora também as solicitações de compra com a negociação (cotações de
-// fornecedores) de cada material.
-function ConsumoProdutos({ materiais, setMateriais, produtos, consumosMaterial, movimentacoesMaterial, movimentacoesEstoque, onSalvarMovimentacaoEstoque, solicitacoesCompra, onSalvarSolicitacaoCompra, onRemoverSolicitacaoCompra, cotacoesCompra, onSalvarCotacaoCompra, onRemoverCotacaoCompra, fornecedores, setFornecedores, ehAdministrador }) {
-  const [sub, setSub] = useState("estoque");
-  const [filtroMaterialId, setFiltroMaterialId] = useState("");
-  const [materialPreSelecionado, setMaterialPreSelecionado] = useState("");
-
-  const nomeProduto = (id) => produtos.find(p => p.id === id)?.nome || "—";
-  const consumoTotalPorMaterial = useMemo(() => {
-    const map = {};
-    movimentacoesMaterial.forEach(mv => {
-      if (!map[mv.materialId]) map[mv.materialId] = 0;
-      map[mv.materialId] += mv.quantidadeConsumida || 0;
-    });
-    return map;
-  }, [movimentacoesMaterial]);
-
-  // Adicionado: une as baixas automáticas de produção com as entradas
-  // (manuais ou de compra aprovada) num único livro de movimentações —
-  // essa é a visão de "controle de materiais" completa, entrada e saída.
-  const movimentacoesUnificadas = useMemo(() => {
-    const saidas = movimentacoesMaterial.map(mv => ({
-      id: `saida:${mv.id}`, tipo: "saida", materialId: mv.materialId,
-      materialNomeSnap: mv.materialNomeSnap, materialUnidadeSnap: mv.materialUnidadeSnap,
-      quantidade: mv.quantidadeConsumida, saldoResultante: mv.saldoResultante,
-      opNumero: mv.ordemProducaoNumero,
-      detalhe: `${mv.produtoNomeSnap || nomeProduto(mv.produtoId)} · ${mv.quantidadeProduzida} peças produzidas`,
-      criadoEm: mv.criadoEm,
-    }));
-    const entradas = (movimentacoesEstoque || []).map(mv => {
-      const base = mv.motivo || (mv.origem === "compra" ? "Compra aprovada" : "Ajuste manual");
-      // Adicionado: mostra o fornecedor da entrada manual junto do
-      // motivo (a compra aprovada já mostrava o fornecedor da cotação).
-      const fornecedorTexto = mv.fornecedorNomeSnap ? ` · ${mv.fornecedorNomeSnap}` : (mv.origem === "compra" ? " · —" : "");
-      return {
-        id: `estoque:${mv.id}`, tipo: mv.tipo, materialId: mv.materialId,
-        materialNomeSnap: mv.materialNomeSnap, materialUnidadeSnap: mv.materialUnidadeSnap,
-        quantidade: mv.quantidade, saldoResultante: mv.saldoResultante, opNumero: null,
-        detalhe: `${base}${fornecedorTexto}`, precoUnitarioSnap: mv.precoUnitarioSnap ?? null,
-        criadoEm: mv.criadoEm,
-      };
-    });
-    return [...saidas, ...entradas]
-      .filter(mv => !filtroMaterialId || mv.materialId === filtroMaterialId)
-      .sort((a, b) => new Date(b.criadoEm) - new Date(a.criadoEm));
-  }, [movimentacoesMaterial, movimentacoesEstoque, filtroMaterialId]);
-
-  const solicitacoesAbertas = solicitacoesCompra.filter(s => s.status !== "comprada" && s.status !== "cancelada").length;
-
-  function solicitarCompra(materialId) {
-    setMaterialPreSelecionado(materialId);
-    setSub("compras");
-  }
-
-  return (
-    <div>
-      <div style={{ display: "flex", gap: 6, marginBottom: 16, flexWrap: "wrap" }}>
-        {[
-          { key: "estoque", label: "Estoque" },
-          { key: "entrada", label: "Entrada" },
-          { key: "movimentacoes", label: "Movimentações" },
-          { key: "compras", label: `Compras${solicitacoesAbertas ? ` (${solicitacoesAbertas})` : ""}` },
-        ].map(s => (
-          <button key={s.key} onClick={() => setSub(s.key)} style={{
-            flex: "1 1 30%", border: "1.5px solid " + (sub === s.key ? "#2f4a63" : "#d9cfb7"),
-            background: sub === s.key ? "#2f4a63" : "#fff", color: sub === s.key ? "#fff" : "#6b5d49",
-            borderRadius: 9, padding: "9px 4px", fontSize: 12.5, fontWeight: 700, cursor: "pointer",
-          }}>{s.label}</button>
-        ))}
-      </div>
-
-      {sub === "estoque" && (
-        materiais.length === 0 ? (
-          <div style={{ fontSize: 13.5, color: "#6b5d49", background: "#fff", border: "1px solid #e6ddc8", borderRadius: 12, padding: 16 }}>
-            Nenhum material cadastrado ainda. Cadastre em Cadastros → Materiais.
-          </div>
-        ) : (
-          <>
-            <Card style={{ marginBottom: 12, padding: 12 }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                <div style={{ fontSize: 12.5, color: "#6b5d49" }}>Valor total em estoque</div>
-                <div style={{ fontSize: 18, fontWeight: 800, color: "#1c2b39" }}>
-                  {materiais.reduce((s, m) => s + (m.quantidadeEstoque || 0) * (m.preco || 0), 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}
-                </div>
-              </div>
-            </Card>
-            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-              {[...materiais].sort((a, b) => a.nome.localeCompare(b.nome)).map(m => {
-                const estoqueBaixo = m.estoqueMinimo != null && m.quantidadeEstoque <= m.estoqueMinimo;
-                const consumido = consumoTotalPorMaterial[m.id] || 0;
-                const fmtPreco = (v) => v != null ? v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" }) : null;
-                return (
-                  <Card key={m.id} style={{ padding: 12, borderLeft: estoqueBaixo ? "4px solid #b13232" : "4px solid #2f4a63" }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                      <div>
-                        <div style={{ fontWeight: 700, fontSize: 14, color: "#2a2015" }}>{m.nome}</div>
-                        <div style={{ fontSize: 12, color: "#a3937a" }}>
-                          consumido no total: {consumido} {m.unidade}
-                          {m.estoqueMinimo != null ? ` · mínimo: ${m.estoqueMinimo} ${m.unidade}` : ""}
-                        </div>
-                        {fmtPreco(m.preco) && <div style={{ fontSize: 11.5, color: "#a3937a" }}>{fmtPreco(m.preco)}/{m.unidade}</div>}
-                      </div>
-                      <div style={{ textAlign: "right" }}>
-                        <div style={{ fontSize: 18, fontWeight: 800, color: estoqueBaixo ? "#b13232" : "#1c2b39" }}>{m.quantidadeEstoque} {m.unidade}</div>
-                        {estoqueBaixo && <div style={{ fontSize: 10.5, fontWeight: 700, color: "#b13232" }}>estoque baixo</div>}
-                        {m.preco != null && <div style={{ fontSize: 11, color: "#a3937a" }}>{((m.quantidadeEstoque || 0) * m.preco).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}</div>}
-                      </div>
-                    </div>
-                    {estoqueBaixo && (
-                      <button onClick={() => solicitarCompra(m.id)} style={{
-                        marginTop: 10, fontSize: 12, fontWeight: 700, color: "#2f4a63", background: "#f4ecd8",
-                        border: "1px dashed #cdb98a", borderRadius: 7, padding: "6px 10px", cursor: "pointer",
-                        display: "inline-flex", alignItems: "center", gap: 5,
-                      }}>Solicitar compra</button>
-                    )}
-                  </Card>
-                );
-              })}
-            </div>
-          </>
-        )
-      )}
-
-      {sub === "entrada" && (
-        <EntradaMateriais
-          materiais={materiais} setMateriais={setMateriais} onSalvarMovimentacaoEstoque={onSalvarMovimentacaoEstoque}
-          fornecedores={fornecedores} setFornecedores={setFornecedores}
-          movimentacoesEstoque={movimentacoesEstoque} solicitacoesCompra={solicitacoesCompra}
-        />
-      )}
-
-      {sub === "movimentacoes" && (
-        <>
-          {materiais.length > 0 && (
-            <Card style={{ marginBottom: 12, padding: 12 }}>
-              <Field label="Material">
-                <Select value={filtroMaterialId} onChange={e => setFiltroMaterialId(e.target.value)}>
-                  <option value="">Todos os materiais</option>
-                  {[...materiais].sort((a, b) => a.nome.localeCompare(b.nome)).map(m => <option key={m.id} value={m.id}>{m.nome}</option>)}
-                </Select>
-              </Field>
-            </Card>
-          )}
-          {movimentacoesUnificadas.length === 0 ? (
-            <div style={{ fontSize: 13.5, color: "#a3937a", padding: "8px 2px" }}>
-              Nenhuma movimentação registrada ainda. As saídas acontecem automaticamente quando uma Ordem de Produção é concluída; as entradas vêm de compras aprovadas ou de lançamentos manuais em Consumo → Entrada.
-            </div>
-          ) : (
-            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-              {movimentacoesUnificadas.slice(0, 80).map(mv => (
-                <Card key={mv.id} style={{ padding: 12, borderLeft: `4px solid ${mv.tipo === "entrada" ? "#1a7a4c" : "#b13232"}` }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
-                    <div>
-                      {mv.opNumero != null && (
-                        <div style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 10.5, fontWeight: 700, color: "#2f4a63", background: "#f4ecd8", padding: "2px 7px", borderRadius: 999, marginBottom: 4 }}>
-                          <ListOrdered size={10} /> OP #{String(mv.opNumero).padStart(3, "0")}
-                        </div>
-                      )}
-                      <div style={{ fontWeight: 700, fontSize: 14, color: "#2a2015" }}>{mv.materialNomeSnap || "—"}</div>
-                      <div style={{ fontSize: 12.5, color: "#6b5d49" }}>{mv.detalhe}</div>
-                      <div style={{ fontSize: 12, color: "#a3937a", marginTop: 3 }}>{new Date(mv.criadoEm).toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}</div>
-                    </div>
-                    <div style={{ textAlign: "right" }}>
-                      <div style={{ fontSize: 14, fontWeight: 800, color: mv.tipo === "entrada" ? "#1a7a4c" : "#b13232" }}>{mv.tipo === "entrada" ? "+" : "−"} {mv.quantidade} {mv.materialUnidadeSnap}</div>
-                      {mv.saldoResultante != null && <div style={{ fontSize: 11, color: "#a3937a" }}>saldo: {mv.saldoResultante} {mv.materialUnidadeSnap}</div>}
-                      {mv.precoUnitarioSnap != null && <div style={{ fontSize: 11, color: "#a3937a" }}>{mv.precoUnitarioSnap.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}/{mv.materialUnidadeSnap}</div>}
-                    </div>
-                  </div>
-                </Card>
-              ))}
-            </div>
-          )}
-        </>
-      )}
-
-      {sub === "compras" && (
-        <ComprasMateriais
-          materiais={materiais} setMateriais={setMateriais}
-          solicitacoesCompra={solicitacoesCompra} onSalvarSolicitacaoCompra={onSalvarSolicitacaoCompra} onRemoverSolicitacaoCompra={onRemoverSolicitacaoCompra}
-          cotacoesCompra={cotacoesCompra} onSalvarCotacaoCompra={onSalvarCotacaoCompra} onRemoverCotacaoCompra={onRemoverCotacaoCompra}
-          materialPreSelecionado={materialPreSelecionado} onLimparPreSelecao={() => setMaterialPreSelecionado("")}
-          fornecedores={fornecedores} onSalvarMovimentacaoEstoque={onSalvarMovimentacaoEstoque} ehAdministrador={ehAdministrador}
-        />
-      )}
-    </div>
-  );
-}
-
-// ---------- Entrada de materiais ----------
-// Adicionado: lançamento manual de entrada (ou saída) de estoque fora do
-// fluxo de compras/produção — ex.: conferência de inventário, doação,
-// devolução, perda. Fica registrado no livro de movimentações com o
-// motivo informado.
-function EntradaMateriais({ materiais, setMateriais, onSalvarMovimentacaoEstoque, fornecedores, setFornecedores, movimentacoesEstoque, solicitacoesCompra }) {
-  const [materialId, setMaterialId] = useState("");
-  const [tipo, setTipo] = useState("entrada");
-  const [quantidade, setQuantidade] = useState("");
-  const [motivo, setMotivo] = useState("");
-  // Adicionado: fornecedor da entrada manual (ex.: compra avulsa, doação
-  // recebida) — pré-preenche com o fornecedor cadastrado no material,
-  // mas pode ser trocado para essa entrada específica.
-  const [fornecedorId, setFornecedorId] = useState("");
-  // Adicionado: preço unitário pago nesta entrada — quando informado,
-  // atualiza o preço de referência do material (mesmo comportamento já
-  // usado no fluxo de Compras), pra manter o custo de material dos
-  // relatórios em dia mesmo em entradas lançadas manualmente.
-  const [preco, setPreco] = useState("");
-  const [confirmado, setConfirmado] = useState(false);
-  // Adicionado: cadastro rápido de material/fornecedor sem sair da tela
-  // de Entrada — grava nas mesmas listas usadas em Cadastros → Materiais
-  // e Cadastros → Fornecedores, então o que for criado aqui já aparece lá.
-  const [novoMaterialAberto, setNovoMaterialAberto] = useState(false);
-  const [novoMaterialNome, setNovoMaterialNome] = useState("");
-  const [novoMaterialUnidade, setNovoMaterialUnidade] = useState("m");
-  const [novoFornecedorAberto, setNovoFornecedorAberto] = useState(false);
-  const [novoFornecedorNome, setNovoFornecedorNome] = useState("");
-  const [novoFornecedorContato, setNovoFornecedorContato] = useState("");
-
-  // Adicionado: pesquisa/filtro de materiais para achar rápido o que
-  // precisa de atenção antes de lançar uma entrada — por nome, por saldo
-  // abaixo do mínimo, por já ter solicitação de compra em aberto, ou por
-  // nunca ter tido uma compra registrada (sem histórico de preço).
-  const [buscaMaterial, setBuscaMaterial] = useState("");
-  const [filtroRapido, setFiltroRapido] = useState("todos");
-  const infoMateriais = useMemo(() => {
-    const map = new Map();
-    (materiais || []).forEach(m => {
-      const entradasComPreco = (movimentacoesEstoque || [])
-        .filter(mv => mv.materialId === m.id && mv.tipo === "entrada" && mv.precoUnitarioSnap != null)
-        .sort((a, b) => new Date(b.criadoEm) - new Date(a.criadoEm));
-      const pendentes = (solicitacoesCompra || []).filter(s => s.materialId === m.id && s.status !== "comprada" && s.status !== "cancelada");
-      map.set(m.id, {
-        ultimaCompra: entradasComPreco[0] || null,
-        pendentesCount: pendentes.length,
-        abaixoMinimo: m.estoqueMinimo != null && m.quantidadeEstoque <= m.estoqueMinimo,
-      });
-    });
-    return map;
-  }, [materiais, movimentacoesEstoque, solicitacoesCompra]);
-  const materiaisFiltrados = useMemo(() => {
-    const termo = buscaMaterial.trim().toLowerCase();
-    return [...materiais]
-      .filter(m => !termo || m.nome.toLowerCase().includes(termo))
-      .filter(m => {
-        const info = infoMateriais.get(m.id);
-        if (filtroRapido === "abaixo_minimo") return info?.abaixoMinimo;
-        if (filtroRapido === "compra_pendente") return info?.pendentesCount > 0;
-        if (filtroRapido === "sem_compra") return !info?.ultimaCompra;
-        return true;
-      })
-      .sort((a, b) => a.nome.localeCompare(b.nome));
-  }, [materiais, buscaMaterial, filtroRapido, infoMateriais]);
-
-  const materialSelecionado = materiais.find(m => m.id === materialId);
-  const infoMaterialSelecionado = materialId ? infoMateriais.get(materialId) : null;
-  const qtdNum = parseFloat(quantidade || "0");
-  const precoNum = parseFloat(preco || "0");
-  const podeLancar = materialId && qtdNum > 0 && (tipo === "entrada" || (materialSelecionado && materialSelecionado.quantidadeEstoque >= qtdNum));
-
-  function selecionarMaterial(id) {
-    setMaterialId(id);
-    const m = materiais.find(mm => mm.id === id);
-    setFornecedorId(m?.fornecedorId || "");
-    setPreco("");
-  }
-
-  async function criarMaterial() {
-    if (!novoMaterialNome.trim()) return;
-    const novo = { id: uid(), nome: novoMaterialNome.trim(), unidade: novoMaterialUnidade, quantidadeEstoque: 0, estoqueMinimo: null, estoqueMaximo: null, preco: null, fornecedorId: null, fornecedorNomeSnap: null };
-    await setMateriais([...materiais, novo]);
-    selecionarMaterial(novo.id);
-    setNovoMaterialNome(""); setNovoMaterialUnidade("m"); setNovoMaterialAberto(false);
-  }
-
-  async function criarFornecedor() {
-    if (!novoFornecedorNome.trim()) return;
-    const novo = { id: uid(), nome: novoFornecedorNome.trim(), contato: novoFornecedorContato.trim(), categoria: "", observacao: "" };
-    await setFornecedores([...(fornecedores || []), novo]);
-    setFornecedorId(novo.id);
-    setNovoFornecedorNome(""); setNovoFornecedorContato(""); setNovoFornecedorAberto(false);
-  }
-
-  async function lancar() {
-    if (!podeLancar) return;
-    const delta = tipo === "entrada" ? qtdNum : -qtdNum;
-    const novoEstoque = Math.round((materialSelecionado.quantidadeEstoque + delta) * 1000) / 1000;
-    const novoPreco = tipo === "entrada" && precoNum > 0 ? Math.round(precoNum * 100) / 100 : materialSelecionado.preco;
-    await setMateriais(materiais.map(m => m.id === materialId ? { ...m, quantidadeEstoque: novoEstoque, preco: novoPreco } : m));
-    const fornecedorNomeSnap = tipo === "entrada" && fornecedorId ? (fornecedores || []).find(f => f.id === fornecedorId)?.nome || null : null;
-    await onSalvarMovimentacaoEstoque({
-      id: uid(), materialId, materialNomeSnap: materialSelecionado.nome, materialUnidadeSnap: materialSelecionado.unidade,
-      tipo, origem: "manual", quantidade: qtdNum, motivo: motivo.trim() || (tipo === "entrada" ? "Entrada manual" : "Saída manual"),
-      fornecedorId: tipo === "entrada" ? (fornecedorId || null) : null, fornecedorNomeSnap,
-      precoUnitarioSnap: tipo === "entrada" && precoNum > 0 ? novoPreco : null,
-      saldoResultante: novoEstoque, criadoEm: new Date().toISOString(),
-    });
-    setMaterialId(""); setQuantidade(""); setMotivo(""); setTipo("entrada"); setFornecedorId(""); setPreco("");
-    setConfirmado(true);
-    setTimeout(() => setConfirmado(false), 2500);
-  }
-
-  return (
-    <div>
-      {materiais.length > 0 && (
-        <Card style={{ marginBottom: 16 }}>
-          <div style={{ fontSize: 15, fontWeight: 800, fontFamily: FONT_DISPLAY, marginBottom: 10, color: "#1c2b39" }}>Pesquisar material</div>
-          <Field label="Nome do material">
-            <input value={buscaMaterial} onChange={e => setBuscaMaterial(e.target.value)} placeholder="Digite para filtrar a lista abaixo…" style={inputStyle} />
-          </Field>
-          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-            <ToggleChip ativo={filtroRapido === "todos"} onClick={() => setFiltroRapido("todos")}>Todos</ToggleChip>
-            <ToggleChip ativo={filtroRapido === "abaixo_minimo"} colorAtivo="#b13232" onClick={() => setFiltroRapido("abaixo_minimo")}>Abaixo do mínimo</ToggleChip>
-            <ToggleChip ativo={filtroRapido === "compra_pendente"} colorAtivo="#b5820a" onClick={() => setFiltroRapido("compra_pendente")}>Compra pendente</ToggleChip>
-            <ToggleChip ativo={filtroRapido === "sem_compra"} onClick={() => setFiltroRapido("sem_compra")}>Sem compra registrada</ToggleChip>
-          </div>
-          <div style={{ fontSize: 11.5, color: "#a3937a", marginTop: 8 }}>
-            {materiaisFiltrados.length} de {materiais.length} material(is) — escolha um abaixo no campo "Material".
-          </div>
-        </Card>
-      )}
-      <Card style={{ marginBottom: 16 }}>
-        <div style={{ fontSize: 15, fontWeight: 800, fontFamily: FONT_DISPLAY, marginBottom: 12, color: "#1c2b39" }}>Entrada / saída manual de material</div>
-        <div style={{ fontSize: 12.5, color: "#6b5d49", marginBottom: 12 }}>
-          Use aqui para conferência de inventário, doação, devolução ou perda — qualquer ajuste de estoque que não veio de uma compra aprovada nem de uma baixa de produção.
-        </div>
-        {materiais.length === 0 ? (
-          <div style={{ fontSize: 12.5, color: "#a3937a" }}>Cadastre materiais em Cadastros → Materiais primeiro.</div>
-        ) : (
-          <>
-            <Field label="Material">
-              <Select value={materialId} onChange={e => selecionarMaterial(e.target.value)}>
-                <option value="">Selecione…</option>
-                {materiaisFiltrados.map(m => <option key={m.id} value={m.id}>{m.nome} ({m.quantidadeEstoque} {m.unidade} em estoque)</option>)}
-              </Select>
-              {materialId && infoMaterialSelecionado && (
-                <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 8 }}>
-                  {infoMaterialSelecionado.abaixoMinimo && (
-                    <span style={{ fontSize: 10.5, fontWeight: 700, color: "#b13232", background: "#f8e6e6", padding: "3px 9px", borderRadius: 999 }}>Abaixo do mínimo</span>
-                  )}
-                  {infoMaterialSelecionado.pendentesCount > 0 && (
-                    <span style={{ fontSize: 10.5, fontWeight: 700, color: "#8a6510", background: "#fdf3e0", padding: "3px 9px", borderRadius: 999 }}>
-                      {infoMaterialSelecionado.pendentesCount} solicitação{infoMaterialSelecionado.pendentesCount !== 1 ? "ões" : ""} de compra em aberto
-                    </span>
-                  )}
-                  <span style={{ fontSize: 10.5, fontWeight: 700, color: "#6b5d49", background: "#f4efe2", padding: "3px 9px", borderRadius: 999 }}>
-                    {infoMaterialSelecionado.ultimaCompra
-                      ? `Última compra: ${infoMaterialSelecionado.ultimaCompra.precoUnitarioSnap.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })} em ${new Date(infoMaterialSelecionado.ultimaCompra.criadoEm).toLocaleDateString("pt-BR")}${infoMaterialSelecionado.ultimaCompra.fornecedorNomeSnap ? ` (${infoMaterialSelecionado.ultimaCompra.fornecedorNomeSnap})` : ""}`
-                      : "Sem compra registrada"}
-                  </span>
-                </div>
-              )}
-              <button type="button" onClick={() => setNovoMaterialAberto(v => !v)} style={linkButtonStyle}>
-                {novoMaterialAberto ? "Cancelar" : "+ Cadastrar novo material"}
-              </button>
-              {novoMaterialAberto && (
-                <div style={{ display: "flex", gap: 8, marginTop: 8, alignItems: "flex-end" }}>
-                  <div style={{ flex: 1 }}>
-                    <input value={novoMaterialNome} onChange={e => setNovoMaterialNome(e.target.value)} placeholder="Nome do novo material" style={inputStyle} onKeyDown={e => e.key === "Enter" && criarMaterial()} />
-                  </div>
-                  <Select value={novoMaterialUnidade} onChange={e => setNovoMaterialUnidade(e.target.value)} style={{ width: 90 }}>
-                    {UNIDADES_MATERIAL.map(u => <option key={u} value={u}>{u}</option>)}
-                  </Select>
-                  <PrimaryButton onClick={criarMaterial} disabled={!novoMaterialNome.trim()}><Plus size={16} /></PrimaryButton>
-                </div>
-              )}
-            </Field>
-            <Field label="Tipo">
-              <div style={{ display: "flex", gap: 8 }}>
-                <ToggleChip ativo={tipo === "entrada"} onClick={() => setTipo("entrada")}>Entrada</ToggleChip>
-                <ToggleChip ativo={tipo === "saida"} colorAtivo="#b13232" onClick={() => setTipo("saida")}>Saída</ToggleChip>
-              </div>
-            </Field>
-            {tipo === "entrada" && (
-              <Field label="Fornecedor (opcional)">
-                <Select value={fornecedorId} onChange={e => setFornecedorId(e.target.value)}>
-                  <option value="">Sem fornecedor definido</option>
-                  {[...(fornecedores || [])].sort((a, b) => a.nome.localeCompare(b.nome)).map(f => <option key={f.id} value={f.id}>{f.nome}</option>)}
-                </Select>
-                <button type="button" onClick={() => setNovoFornecedorAberto(v => !v)} style={linkButtonStyle}>
-                  {novoFornecedorAberto ? "Cancelar" : "+ Cadastrar novo fornecedor"}
-                </button>
-                {novoFornecedorAberto && (
-                  <div style={{ display: "flex", gap: 8, marginTop: 8, alignItems: "flex-end" }}>
-                    <div style={{ flex: 1 }}>
-                      <input value={novoFornecedorNome} onChange={e => setNovoFornecedorNome(e.target.value)} placeholder="Nome do novo fornecedor" style={inputStyle} onKeyDown={e => e.key === "Enter" && criarFornecedor()} />
-                    </div>
-                    <div style={{ flex: 1 }}>
-                      <input value={novoFornecedorContato} onChange={e => setNovoFornecedorContato(e.target.value)} placeholder="Contato (opcional)" style={inputStyle} onKeyDown={e => e.key === "Enter" && criarFornecedor()} />
-                    </div>
-                    <PrimaryButton onClick={criarFornecedor} disabled={!novoFornecedorNome.trim()}><Plus size={16} /></PrimaryButton>
-                  </div>
-                )}
-              </Field>
-            )}
-            <Field label="Quantidade">
-              <input type="number" min="0" step="0.01" value={quantidade} onChange={e => setQuantidade(e.target.value)} placeholder={materialSelecionado ? `Em ${materialSelecionado.unidade}` : "Quantidade"} style={inputStyle} />
-              {tipo === "saida" && materialSelecionado && qtdNum > materialSelecionado.quantidadeEstoque && (
-                <div style={{ fontSize: 11.5, color: "#b13232", marginTop: 5 }}>Maior que o estoque atual ({materialSelecionado.quantidadeEstoque} {materialSelecionado.unidade}).</div>
-              )}
-            </Field>
-            {tipo === "entrada" && (
-              <Field label="Preço unitário pago (opcional)">
-                <input
-                  type="number" min="0" step="0.01" value={preco} onChange={e => setPreco(e.target.value)}
-                  placeholder={materialSelecionado?.preco != null ? `Atual: ${materialSelecionado.preco.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}` : "Ex.: 18.90"}
-                  style={inputStyle}
-                />
-                <div style={{ fontSize: 11, color: "#a3937a", marginTop: 5 }}>Se informado, atualiza o preço de referência deste material para as próximas compras e relatórios de custo.</div>
-              </Field>
-            )}
-            <Field label="Motivo">
-              <input value={motivo} onChange={e => setMotivo(e.target.value)} placeholder="Ex.: conferência de inventário, doação, perda" style={inputStyle} />
-            </Field>
-            <PrimaryButton onClick={lancar} disabled={!podeLancar} style={{ width: "100%" }}><Plus size={16} /> Lançar {tipo === "entrada" ? "entrada" : "saída"}</PrimaryButton>
-            {confirmado && <div style={{ fontSize: 12.5, color: "#1a7a4c", fontWeight: 700, marginTop: 8 }}>✓ Lançamento registrado.</div>}
-          </>
-        )}
-      </Card>
-    </div>
-  );
-}
-
-const STATUS_SOLICITACAO = {
-  pendente: { label: "Pendente", color: "#b5820a", bg: "#fdf3e0" },
-  cotando: { label: "Em cotação", color: "#1d6fa5", bg: "#e7f1f8" },
-  aguardando_aprovacao: { label: "Aguardando aprovação", color: "#8a5fb0", bg: "#f1e9f7" },
-  comprada: { label: "Comprada", color: "#1a7a4c", bg: "#e6f4ec" },
-  cancelada: { label: "Cancelada", color: "#b13232", bg: "#f8e6e6" },
-};
-
-// Adicionado: solicitação de compra (o que falta comprar) e negociação —
-// cada solicitação pode reunir várias cotações de fornecedores. Ao
-// escolher a vencedora, um Gestor manda para aprovação de um
-// Administrador; o próprio Administrador já aprova de cara. Só quando
-// aprovada é que o estoque do material recebe entrada e o preço de
-// referência é atualizado para o valor negociado.
-function ComprasMateriais({ materiais, setMateriais, solicitacoesCompra, onSalvarSolicitacaoCompra, onRemoverSolicitacaoCompra, cotacoesCompra, onSalvarCotacaoCompra, onRemoverCotacaoCompra, materialPreSelecionado, onLimparPreSelecao, fornecedores, onSalvarMovimentacaoEstoque, ehAdministrador }) {
-  const [materialId, setMaterialId] = useState("");
-  const [quantidade, setQuantidade] = useState("");
-  const [observacao, setObservacao] = useState("");
-  const [expandidoId, setExpandidoId] = useState(null);
-  const [fornecedorId, setFornecedorId] = useState("");
-  const [precoUnitario, setPrecoUnitario] = useState("");
-  const [prazoEntrega, setPrazoEntrega] = useState("");
-  const [condicaoPagamento, setCondicaoPagamento] = useState("");
-
-  useEffect(() => {
-    if (materialPreSelecionado) {
-      const m = materiais.find(x => x.id === materialPreSelecionado);
-      setMaterialId(materialPreSelecionado);
-      if (m) {
-        const sugestao = m.estoqueMaximo != null ? Math.max(m.estoqueMaximo - m.quantidadeEstoque, 0) : "";
-        setQuantidade(sugestao ? String(sugestao) : "");
+    return /*#__PURE__*/React.createElement(React.Fragment, null, linhas, /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("td", {
+      colSpan: "6",
+      style: {
+        textAlign: 'right'
       }
-      onLimparPreSelecao();
+    }, /*#__PURE__*/React.createElement("strong", null, "Tempo total de produção estimado")), /*#__PURE__*/React.createElement("td", {
+      className: "num"
+    }, /*#__PURE__*/React.createElement("strong", null, minParaHHMM(totalMin))), /*#__PURE__*/React.createElement("td", {
+      colSpan: "4"
+    })));
+  })())), /*#__PURE__*/React.createElement("div", {
+    className: "small muted",
+    style: {
+      marginTop: 6
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [materialPreSelecionado]);
-
-  const nomeMaterial = (id) => materiais.find(m => m.id === id)?.nome || "—";
-  const unidadeMaterial = (id) => materiais.find(m => m.id === id)?.unidade || "";
-
-  async function criarSolicitacao() {
-    const qtd = parseFloat(quantidade || "0");
-    if (!materialId || !(qtd > 0)) return;
-    await onSalvarSolicitacaoCompra({
-      id: uid(), materialId, quantidade: qtd, observacao: observacao.trim(),
-      status: "pendente", criadoEm: new Date().toISOString(),
-    });
-    setMaterialId(""); setQuantidade(""); setObservacao("");
-  }
-  async function cancelarSolicitacao(s) {
-    if (!window.confirm("Cancelar esta solicitação de compra?")) return;
-    await onSalvarSolicitacaoCompra({ ...s, status: "cancelada" });
-  }
-  async function excluirSolicitacao(s) {
-    if (!window.confirm("Excluir esta solicitação e as cotações registradas nela?")) return;
-    await Promise.all(cotacoesCompra.filter(c => c.solicitacaoId === s.id).map(c => onRemoverCotacaoCompra(c.id)));
-    await onRemoverSolicitacaoCompra(s.id);
-  }
-  async function adicionarCotacao(s) {
-    const preco = parseFloat(precoUnitario || "0");
-    if (!fornecedorId || !(preco > 0)) return;
-    const fornecedorSelecionado = (fornecedores || []).find(f => f.id === fornecedorId);
-    await onSalvarCotacaoCompra({
-      id: uid(), solicitacaoId: s.id, fornecedorId, fornecedorNomeSnap: fornecedorSelecionado?.nome || "—", precoUnitario: preco,
-      prazoEntrega: prazoEntrega.trim(), condicaoPagamento: condicaoPagamento.trim(), criadoEm: new Date().toISOString(),
-    });
-    if (s.status === "pendente") await onSalvarSolicitacaoCompra({ ...s, status: "cotando" });
-    setFornecedorId(""); setPrecoUnitario(""); setPrazoEntrega(""); setCondicaoPagamento("");
-  }
-  async function removerCotacao(c) { await onRemoverCotacaoCompra(c.id); }
-
-  // Adicionado: efetiva a entrada de estoque de uma compra — dá entrada
-  // pela quantidade solicitada, atualiza o preço de referência do
-  // material para o valor negociado, e registra a movimentação no livro
-  // de estoque (usado no relatório de controle de materiais).
-  async function efetivarEntradaCompra(s, c) {
-    const material = materiais.find(m => m.id === s.materialId);
-    const novoEstoque = Math.round(((material?.quantidadeEstoque || 0) + s.quantidade) * 1000) / 1000;
-    await setMateriais(materiais.map(m => m.id === s.materialId
-      ? { ...m, quantidadeEstoque: novoEstoque, preco: c.precoUnitario }
-      : m));
-    await onSalvarMovimentacaoEstoque({
-      id: uid(), materialId: s.materialId, materialNomeSnap: material?.nome || nomeMaterial(s.materialId), materialUnidadeSnap: material?.unidade || unidadeMaterial(s.materialId),
-      tipo: "entrada", origem: "compra", quantidade: s.quantidade, fornecedorNomeSnap: c.fornecedorNomeSnap, solicitacaoId: s.id,
-      saldoResultante: novoEstoque, criadoEm: new Date().toISOString(),
-    });
-  }
-
-  // Adicionado: escolher a cotação vencedora não fecha mais a compra na
-  // hora — vai para "aguardando aprovação". Só quando quem está logado é
-  // Administrador a aprovação já acontece junto (ele é o próprio
-  // aprovador), efetivando a entrada de estoque nesse mesmo passo.
-  async function escolherCotacao(s, c) {
-    const msg = ehAdministrador
-      ? `Aprovar e fechar compra com ${c.fornecedorNomeSnap} por ${c.precoUnitario.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}/${unidadeMaterial(s.materialId)}? O estoque de ${nomeMaterial(s.materialId)} recebe entrada de ${s.quantidade} ${unidadeMaterial(s.materialId)}.`
-      : `Enviar a cotação de ${c.fornecedorNomeSnap} para aprovação de um administrador? Nada muda no estoque até a aprovação.`;
-    if (!window.confirm(msg)) return;
-    if (ehAdministrador) {
-      await efetivarEntradaCompra(s, c);
-      await onSalvarSolicitacaoCompra({ ...s, status: "comprada", cotacaoEscolhidaId: c.id, concluidaEm: new Date().toISOString() });
-    } else {
-      await onSalvarSolicitacaoCompra({ ...s, status: "aguardando_aprovacao", cotacaoEscolhidaId: c.id });
-    }
-  }
-  async function aprovarCompra(s) {
-    const c = cotacoesCompra.find(x => x.id === s.cotacaoEscolhidaId);
-    if (!c) return;
-    if (!window.confirm(`Aprovar a compra com ${c.fornecedorNomeSnap} por ${c.precoUnitario.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}/${unidadeMaterial(s.materialId)}? O estoque de ${nomeMaterial(s.materialId)} recebe entrada de ${s.quantidade} ${unidadeMaterial(s.materialId)}.`)) return;
-    await efetivarEntradaCompra(s, c);
-    await onSalvarSolicitacaoCompra({ ...s, status: "comprada", concluidaEm: new Date().toISOString() });
-  }
-  async function reprovarCompra(s) {
-    if (!window.confirm("Reprovar esta cotação e voltar para a fase de cotação?")) return;
-    await onSalvarSolicitacaoCompra({ ...s, status: "cotando", cotacaoEscolhidaId: null });
-  }
-
-  const ordenadas = [...solicitacoesCompra].sort((a, b) => {
-    const pesoStatus = { aguardando_aprovacao: 0, pendente: 1, cotando: 2, comprada: 3, cancelada: 4 };
-    const diff = (pesoStatus[a.status] ?? 9) - (pesoStatus[b.status] ?? 9);
-    return diff !== 0 ? diff : new Date(b.criadoEm) - new Date(a.criadoEm);
-  });
-
-  return (
-    <div>
-      <Card style={{ marginBottom: 16 }}>
-        <div style={{ fontSize: 15, fontWeight: 800, fontFamily: FONT_DISPLAY, marginBottom: 12, color: "#1c2b39" }}>Nova solicitação de compra</div>
-        {materiais.length === 0 ? (
-          <div style={{ fontSize: 12.5, color: "#a3937a" }}>Cadastre materiais em Cadastros → Materiais para poder solicitar compra.</div>
-        ) : (
-          <>
-            <Field label="Material">
-              <Select value={materialId} onChange={e => setMaterialId(e.target.value)}>
-                <option value="">Selecione…</option>
-                {[...materiais].sort((a, b) => a.nome.localeCompare(b.nome)).map(m => <option key={m.id} value={m.id}>{m.nome} ({m.unidade})</option>)}
-              </Select>
-            </Field>
-            <Field label="Quantidade">
-              <input type="number" min="0" step="0.01" value={quantidade} onChange={e => setQuantidade(e.target.value)} placeholder={materialId ? `Em ${unidadeMaterial(materialId)}` : "Quantidade"} style={inputStyle} />
-            </Field>
-            <Field label="Observação (opcional)">
-              <input value={observacao} onChange={e => setObservacao(e.target.value)} placeholder="Ex.: urgente, para o pedido do cliente X" style={inputStyle} />
-            </Field>
-            <PrimaryButton onClick={criarSolicitacao} disabled={!materialId || !(parseFloat(quantidade || "0") > 0)} style={{ width: "100%" }}><Plus size={16} /> Solicitar compra</PrimaryButton>
-          </>
-        )}
-      </Card>
-
-      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-        {ordenadas.map(s => {
-          const cotacoesDaSolicitacao = cotacoesCompra.filter(c => c.solicitacaoId === s.id).sort((a, b) => a.precoUnitario - b.precoUnitario);
-          const statusInfo = STATUS_SOLICITACAO[s.status] || STATUS_SOLICITACAO.pendente;
-          const expandido = expandidoId === s.id;
-          const emAberto = s.status === "pendente" || s.status === "cotando";
-          return (
-            <Card key={s.id} style={{ padding: 0, overflow: "hidden" }}>
-              <div onClick={() => setExpandidoId(expandido ? null : s.id)} style={{ padding: "12px 14px", display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer" }}>
-                <div>
-                  <div style={{ fontWeight: 700, fontSize: 14, color: "#2a2015" }}>{nomeMaterial(s.materialId)}</div>
-                  <div style={{ fontSize: 12, color: "#a3937a" }}>{s.quantidade} {unidadeMaterial(s.materialId)} · {cotacoesDaSolicitacao.length} cotação{cotacoesDaSolicitacao.length !== 1 ? "ões" : ""}{s.observacao ? ` · ${s.observacao}` : ""}</div>
-                </div>
-                <span style={{ fontSize: 11, fontWeight: 700, color: statusInfo.color, background: statusInfo.bg, border: `1px dashed ${statusInfo.color}`, padding: "2px 9px 2px 8px", borderRadius: "3px 9px 9px 3px" }}>{statusInfo.label}</span>
-              </div>
-              {expandido && (
-                <div style={{ borderTop: "1px solid #efe8d8", padding: 14, background: "#faf6ec" }}>
-                  {cotacoesDaSolicitacao.length > 0 && (
-                    <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 12 }}>
-                      {cotacoesDaSolicitacao.map(c => (
-                        <div key={c.id} style={{ background: "#fff", border: s.cotacaoEscolhidaId === c.id ? "1.5px solid #1a7a4c" : "1px solid #e6ddc8", borderRadius: 8, padding: "8px 10px" }}>
-                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
-                            <div>
-                              <div style={{ fontWeight: 700, fontSize: 13, color: "#2a2015" }}>{c.fornecedorNomeSnap || c.fornecedor}{s.cotacaoEscolhidaId === c.id ? " ✓" : ""}</div>
-                              <div style={{ fontSize: 11.5, color: "#6b5d49" }}>
-                                {c.precoUnitario.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}/{unidadeMaterial(s.materialId)}
-                                {c.prazoEntrega ? ` · prazo: ${c.prazoEntrega}` : ""}{c.condicaoPagamento ? ` · ${c.condicaoPagamento}` : ""}
-                              </div>
-                              <div style={{ fontSize: 11, color: "#a3937a" }}>total estimado: {(c.precoUnitario * s.quantidade).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}</div>
-                            </div>
-                            {emAberto && (
-                              <div style={{ display: "flex", gap: 2 }}>
-                                <IconButton onClick={() => escolherCotacao(s, c)} title="Escolher esta cotação"><Check size={15} /></IconButton>
-                                <IconButton onClick={() => removerCotacao(c)} danger title="Remover"><X size={14} /></IconButton>
-                              </div>
-                            )}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                  {s.status === "aguardando_aprovacao" && (() => {
-                    const cotacaoEscolhida = cotacoesCompra.find(c => c.id === s.cotacaoEscolhidaId);
-                    return (
-                      <div style={{ background: "#f1e9f7", border: "1px dashed #8a5fb0", borderRadius: 8, padding: 12, marginBottom: 8 }}>
-                        <div style={{ fontSize: 12, fontWeight: 700, color: "#5c3d80", marginBottom: 4 }}>Aguardando aprovação</div>
-                        {cotacaoEscolhida && (
-                          <div style={{ fontSize: 12, color: "#6b5d49", marginBottom: 8 }}>
-                            {cotacaoEscolhida.fornecedorNomeSnap} · {cotacaoEscolhida.precoUnitario.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}/{unidadeMaterial(s.materialId)} · total {(cotacaoEscolhida.precoUnitario * s.quantidade).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}
-                          </div>
-                        )}
-                        {ehAdministrador ? (
-                          <div style={{ display: "flex", gap: 8 }}>
-                            <PrimaryButton onClick={() => aprovarCompra(s)} style={{ flex: 1 }}><Check size={16} /> Aprovar compra</PrimaryButton>
-                            <button onClick={() => reprovarCompra(s)} style={{ border: "1.5px solid #d9cfb7", background: "#fff", borderRadius: 9, padding: "0 12px", color: "#b13232", fontWeight: 700, cursor: "pointer" }}>Reprovar</button>
-                          </div>
-                        ) : (
-                          <div style={{ fontSize: 12, color: "#5c3d80" }}>Só um Administrador pode aprovar esta compra.</div>
-                        )}
-                      </div>
-                    );
-                  })()}
-                  {emAberto && (
-                    <>
-                      <div style={{ fontSize: 12, fontWeight: 700, color: "#1c2b39", marginBottom: 6 }}>Adicionar cotação</div>
-                      {(fornecedores || []).length === 0 ? (
-                        <div style={{ fontSize: 12, color: "#a3937a", marginBottom: 8 }}>Cadastre fornecedores em Cadastros → Fornecedores para poder cotar.</div>
-                      ) : (
-                        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6, marginBottom: 6 }}>
-                          <Select value={fornecedorId} onChange={e => setFornecedorId(e.target.value)}>
-                            <option value="">Fornecedor…</option>
-                            {[...fornecedores].sort((a, b) => a.nome.localeCompare(b.nome)).map(f => <option key={f.id} value={f.id}>{f.nome}</option>)}
-                          </Select>
-                          <input type="number" min="0" step="0.01" value={precoUnitario} onChange={e => setPrecoUnitario(e.target.value)} placeholder={`Preço/${unidadeMaterial(s.materialId)}`} style={inputStyle} />
-                        </div>
-                      )}
-                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6, marginBottom: 8 }}>
-                        <input value={prazoEntrega} onChange={e => setPrazoEntrega(e.target.value)} placeholder="Prazo (ex.: 5 dias)" style={inputStyle} />
-                        <input value={condicaoPagamento} onChange={e => setCondicaoPagamento(e.target.value)} placeholder="Pagamento (ex.: 30 dias)" style={inputStyle} />
-                      </div>
-                      <div style={{ display: "flex", gap: 8 }}>
-                        <PrimaryButton onClick={() => adicionarCotacao(s)} disabled={!fornecedorId || !(parseFloat(precoUnitario || "0") > 0)} style={{ flex: 1 }}>Adicionar cotação</PrimaryButton>
-                        <button onClick={() => cancelarSolicitacao(s)} style={{ border: "1.5px solid #d9cfb7", background: "#fff", borderRadius: 9, padding: "0 12px", color: "#b13232", fontWeight: 700, cursor: "pointer" }}>Cancelar pedido</button>
-                      </div>
-                    </>
-                  )}
-                  {(s.status === "comprada" || s.status === "cancelada") && (
-                    <IconButton onClick={() => excluirSolicitacao(s)} danger title="Excluir solicitação"><Trash2 size={15} /></IconButton>
-                  )}
-                </div>
-              )}
-            </Card>
-          );
-        })}
-        {ordenadas.length === 0 && <div style={{ fontSize: 13.5, color: "#a3937a", padding: "8px 2px" }}>Nenhuma solicitação de compra registrada.</div>}
-      </div>
-    </div>
-  );
+  }, "As datas vêm dos lançamentos de produção. Etapas sem colaborador definido aparecem como \"a definir\"."), necessidades.length > 0 && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("h4", null, "Controle de materiais"), /*#__PURE__*/React.createElement("table", null, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("th", null, "Material"), /*#__PURE__*/React.createElement("th", {
+    className: "num"
+  }, "Necessário"), /*#__PURE__*/React.createElement("th", {
+    className: "num"
+  }, "Disponível"), /*#__PURE__*/React.createElement("th", {
+    className: "num"
+  }, "Falta"), /*#__PURE__*/React.createElement("th", {
+    className: "num"
+  }, "Consumido"), /*#__PURE__*/React.createElement("th", {
+    className: "num"
+  }, "Sobra"))), /*#__PURE__*/React.createElement("tbody", null, necessidades.map(n => /*#__PURE__*/React.createElement("tr", {
+    key: n.materialId
+  }, /*#__PURE__*/React.createElement("td", null, n.nome), /*#__PURE__*/React.createElement("td", {
+    className: "num"
+  }, n.necessario, " ", n.unidade), /*#__PURE__*/React.createElement("td", {
+    className: "num"
+  }, n.disponivel, " ", n.unidade), /*#__PURE__*/React.createElement("td", {
+    className: "num"
+  }, n.falta, " ", n.unidade), /*#__PURE__*/React.createElement("td", {
+    className: "num"
+  }, n.consumido, " ", n.unidade), /*#__PURE__*/React.createElement("td", {
+    className: "num"
+  }, n.sobra, " ", n.unidade)))))), imagens.length > 0 && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("h4", null, "Imagens anexadas"), /*#__PURE__*/React.createElement("div", {
+    className: "rep-imgs"
+  }, imagens.map(a => /*#__PURE__*/React.createElement("img", {
+    key: a.id,
+    src: a.url,
+    alt: a.nome
+  })))), /*#__PURE__*/React.createElement("div", {
+    className: "rep-sign"
+  }, /*#__PURE__*/React.createElement("div", null, "Conferência de material"), /*#__PURE__*/React.createElement("div", null, "Conferência final / expedição"))));
+}
+function StatusEtapaBadge({
+  status
+}) {
+  const tone = status === 'Concluída' ? 'ok' : status === 'Em andamento' ? 'warn' : 'idle';
+  return /*#__PURE__*/React.createElement(Badge, {
+    tone: tone
+  }, status);
 }
 
-// ---------- Relatórios ----------
-function Relatorios({ registros, produtos, etapas, colaboradores, setores, avaliacoes, onGerarRelatorio, onGerarRelatorioAbertos, movimentacoesMaterial, movimentacoesEstoque, materiais, solicitacoesCompra, cotacoesCompra, ehAdministrador, ordensProducao, consumosMaterial, onImprimirGrade }) {
-  // Corrigido: o padrão era "Diário" (só o dia de hoje), o que fazia os
-  // relatórios parecerem quebrados/vazios quando a produção tinha sido
-  // lançada em outro dia. O padrão agora é mensal, que é o recorte mais
-  // usado no dia a dia da fábrica.
-  const [preset, setPreset] = useState("mes");
-  const [customStart, setCustomStart] = useState(todayStr());
-  const [customEnd, setCustomEnd] = useState(todayStr());
-  const [filtroColab, setFiltroColab] = useState("");
-  const [aba, setAba] = useState("resumo");
-  // Adicionado: relatório de itens em aberto por departamento — pode ser
-  // agrupado por etapa, por colaborador ou por função do colaborador.
-  const [agrupamentoAbertos, setAgrupamentoAbertos] = useState("etapa");
-  const [filtroSetorAbertos, setFiltroSetorAbertos] = useState("");
+/* ==========================================================
+   C. CRONOGRAMA DE PRODUÇÃO POR DEPARTAMENTO
+========================================================== */
+function buildCronograma(db) {
+  // varre todas as etapas de todas as OPs que têm data de início e monta a carga horária
+  const porColaboradorDia = {}; // chave: data|colaborador -> {data,colaborador,totalMin,itens:[]}
+  const porDeptoDia = {}; // chave: data|departamentoId -> {data,departamentoId,totalMin}
+  const porMaquinaDia = {}; // chave: data|equipamento|tipo -> carga de máquina
 
-  const { start, end } = getPeriodRange(preset, customStart, customEnd);
-  const equipeDe = (r) => r.colaboradorIds || [];
-  const nomeColab = (id) => colaboradores.find(c => c.id === id)?.nome || "—";
-  // Corrigido: usa o nome do produto/etapa salvo no registro (snapshot) quando
-  // o item de cadastro já não existe mais, evitando "—" em relatórios antigos.
-  const nomeProdutoL = (id, r) => produtos.find(p => p.id === id)?.nome || r?.produtoNomeSnap || "—";
-  const nomeEtapaL = (id, r) => etapas.find(e => e.id === id)?.nome || r?.etapaNomeSnap || "—";
-
-  // Considera para as métricas apenas registros concluídos que tenham
-  // eficiência calculada (com meta cadastrada); registros "sem meta" ainda
-  // contam nas peças/defeitos, mas não distorcem a média de eficiência.
-  const concluidosPeriodo = useMemo(() => registros.filter(r => {
-    if (r.status !== "concluido" || !r.fim) return false;
-    const d = new Date(r.fim);
-    if (d < start || d > end) return false;
-    if (filtroColab && !equipeDe(r).includes(filtroColab)) return false;
-    return true;
-  }), [registros, start, end, filtroColab]);
-
-  const comMeta = (regs) => regs.filter(r => r.eficiencia != null);
-
-  const avaliacoesFiltradas = useMemo(() => (avaliacoes || []).filter(a => {
-    const d = new Date(a.data + "T12:00:00");
-    if (d < start || d > end) return false;
-    if (filtroColab && a.colaboradorId !== filtroColab) return false;
-    return true;
-  }), [avaliacoes, start, end, filtroColab]);
-
-  const porColaborador = useMemo(() => {
-    const map = {};
-    const garantir = (id) => { if (!map[id]) map[id] = { colaboradorId: id, nome: nomeColab(id), regs: [] }; return map[id]; };
-    concluidosPeriodo.forEach(r => equipeDe(r).forEach(id => garantir(id).regs.push(r)));
-    avaliacoesFiltradas.forEach(a => garantir(a.colaboradorId));
-    return Object.values(map).map(g => {
-      const regsComMeta = comMeta(g.regs);
-      const mediaEf = mediaEficiencia(regsComMeta);
-      const contagem = { A: 0, B: 0, C: 0 };
-      regsComMeta.forEach(r => contagem[r.classificacao] && contagem[r.classificacao]++);
-      const pecas = g.regs.reduce((s, r) => s + (r.quantidade || 1), 0);
-      const defeitos = g.regs.reduce((s, r) => s + (r.quantidadeDefeito || 0), 0);
-      const retrabalhoMin = g.regs.reduce((s, r) => s + (r.tempoRetrabalhoMin || 0), 0);
-      const semMetaQtd = g.regs.length - regsComMeta.length;
-      const avaliacoesColab = avaliacoesFiltradas.filter(a => a.colaboradorId === g.colaboradorId);
-      const penalidade = Math.min(100, avaliacoesColab.reduce((s, a) => s + (a.pesoFalta || 0) + (a.pesoAtraso || 0), 0));
-      const mediaAjustada = Math.max(0, Math.round((mediaEf - penalidade) * 10) / 10);
-      return { colaboradorId: g.colaboradorId, nome: g.nome, qtd: g.regs.length, pecas, defeitos, retrabalhoMin, mediaEf, mediaAjustada, penalidade, contagem, semMetaQtd };
-    }).sort((a, b) => b.mediaAjustada - a.mediaAjustada);
-  }, [concluidosPeriodo, avaliacoesFiltradas]);
-
-  const concluidosComMetaGeral = comMeta(concluidosPeriodo);
-  const contagemGeral = { A: 0, B: 0, C: 0 };
-  concluidosComMetaGeral.forEach(r => contagemGeral[r.classificacao] && contagemGeral[r.classificacao]++);
-  const mediaGeral = mediaEficiencia(concluidosComMetaGeral);
-  const qtdTotalProduzida = concluidosPeriodo.reduce((s, r) => s + (r.quantidade || 1), 0);
-  const qtdTotalDefeito = concluidosPeriodo.reduce((s, r) => s + (r.quantidadeDefeito || 0), 0);
-  const qtdTotalRetrabalhoMin = concluidosPeriodo.reduce((s, r) => s + (r.tempoRetrabalhoMin || 0), 0);
-
-  // Por produto: colaboradores ranqueados dentro de cada produto
-  const porProduto = useMemo(() => {
-    const map = {};
-    concluidosPeriodo.forEach(r => {
-      const chave = r.produtoId || `snap:${r.produtoNomeSnap || "—"}`;
-      if (!map[chave]) map[chave] = {};
-      equipeDe(r).forEach(id => {
-        if (!map[chave][id]) map[chave][id] = [];
-        map[chave][id].push(r);
-      });
-    });
-    return Object.entries(map).map(([chave, colabMap]) => {
-      const primeiraLinha = Object.values(colabMap)[0]?.[0];
-      const colaboradoresArr = Object.entries(colabMap).map(([colabId, regs]) => {
-        const regsComMeta = comMeta(regs);
-        const ef = mediaEficiencia(regsComMeta);
-        return { colaboradorId: colabId, nome: nomeColab(colabId), eficiencia: ef, temMeta: regsComMeta.length > 0, pecas: regs.reduce((s, r) => s + (r.quantidade || 1), 0), classificacao: regsComMeta.length ? classify(ef) : null };
-      }).sort((a, b) => b.eficiencia - a.eficiencia);
-      const comMetaArr = colaboradoresArr.filter(c => c.temMeta);
-      const mediaProduto = comMetaArr.length ? Math.round((comMetaArr.reduce((s, c) => s + c.eficiencia, 0) / comMetaArr.length) * 10) / 10 : 0;
-      return { produtoId: primeiraLinha?.produtoId, produtoNome: primeiraLinha ? nomeProdutoL(primeiraLinha.produtoId, primeiraLinha) : "—", colaboradores: colaboradoresArr, mediaProduto };
-    }).sort((a, b) => b.mediaProduto - a.mediaProduto);
-  }, [concluidosPeriodo]);
-
-  // Por colaborador: histórico cronológico de produtos + destaque melhor/pior
-  const historicoColaborador = useMemo(() => {
-    if (!filtroColab) return null;
-    const regsColab = ordenarRegistrosRelatorio(
-      concluidosPeriodo.filter(r => equipeDe(r).includes(filtroColab)),
-      { hora: r => r.fim, etapa: r => nomeEtapaL(r.etapaId, r), operador: r => equipeDe(r).map(nomeColab).join(", ") }
-    );
-    const porProdutoMap = {};
-    regsColab.forEach(r => {
-      const chave = r.produtoId || `snap:${r.produtoNomeSnap || "—"}`;
-      if (!porProdutoMap[chave]) porProdutoMap[chave] = [];
-      porProdutoMap[chave].push(r);
-    });
-    const mediasPorProduto = Object.entries(porProdutoMap).map(([chave, regs]) => {
-      const regsComMeta = comMeta(regs);
-      const ef = mediaEficiencia(regsComMeta);
-      return { chave, temMeta: regsComMeta.length > 0, eficiencia: ef };
-    }).filter(m => m.temMeta);
-    const melhor = mediasPorProduto.length ? mediasPorProduto.reduce((a, b) => b.eficiencia > a.eficiencia ? b : a) : null;
-    const pior = mediasPorProduto.length ? mediasPorProduto.reduce((a, b) => b.eficiencia < a.eficiencia ? b : a) : null;
-    return {
-      itens: regsColab.map(r => ({
-        data: new Date(r.fim), produtoNome: nomeProdutoL(r.produtoId, r), chave: r.produtoId || `snap:${r.produtoNomeSnap || "—"}`,
-        etapaNome: nomeEtapaL(r.etapaId, r), tempoRealSeg: r.tempoRealSeg, eficiencia: r.eficiencia != null ? Math.min(100, r.eficiencia) : null, classificacao: r.classificacao,
-      })),
-      melhorChave: melhor?.chave, piorChave: pior && pior.chave !== melhor?.chave ? pior.chave : null,
-    };
-  }, [concluidosPeriodo, filtroColab]);
-
-  // Adicionado: custo de mão de obra (a partir do salário mensal do
-  // colaborador, convertido para valor-hora usando 220h/mês, padrão de
-  // jornada CLT) e custo de materiais (a partir do preço unitário salvo
-  // no momento de cada baixa de estoque), para dar uma visão de custo das
-  // operações do período — visível só para o Administrador.
-  const custoMaoDeObraPorColaborador = useMemo(() => {
-    const map = {};
-    concluidosPeriodo.forEach(r => {
-      const equipe = equipeDe(r);
-      if (equipe.length === 0) return;
-      const horasTotais = (r.tempoRealConsideradoSeg ?? r.tempoRealSeg ?? 0) / 3600;
-      const horasPorPessoa = horasTotais / equipe.length;
-      equipe.forEach(id => {
-        const colab = colaboradores.find(c => c.id === id);
-        const valorHora = colab?.salarioMensal ? colab.salarioMensal / HORAS_MES_PADRAO : 0;
-        if (!map[id]) map[id] = { colaboradorId: id, nome: nomeColab(id), horas: 0, custo: 0, temSalario: !!colab?.salarioMensal };
-        map[id].horas += horasPorPessoa;
-        map[id].custo += horasPorPessoa * valorHora;
-      });
-    });
-    return Object.values(map).map(v => ({ ...v, horas: Math.round(v.horas * 100) / 100, custo: Math.round(v.custo * 100) / 100 })).sort((a, b) => b.custo - a.custo);
-  }, [concluidosPeriodo, colaboradores]);
-  const custoMaoDeObraTotal = Math.round(custoMaoDeObraPorColaborador.reduce((s, c) => s + c.custo, 0) * 100) / 100;
-
-  const custoMateriaisPorMaterial = useMemo(() => {
-    const map = {};
-    (movimentacoesMaterial || []).forEach(mv => {
-      const d = new Date(mv.criadoEm);
-      if (d < start || d > end) return;
-      const custo = (mv.quantidadeConsumida || 0) * (mv.precoUnitarioSnap || 0);
-      if (!map[mv.materialId]) map[mv.materialId] = { materialId: mv.materialId, nome: mv.materialNomeSnap || "—", quantidade: 0, custo: 0, temPreco: mv.precoUnitarioSnap != null };
-      map[mv.materialId].quantidade += mv.quantidadeConsumida || 0;
-      map[mv.materialId].custo += custo;
-    });
-    return Object.values(map).map(v => ({ ...v, quantidade: Math.round(v.quantidade * 1000) / 1000, custo: Math.round(v.custo * 100) / 100 })).sort((a, b) => b.custo - a.custo);
-  }, [movimentacoesMaterial, start, end]);
-  const custoMateriaisTotal = Math.round(custoMateriaisPorMaterial.reduce((s, m) => s + m.custo, 0) * 100) / 100;
-  const custoTotalGeral = Math.round((custoMaoDeObraTotal + custoMateriaisTotal) * 100) / 100;
-
-  // Adicionado: gasto por pedido (Ordem de Produção) — cruza a mão de
-  // obra de cada registro concluído com o consumo de material de cada
-  // baixa de estoque, ambos já vinculados à OP de origem, para saber o
-  // custo total (mão de obra + materiais) de cada pedido no período.
-  const nomeOP = (id) => (ordensProducao || []).find(o => o.id === id);
-  const custoPorOP = useMemo(() => {
-    const map = {};
-    const garantir = (opId, numero) => {
-      if (!map[opId]) {
-        const op = nomeOP(opId);
-        map[opId] = { opId, numero: numero ?? op?.numero, cliente: op?.clienteNomeSnap || "—", maoDeObra: 0, materiais: 0 };
-      }
-      return map[opId];
-    };
-    concluidosPeriodo.forEach(r => {
-      if (!r.ordemProducaoId) return;
-      const equipe = equipeDe(r);
-      if (equipe.length === 0) return;
-      const horasTotais = (r.tempoRealConsideradoSeg ?? r.tempoRealSeg ?? 0) / 3600;
-      const horasPorPessoa = horasTotais / equipe.length;
-      const custoRegistro = equipe.reduce((s, id) => {
-        const colab = colaboradores.find(c => c.id === id);
-        const valorHora = colab?.salarioMensal ? colab.salarioMensal / HORAS_MES_PADRAO : 0;
-        return s + horasPorPessoa * valorHora;
-      }, 0);
-      garantir(r.ordemProducaoId, r.ordemProducaoNumero).maoDeObra += custoRegistro;
-    });
-    (movimentacoesMaterial || []).forEach(mv => {
-      if (!mv.ordemProducaoId) return;
-      const d = new Date(mv.criadoEm);
-      if (d < start || d > end) return;
-      const custo = (mv.quantidadeConsumida || 0) * (mv.precoUnitarioSnap || 0);
-      garantir(mv.ordemProducaoId, mv.ordemProducaoNumero).materiais += custo;
-    });
-    return Object.values(map).map(v => ({
-      ...v,
-      maoDeObra: Math.round(v.maoDeObra * 100) / 100,
-      materiais: Math.round(v.materiais * 100) / 100,
-      total: Math.round((v.maoDeObra + v.materiais) * 100) / 100,
-    })).sort((a, b) => b.total - a.total);
-  }, [concluidosPeriodo, movimentacoesMaterial, colaboradores, ordensProducao, start, end]);
-
-  // Adicionado: consolida a necessidade de materiais de todas as OPs
-  // ainda em aberto (ficha de consumo de cada produto × quantidade na
-  // OP), comparando com o estoque atual — mostra o que falta comprar ou
-  // separar antes das ordens serem concluídas.
-  const materiaisPendentes = useMemo(() => {
-    const soma = {};
-    (ordensProducao || []).filter(op => op.status === "aberta").forEach(op => {
-      (op.itens || []).forEach(item => {
-        (consumosMaterial || []).filter(c => c.produtoId === item.produtoId).forEach(c => {
-          const material = (materiais || []).find(m => m.id === c.materialId);
-          if (!soma[c.materialId]) {
-            soma[c.materialId] = { materialId: c.materialId, nome: material?.nome || "—", unidade: material?.unidade || "", necessario: 0, estoque: material?.quantidadeEstoque ?? 0, ops: new Set() };
-          }
-          soma[c.materialId].necessario += (c.quantidadePorPeca || 0) * item.quantidade;
-          soma[c.materialId].ops.add(op.numero);
+  db.ops.forEach(op => {
+    op.etapas.forEach(et => {
+      if (!et.dataInicio) return;
+      const qtdBase = num(et.qtdRecebida) > 0 ? num(et.qtdRecebida) : num(op.quantidade);
+      const cargaMin = cargaEtapaOP(et, qtdBase, op.quantidade, db);
+      if (cargaMin <= 0) return;
+      const colaboradores = responsaveisEtapa(et);
+      const lista = colaboradores.length ? colaboradores : ['(sem responsável definido)'];
+      const cargaPorPessoa = cargaMin / lista.length;
+      lista.forEach(colaborador => {
+        const kC = et.dataInicio + '|' + colaborador;
+        if (!porColaboradorDia[kC]) porColaboradorDia[kC] = {
+          data: et.dataInicio,
+          colaborador,
+          totalMin: 0,
+          itens: []
+        };
+        porColaboradorDia[kC].totalMin += cargaPorPessoa;
+        porColaboradorDia[kC].itens.push({
+          opRotulo: rotuloOP(op),
+          etapa: et.nome,
+          cargaMin: cargaPorPessoa
         });
       });
-    });
-    return Object.values(soma).map(m => ({
-      ...m,
-      necessario: Math.round(m.necessario * 1000) / 1000,
-      deficit: Math.round((m.necessario - m.estoque) * 1000) / 1000,
-      opsCount: m.ops.size,
-    })).sort((a, b) => b.deficit - a.deficit);
-  }, [ordensProducao, consumosMaterial, materiais]);
-  const materiaisComFalta = materiaisPendentes.filter(m => m.deficit > 0);
-
-  // Adicionado: relatório imprimível da lista de materiais pendentes —
-  // mesma tabela usada na tela, formatada para impressão/PDF, pra levar
-  // pro fornecedor ou pro setor de compras.
-  function imprimirMateriaisPendentes() {
-    onImprimirGrade({
-      titulo: "Materiais pendentes de OPs em aberto",
-      subtitulo: `${materiaisPendentes.length} material(is) · ${materiaisComFalta.length} com falta no estoque`,
-      geradoEm: new Date().toLocaleString("pt-BR"),
-      colunas: [
-        { key: "nome", label: "Material" },
-        { key: "necessario", label: "Necessário", align: "right" },
-        { key: "estoque", label: "Em estoque", align: "right" },
-        { key: "falta", label: "Falta", align: "right" },
-        { key: "ops", label: "OPs", align: "right" },
-      ],
-      linhas: materiaisPendentes.map(m => ({
-        nome: m.nome,
-        necessario: `${m.necessario} ${m.unidade}`,
-        estoque: `${m.estoque} ${m.unidade}`,
-        falta: m.deficit > 0 ? `${m.deficit} ${m.unidade}` : "—",
-        ops: m.opsCount,
-      })),
-    });
-  }
-
-  // Adicionado: relatório específico de compras — todas as solicitações
-  // com status, fornecedor vencedor (quando houver), valor negociado e
-  // data de aprovação, mais os totais do período.
-  const nomeMaterialRel = (id) => (materiais || []).find(m => m.id === id)?.nome || "—";
-  const comprasNoPeriodo = useMemo(() => {
-    return (solicitacoesCompra || []).filter(s => {
-      const dataRef = s.concluidaEm || s.criadoEm;
-      const d = new Date(dataRef);
-      return d >= start && d <= end;
-    }).map(s => {
-      const cotacaoEscolhida = s.cotacaoEscolhidaId ? (cotacoesCompra || []).find(c => c.id === s.cotacaoEscolhidaId) : null;
-      const valorTotal = cotacaoEscolhida ? cotacaoEscolhida.precoUnitario * s.quantidade : null;
-      return { solicitacao: s, cotacao: cotacaoEscolhida, valorTotal };
-    }).sort((a, b) => new Date(b.solicitacao.concluidaEm || b.solicitacao.criadoEm) - new Date(a.solicitacao.concluidaEm || a.solicitacao.criadoEm));
-  }, [solicitacoesCompra, cotacoesCompra, start, end]);
-  const totalCompradoPeriodo = comprasNoPeriodo.filter(x => x.solicitacao.status === "comprada").reduce((s, x) => s + (x.valorTotal || 0), 0);
-  const totalAguardandoAprovacao = comprasNoPeriodo.filter(x => x.solicitacao.status === "aguardando_aprovacao").reduce((s, x) => s + (x.valorTotal || 0), 0);
-
-  // Adicionado: relatório de controle de materiais — visão de estoque
-  // (quantidade e valor) e movimentação (entradas x saídas) de cada
-  // material no período selecionado.
-  const controleMateriais = useMemo(() => {
-    return (materiais || []).map(m => {
-      const saidasPeriodo = (movimentacoesMaterial || []).filter(mv => mv.materialId === m.id && new Date(mv.criadoEm) >= start && new Date(mv.criadoEm) <= end)
-        .reduce((s, mv) => s + (mv.quantidadeConsumida || 0), 0);
-      const entradasPeriodo = (movimentacoesEstoque || []).filter(mv => mv.materialId === m.id && mv.tipo === "entrada" && new Date(mv.criadoEm) >= start && new Date(mv.criadoEm) <= end)
-        .reduce((s, mv) => s + (mv.quantidade || 0), 0);
-      const saidasManuaisPeriodo = (movimentacoesEstoque || []).filter(mv => mv.materialId === m.id && mv.tipo === "saida" && new Date(mv.criadoEm) >= start && new Date(mv.criadoEm) <= end)
-        .reduce((s, mv) => s + (mv.quantidade || 0), 0);
-      return {
-        material: m, entradas: Math.round(entradasPeriodo * 1000) / 1000, saidas: Math.round((saidasPeriodo + saidasManuaisPeriodo) * 1000) / 1000,
-        valorEstoque: Math.round((m.quantidadeEstoque || 0) * (m.preco || 0) * 100) / 100,
-        estoqueBaixo: m.estoqueMinimo != null && m.quantidadeEstoque <= m.estoqueMinimo,
+      const depId = et.departamentoId || '_sem';
+      const kD = et.dataInicio + '|' + depId;
+      if (!porDeptoDia[kD]) porDeptoDia[kD] = {
+        data: et.dataInicio,
+        departamentoId: depId,
+        totalMin: 0,
+        itens: []
       };
-    }).sort((a, b) => b.valorEstoque - a.valorEstoque);
-  }, [materiais, movimentacoesMaterial, movimentacoesEstoque, start, end]);
-  const valorTotalEstoque = controleMateriais.reduce((s, c) => s + c.valorEstoque, 0);
-  const materiaisAbaixoMinimo = controleMateriais.filter(c => c.estoqueBaixo);
+      porDeptoDia[kD].totalMin += cargaMin;
+      porDeptoDia[kD].itens.push({
+        opRotulo: rotuloOP(op),
+        etapa: et.nome,
+        cargaMin
+      });
 
-  // Adicionado: itens em aberto (processos ainda não concluídos) por
-  // departamento, agrupados por etapa, colaborador ou função — cada grupo
-  // mostra os itens que caem nele, com peças planejadas e tempo em aberto.
-  const nomeSetorL = (id, r) => (setores || []).find(s => s.id === id)?.nome || r?.setorNomeSnap || "—";
-  const funcaoColab = (id) => colaboradores.find(c => c.id === id)?.funcao || "Sem função definida";
-  const abertosFiltrados = useMemo(() => registros.filter(r => r.status === "aberto" && (!filtroSetorAbertos || r.setorId === filtroSetorAbertos)), [registros, filtroSetorAbertos]);
-  const gruposAbertos = useMemo(() => {
-    const map = {};
-    const garantir = (chave, label) => { if (!map[chave]) map[chave] = { chave, label, itens: [] }; return map[chave]; };
-    abertosFiltrados.forEach(r => {
-      if (agrupamentoAbertos === "etapa") {
-        garantir(r.etapaId || `snap:${r.etapaNomeSnap}`, nomeEtapaL(r.etapaId, r)).itens.push(r);
-      } else if (agrupamentoAbertos === "colaborador") {
-        equipeDe(r).forEach(id => garantir(id, nomeColab(id)).itens.push(r));
-      } else {
-        equipeDe(r).forEach(id => garantir(funcaoColab(id), funcaoColab(id)).itens.push(r));
+      // carga de máquina: por equipamento alocado, ou agrupada pelo tipo quando ainda não alocada
+      const chaveMaq = et.equipamentoId ? 'eq:' + et.equipamentoId : null;
+      if (chaveMaq) {
+        const kM = et.dataInicio + '|' + chaveMaq;
+        if (!porMaquinaDia[kM]) porMaquinaDia[kM] = {
+          data: et.dataInicio,
+          equipamentoId: et.equipamentoId || '',
+          tipo: '',
+          alocada: !!et.equipamentoId,
+          totalMin: 0,
+          itens: []
+        };
+        porMaquinaDia[kM].totalMin += cargaMin;
+        porMaquinaDia[kM].itens.push({
+          opRotulo: rotuloOP(op),
+          etapa: et.nome,
+          cargaMin
+        });
       }
     });
-    return Object.values(map)
-      .map(g => ({
-        ...g,
-        itens: ordenarRegistrosRelatorio(g.itens, { hora: r => r.inicio, etapa: r => nomeEtapaL(r.etapaId, r), operador: r => equipeDe(r).map(nomeColab).join(", ") }),
-      }))
-      .sort((a, b) => b.itens.length - a.itens.length);
-  }, [abertosFiltrados, agrupamentoAbertos, colaboradores]);
+  });
+  return {
+    colaboradores: Object.values(porColaboradorDia).sort((a, b) => a.data === b.data ? a.colaborador.localeCompare(b.colaborador) : a.data.localeCompare(b.data)),
+    departamentos: Object.values(porDeptoDia).sort((a, b) => a.data.localeCompare(b.data)),
+    maquinas: Object.values(porMaquinaDia).sort((a, b) => a.data.localeCompare(b.data))
+  };
+}
+function Cronograma({
+  db,
+  update,
+  usuario
+}) {
+  const [fIni, setFIni] = useState('');
+  const [fFim, setFFim] = useState('');
+  const [fDep, setFDep] = useState('');
+  const [fCol, setFCol] = useState('');
+  const [fStatus, setFStatus] = useState('');
+  const [detalhe, setDetalhe] = useState(null); // {opId, etapaIdx}
 
-  function montarRelatorioAbertosImpressao() {
-    const presetLabelAbertos = filtroSetorAbertos ? (setores || []).find(s => s.id === filtroSetorAbertos)?.nome : "Todos os departamentos";
-    const agrupamentoLabel = { etapa: "Por etapa", colaborador: "Por colaborador", funcao: "Por função" }[agrupamentoAbertos];
-    onGerarRelatorioAbertos({
-      departamentoTexto: presetLabelAbertos || "Todos os departamentos",
-      agrupamentoLabel,
-      geradoEm: new Date().toLocaleString("pt-BR"),
-      grupos: gruposAbertos.map(g => ({
-        label: g.label,
-        itens: g.itens.map(r => ({
-          produtoNome: nomeProdutoL(r.produtoId, r), etapaNome: nomeEtapaL(r.etapaId, r), setorNome: nomeSetorL(r.setorId, r),
-          colaboradores: equipeDe(r).map(nomeColab).join(", "), quantidade: r.quantidade,
-          inicio: new Date(r.inicio), equipamentoNome: r.equipamentoNomeSnap || null,
-          // Adicionado: meta de peças/hora — só faz sentido pra etapas
-          // "por peça" (uma etapa "por lote", como risco/enfesto do
-          // Corte, não tem uma meta por hora, é um bloco só).
-          metaPecasHora: (r.tipoCalculoEtapa !== "lote" && r.tempoEstimadoBaseSeg) ? Math.max(1, Math.floor(3600 / r.tempoEstimadoBaseSeg)) : null,
-        })),
-      })),
-      totalItens: abertosFiltrados.length,
+  const segmentos = useMemo(() => segmentosCronograma(db), [db]);
+  const filtrados = segmentos.filter(sg => {
+    if (fIni && sg.data < fIni) return false;
+    if (fFim && sg.data > fFim) return false;
+    if (fDep && (sg.etapa.departamentoId || '') !== fDep) return false;
+    if (fCol && !sg.responsaveis.some(n => normaliza(n) === normaliza(fCol))) return false;
+    if (fStatus && sg.etapa.status !== fStatus) return false;
+    return true;
+  });
+
+  // agrupa por data → departamento → colaborador
+  const porDia = {};
+  filtrados.forEach(sg => {
+    if (!porDia[sg.data]) porDia[sg.data] = {};
+    const kd = sg.dep ? sg.dep.id : '_sem';
+    if (!porDia[sg.data][kd]) porDia[sg.data][kd] = {
+      dep: sg.dep,
+      itens: []
+    };
+    porDia[sg.data][kd].itens.push(sg);
+  });
+  const dias = Object.keys(porDia).sort();
+  const nomesColab = Array.from(new Set(db.colaboradores.filter(c => c.status !== 'Inativo').map(c => c.nome))).sort();
+  const totalMin = filtrados.reduce((s, x) => s + x.min, 0);
+  const etapasUnicas = new Set(filtrados.map(x => x.op.id + '|' + x.etapaIdx)).size;
+  function limpar() {
+    setFIni('');
+    setFFim('');
+    setFDep('');
+    setFCol('');
+    setFStatus('');
+  }
+  const etapaAberta = detalhe ? (() => {
+    const op = db.ops.find(o => o.id === detalhe.opId);
+    return op ? {
+      op,
+      et: op.etapas[detalhe.etapaIdx],
+      idx: detalhe.etapaIdx
+    } : null;
+  })() : null;
+  return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    className: "page-head"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "eyebrow"
+  }, "Cronograma / PCP — programação e realizado"), /*#__PURE__*/React.createElement("button", {
+    className: "btn accent sm",
+    onClick: () => window.print()
+  }, "🖨️ Imprimir / PDF")), /*#__PURE__*/React.createElement(PainelSobrecarga, {
+    segs: filtrados,
+    db: db,
+    update: update,
+    usuario: usuario
+  }), /*#__PURE__*/React.createElement(ResumoRealizado, {
+    db: db,
+    fIni: fIni,
+    fFim: fFim,
+    fDep: fDep,
+    fCol: fCol
+  }), /*#__PURE__*/React.createElement("div", {
+    className: "panel no-print"
+  }, /*#__PURE__*/React.createElement("h3", null, "Filtros"), /*#__PURE__*/React.createElement("div", {
+    className: "grid3"
+  }, /*#__PURE__*/React.createElement(Field, {
+    label: "Data início"
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "date",
+    value: fIni,
+    onChange: e => setFIni(e.target.value)
+  })), /*#__PURE__*/React.createElement(Field, {
+    label: "Data fim"
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "date",
+    value: fFim,
+    onChange: e => setFFim(e.target.value)
+  })), /*#__PURE__*/React.createElement(Field, {
+    label: "Departamento"
+  }, /*#__PURE__*/React.createElement("select", {
+    value: fDep,
+    onChange: e => setFDep(e.target.value)
+  }, /*#__PURE__*/React.createElement("option", {
+    value: ""
+  }, "Todos"), db.departamentos.map(d => /*#__PURE__*/React.createElement("option", {
+    key: d.id,
+    value: d.id
+  }, d.nome)))), /*#__PURE__*/React.createElement(Field, {
+    label: "Colaborador"
+  }, /*#__PURE__*/React.createElement("select", {
+    value: fCol,
+    onChange: e => setFCol(e.target.value)
+  }, /*#__PURE__*/React.createElement("option", {
+    value: ""
+  }, "Todos"), nomesColab.map(n => /*#__PURE__*/React.createElement("option", {
+    key: n,
+    value: n
+  }, n)))), /*#__PURE__*/React.createElement(Field, {
+    label: "Situação da etapa"
+  }, /*#__PURE__*/React.createElement("select", {
+    value: fStatus,
+    onChange: e => setFStatus(e.target.value)
+  }, /*#__PURE__*/React.createElement("option", {
+    value: ""
+  }, "Todas"), STATUS_ETAPA.map(st => /*#__PURE__*/React.createElement("option", {
+    key: st,
+    value: st
+  }, st)))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'flex-end'
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "btn ghost sm",
+    onClick: limpar
+  }, "Limpar filtros")))), /*#__PURE__*/React.createElement("div", {
+    className: "report-doc"
+  }, /*#__PURE__*/React.createElement("h2", null, "Cronograma de Produção"), /*#__PURE__*/React.createElement("div", {
+    className: "rep-sub"
+  }, "Emitido em ", fmtDate(todayISO()), (fIni || fFim) && ` · período ${fIni ? fmtDate(fIni) : 'início'} a ${fFim ? fmtDate(fFim) : 'fim'}`, fDep && ` · ${(db.departamentos.find(d => d.id === fDep) || {}).nome}`, fCol && ` · ${fCol}`), /*#__PURE__*/React.createElement("div", {
+    className: "rep-grid"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "rep-box"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "k"
+  }, "Dias programados"), /*#__PURE__*/React.createElement("div", {
+    className: "v"
+  }, dias.length)), /*#__PURE__*/React.createElement("div", {
+    className: "rep-box"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "k"
+  }, "Etapas"), /*#__PURE__*/React.createElement("div", {
+    className: "v"
+  }, etapasUnicas)), /*#__PURE__*/React.createElement("div", {
+    className: "rep-box"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "k"
+  }, "Tempo total"), /*#__PURE__*/React.createElement("div", {
+    className: "v"
+  }, minParaHHMM(totalMin))), /*#__PURE__*/React.createElement("div", {
+    className: "rep-box"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "k"
+  }, "Jornada"), /*#__PURE__*/React.createElement("div", {
+    className: "v",
+    style: {
+      fontSize: 12
+    }
+  }, JORNADA.inicioManha, "–", JORNADA.fimManha, " · ", JORNADA.inicioTarde, "–", JORNADA.fimTarde))), dias.length === 0 ? /*#__PURE__*/React.createElement(Empty, {
+    text: "Nenhuma produção lançada para os filtros escolhidos. Inicie uma produção em Produção → Lançamento de produção."
+  }) : dias.map(data => {
+    const deps = porDia[data];
+    const totalDia = Object.values(deps).reduce((s, g) => s + g.itens.reduce((a, b) => a + b.min, 0), 0);
+    const cap = capacidadeDoDia(data);
+    return /*#__PURE__*/React.createElement("div", {
+      key: data,
+      style: {
+        marginTop: 16
+      }
+    }, /*#__PURE__*/React.createElement("h4", null, ['Domingo', 'Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado'][diaSemana(data)], ", ", fmtDate(data), /*#__PURE__*/React.createElement("span", {
+      className: "small muted",
+      style: {
+        fontWeight: 400
+      }
+    }, " · ", minParaHHMM(totalDia), " programados · ", cap.rotulo)), Object.values(deps).map((g, gi) => {
+      // dentro do departamento, agrupa por colaborador
+      const porCol = {};
+      g.itens.forEach(sg => {
+        sg.responsaveis.forEach(n => {
+          if (!porCol[n]) porCol[n] = [];
+          porCol[n].push(sg);
+        });
+      });
+      return /*#__PURE__*/React.createElement("div", {
+        key: gi,
+        style: {
+          marginBottom: 10
+        }
+      }, /*#__PURE__*/React.createElement("div", {
+        style: {
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
+          margin: '8px 0 4px 0'
+        }
+      }, /*#__PURE__*/React.createElement("div", {
+        style: {
+          width: 5,
+          height: 14,
+          background: 'var(--thread)',
+          borderRadius: 3
+        }
+      }), /*#__PURE__*/React.createElement("strong", {
+        style: {
+          fontFamily: 'var(--display)',
+          fontSize: 13
+        }
+      }, g.dep ? g.dep.nome : 'Sem departamento')), Object.entries(porCol).map(([nome, itens]) => {
+        const minCol = itens.reduce((a, b) => a + b.min, 0);
+        return /*#__PURE__*/React.createElement("div", {
+          key: nome,
+          style: {
+            marginBottom: 8
+          }
+        }, /*#__PURE__*/React.createElement("div", {
+          className: "small",
+          style: {
+            margin: '4px 0',
+            fontWeight: 600
+          }
+        }, "👤 ", nome, " ", /*#__PURE__*/React.createElement("span", {
+          className: "muted",
+          style: {
+            fontWeight: 400
+          }
+        }, "· ", minParaHHMM(minCol))), /*#__PURE__*/React.createElement("table", null, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("th", null, "Horário"), /*#__PURE__*/React.createElement("th", null, "OP"), /*#__PURE__*/React.createElement("th", null, "Produto"), /*#__PURE__*/React.createElement("th", null, "Etapa"), /*#__PURE__*/React.createElement("th", null, "Equipamento"), /*#__PURE__*/React.createElement("th", {
+          className: "num"
+        }, "Qtd."), /*#__PURE__*/React.createElement("th", {
+          className: "num"
+        }, "Concluído"), /*#__PURE__*/React.createElement("th", null, "Situação"), /*#__PURE__*/React.createElement("th", {
+          className: "no-print"
+        }))), /*#__PURE__*/React.createElement("tbody", null, itens.sort((a, b) => a.ini - b.ini).map((sg, i) => {
+          const et = sg.etapa;
+          const tone = et.status === 'Concluída' ? 'ok' : et.status === 'Em andamento' ? 'warn' : 'idle';
+          const qtdBase = num(et.qtdRecebida) > 0 ? num(et.qtdRecebida) : num(sg.op.quantidade);
+          const temAnexo = (et.anexos || []).length > 0;
+          return /*#__PURE__*/React.createElement("tr", {
+            key: i
+          }, /*#__PURE__*/React.createElement("td", {
+            className: "small",
+            style: {
+              fontFamily: 'var(--mono)'
+            }
+          }, hhmm(sg.ini), "–", hhmm(sg.fim)), /*#__PURE__*/React.createElement("td", {
+            className: "small"
+          }, /*#__PURE__*/React.createElement("strong", null, rotuloOP(sg.op))), /*#__PURE__*/React.createElement("td", {
+            className: "small"
+          }, sg.produto ? sg.produto.nome : '—'), /*#__PURE__*/React.createElement("td", {
+            className: "small"
+          }, et.nome, et.observacao && ' 📝', temAnexo && ' 📎'), /*#__PURE__*/React.createElement("td", {
+            className: "small muted"
+          }, sg.maq ? sg.maq.codigo : '—'), /*#__PURE__*/React.createElement("td", {
+            className: "num"
+          }, qtdBase), /*#__PURE__*/React.createElement("td", {
+            className: "num"
+          }, num(et.qtdConcluida) || '—'), /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement(Badge, {
+            tone: tone
+          }, et.status)), /*#__PURE__*/React.createElement("td", {
+            className: "no-print"
+          }, /*#__PURE__*/React.createElement("button", {
+            className: "btn ghost sm",
+            onClick: () => setDetalhe({
+              opId: sg.op.id,
+              etapaIdx: sg.etapaIdx
+            })
+          }, "Abrir")));
+        }))));
+      }));
+    }));
+  }), /*#__PURE__*/React.createElement("div", {
+    className: "rep-sign"
+  }, /*#__PURE__*/React.createElement("div", null, "Responsável pela programação"), /*#__PURE__*/React.createElement("div", null, "Supervisão de produção"))), etapaAberta && /*#__PURE__*/React.createElement(EtapaCronogramaModal, {
+    op: etapaAberta.op,
+    etapa: etapaAberta.et,
+    idx: etapaAberta.idx,
+    db: db,
+    update: update,
+    onClose: () => setDetalhe(null)
+  }));
+}
+
+/* ==========================================================
+   ETAPA NO CRONOGRAMA — observação, anexos e finalização
+========================================================== */
+/* Comparativo previsto × realizado, alimentado pelos apontamentos de produção */
+/* Só aparece quando algum dia passa da jornada — aí sim oferece a autorização
+   para estender o expediente ou usar o sábado. */
+function PainelSobrecarga({
+  segs,
+  db,
+  update,
+  usuario
+}) {
+  const casos = sobrecargaPorDia(segs || []);
+  if (casos.length === 0) return null;
+  function autorizar(c) {
+    const quem = usuario && usuario.nome || '';
+    if (!podeExecutar(usuario, 'cadastros')) {
+      alert('Somente gestores e administradores podem autorizar carga acima da jornada.');
+      return;
+    }
+    if (!confirm(`Autorizar ${c.colaborador} a trabalhar ${minParaHHMM(c.min)} em ${fmtDate(c.data)}?\n\nJornada normal: ${minParaHHMM(c.limite)} · excedente: ${minParaHHMM(c.excedente)}.`)) return;
+    update(d => {
+      d.aprovacoesCarga = [...(d.aprovacoesCarga || []), {
+        id: uid(),
+        data: c.data,
+        colaborador: c.colaborador,
+        aprovador: quem,
+        observacao: `carga de ${minParaHHMM(c.min)} (limite ${minParaHHMM(c.limite)})`,
+        criadoEm: agoraISO()
+      }];
+      registrarLog(d, usuario, 'Autorizou carga acima da jornada', `${c.colaborador} · ${fmtDate(c.data)} · ${minParaHHMM(c.min)}`);
+      return d;
     });
   }
-
-  function montarRelatorioImpressao() {
-    if (!filtroColab) return;
-    const colaborador = colaboradores.find(c => c.id === filtroColab);
-    const porProdutoMap = {};
-    concluidosPeriodo.forEach(r => {
-      const chaveProduto = r.produtoId || `snap:${r.produtoNomeSnap || "—"}`;
-      const chaveEtapa = r.etapaId || `snap:${r.etapaNomeSnap || "—"}`;
-      if (!porProdutoMap[chaveProduto]) porProdutoMap[chaveProduto] = {};
-      if (!porProdutoMap[chaveProduto][chaveEtapa]) porProdutoMap[chaveProduto][chaveEtapa] = [];
-      porProdutoMap[chaveProduto][chaveEtapa].push(r);
-    });
-    const porProdutoEtapa = Object.entries(porProdutoMap).map(([chaveProduto, etapasMap]) => {
-      const etapasArr = Object.entries(etapasMap).map(([chaveEtapa, regs]) => {
-        const regsComMeta = comMeta(regs);
-        const se = regsComMeta.reduce((s, r) => s + r.tempoEstimadoSeg, 0);
-        const sr = regsComMeta.reduce((s, r) => s + (r.tempoRealConsideradoSeg ?? r.tempoRealSeg), 0);
-        const eficiencia = mediaEficiencia(regsComMeta);
-        const colegasSet = new Set();
-        regs.forEach(r => equipeDe(r).forEach(id => { if (id !== filtroColab) colegasSet.add(nomeColab(id)); }));
+  function jaAutorizado(c) {
+    return (db.aprovacoesCarga || []).some(a => a.data === c.data && a.colaborador === c.colaborador);
+  }
+  return /*#__PURE__*/React.createElement("div", {
+    className: "panel",
+    style: {
+      borderColor: 'var(--bad)',
+      background: 'var(--bad-bg)'
+    }
+  }, /*#__PURE__*/React.createElement("h3", {
+    style: {
+      color: 'var(--bad)'
+    }
+  }, "⚠ Demanda acima da jornada de trabalho"), /*#__PURE__*/React.createElement("div", {
+    className: "small",
+    style: {
+      marginBottom: 10
+    }
+  }, "A programação de ", casos.length, " colaborador(es)/dia ultrapassa a jornada. Trabalhar além disso — estender até ", JORNADA.extensaoAte, " ou usar o sábado (", JORNADA.sabadoInicio, "–", JORNADA.sabadoFim, ") — exige autorização de um superior."), /*#__PURE__*/React.createElement("table", null, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("th", null, "Data"), /*#__PURE__*/React.createElement("th", null, "Colaborador"), /*#__PURE__*/React.createElement("th", {
+    className: "num"
+  }, "Programado"), /*#__PURE__*/React.createElement("th", {
+    className: "num"
+  }, "Jornada"), /*#__PURE__*/React.createElement("th", {
+    className: "num"
+  }, "Excedente"), /*#__PURE__*/React.createElement("th", null, "Situação"), /*#__PURE__*/React.createElement("th", {
+    className: "no-print"
+  }))), /*#__PURE__*/React.createElement("tbody", null, casos.map((c, i) => {
+    const ok = jaAutorizado(c);
+    const acimaTeto = c.min > c.cap.maximo;
+    return /*#__PURE__*/React.createElement("tr", {
+      key: i
+    }, /*#__PURE__*/React.createElement("td", {
+      className: "small"
+    }, fmtDate(c.data), /*#__PURE__*/React.createElement("div", {
+      className: "small muted"
+    }, ['dom', 'seg', 'ter', 'qua', 'qui', 'sex', 'sáb'][diaSemana(c.data)])), /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement("strong", null, c.colaborador)), /*#__PURE__*/React.createElement("td", {
+      className: "num"
+    }, minParaHHMM(c.min)), /*#__PURE__*/React.createElement("td", {
+      className: "num muted"
+    }, minParaHHMM(c.limite)), /*#__PURE__*/React.createElement("td", {
+      className: "num",
+      style: {
+        color: 'var(--bad)',
+        fontWeight: 700
+      }
+    }, "+", minParaHHMM(c.excedente)), /*#__PURE__*/React.createElement("td", null, acimaTeto ? /*#__PURE__*/React.createElement(Badge, {
+      tone: "bad"
+    }, "Acima do teto de ", minParaHHMM(c.cap.maximo)) : ok ? /*#__PURE__*/React.createElement(Badge, {
+      tone: "ok"
+    }, "Autorizado") : /*#__PURE__*/React.createElement(Badge, {
+      tone: "warn"
+    }, "Aguardando autorização")), /*#__PURE__*/React.createElement("td", {
+      className: "no-print"
+    }, !ok && !acimaTeto && /*#__PURE__*/React.createElement("button", {
+      className: "btn accent sm",
+      onClick: () => autorizar(c)
+    }, "Autorizar"), acimaTeto && /*#__PURE__*/React.createElement("span", {
+      className: "small muted"
+    }, "redistribua a carga")));
+  }))));
+}
+function ResumoRealizado({
+  db,
+  fIni,
+  fFim,
+  fDep,
+  fCol
+}) {
+  const aps = (db.apontamentos || []).filter(a => {
+    if (!a.fim) return false;
+    const dia = String(a.fim).slice(0, 10);
+    if (fIni && dia < fIni) return false;
+    if (fFim && dia > fFim) return false;
+    if (fDep && (a.departamentoId || '') !== fDep) return false;
+    if (fCol && !(a.equipe || [a.colaborador]).some(n => normaliza(n) === normaliza(fCol))) return false;
+    return true;
+  });
+  if (aps.length === 0) return null;
+  const boas = aps.reduce((s, a) => s + num(a.qtdBoas), 0);
+  const defeito = aps.reduce((s, a) => s + num(a.qtdDefeito), 0);
+  const retrab = aps.reduce((s, a) => s + num(a.qtdRetrabalho), 0);
+  const minReal = aps.reduce((s, a) => s + num(a.minReais), 0);
+  const minPrev = aps.reduce((s, a) => {
+    const p = (a.equipe || [a.colaborador]).length || 1;
+    return s + num(a.minPorPeca) * num(a.qtdBoas) / p;
+  }, 0);
+  const ef = minReal > 0 ? minPrev / minReal * 100 : 0;
+  const cls = classificarEficiencia(ef);
+  return /*#__PURE__*/React.createElement("div", {
+    className: "panel"
+  }, /*#__PURE__*/React.createElement("h3", null, "Realizado no período ", /*#__PURE__*/React.createElement("span", {
+    className: "chip"
+  }, aps.length, " apontamentos")), /*#__PURE__*/React.createElement("div", {
+    className: "painel-meta"
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    className: "k"
+  }, "Peças boas"), /*#__PURE__*/React.createElement("div", {
+    className: "v"
+  }, boas)), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    className: "k"
+  }, "Defeito / retrabalho"), /*#__PURE__*/React.createElement("div", {
+    className: "v"
+  }, defeito, " / ", retrab)), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    className: "k"
+  }, "Tempo previsto"), /*#__PURE__*/React.createElement("div", {
+    className: "v"
+  }, minParaHHMM(minPrev))), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    className: "k"
+  }, "Tempo real"), /*#__PURE__*/React.createElement("div", {
+    className: "v"
+  }, minParaHHMM(minReal))), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    className: "k"
+  }, "Eficiência"), /*#__PURE__*/React.createElement("div", {
+    className: "v",
+    style: {
+      color: cls.tone === 'ok' ? 'var(--ok)' : cls.tone === 'warn' ? 'var(--warn)' : 'var(--bad)'
+    }
+  }, ef.toFixed(1), "% · ", cls.nota))));
+}
+function EtapaCronogramaModal({
+  op,
+  etapa,
+  idx,
+  db,
+  update,
+  onClose
+}) {
+  const [obs, setObs] = useState(etapa.observacao || '');
+  const [qtdFinal, setQtdFinal] = useState('');
+  const dep = db.departamentos.find(d => d.id === etapa.departamentoId);
+  const maq = (db.equipamentos || []).find(q => q.id === etapa.equipamentoId);
+  const produto = db.produtos.find(p => p.id === op.produtoId);
+  const qtdBase = num(etapa.qtdRecebida) > 0 ? num(etapa.qtdRecebida) : num(op.quantidade);
+  const jaFeito = num(etapa.qtdConcluida);
+  const restante = Math.max(qtdBase - jaFeito, 0);
+  function patchEtapa(patch) {
+    update(d => {
+      d.ops = d.ops.map(o => {
+        if (o.id !== op.id) return o;
+        const etapas = o.etapas.slice();
+        etapas[idx] = {
+          ...etapas[idx],
+          ...patch
+        };
         return {
-          etapaNome: nomeEtapaL(regs[0].etapaId, regs[0]), colegas: Array.from(colegasSet),
-          qtd: regs.reduce((s, r) => s + (r.quantidade || 1), 0),
-          qtdBoa: regs.reduce((s, r) => s + (r.quantidadeBoa ?? r.quantidade ?? 1), 0),
-          qtdDefeito: regs.reduce((s, r) => s + (r.quantidadeDefeito || 0), 0),
-          retrabalhoMin: regs.reduce((s, r) => s + (r.tempoRetrabalhoMin || 0), 0),
-          tempoRealSeg: sr, tempoEstimadoSeg: se, eficiencia: regsComMeta.length ? eficiencia : null, classificacao: regsComMeta.length ? classify(eficiencia) : null, registros: regs.length,
+          ...o,
+          etapas
         };
       });
-      const regsProduto = Object.values(etapasMap).flat();
-      const regsProdutoComMeta = comMeta(regsProduto);
-      const efProduto = mediaEficiencia(regsProdutoComMeta);
-      return { produtoNome: nomeProdutoL(regsProduto[0].produtoId, regsProduto[0]), etapas: etapasArr, subtotalEficiencia: regsProdutoComMeta.length ? efProduto : null, subtotalClassificacao: regsProdutoComMeta.length ? classify(efProduto) : null };
-    });
-
-    const colabResumo = porColaborador.find(c => c.colaboradorId === filtroColab) || { mediaEf: mediaGeral, mediaAjustada: mediaGeral, penalidade: 0 };
-    const avaliacoesColab = avaliacoesFiltradas.filter(a => a.colaboradorId === filtroColab);
-    const presetLabel = (presets.find(p => p.key === preset) || {}).label || "Personalizado";
-    const periodoTexto = `${start.toLocaleDateString("pt-BR")} a ${end.toLocaleDateString("pt-BR")} (${presetLabel})`;
-
-    onGerarRelatorio({
-      colaboradorNome: colaborador ? colaborador.nome : "—",
-      colaboradorFuncao: colaborador ? colaborador.funcao : "",
-      periodoTexto, porProdutoEtapa, colabResumo, avaliacoesColab,
-      geradoEm: new Date().toLocaleString("pt-BR"),
+      return d;
     });
   }
-
-  const presets = [
-    { key: "dia", label: "Diário" },
-    { key: "semana", label: "Semanal" },
-    { key: "quinzena", label: "Quinzenal" },
-    { key: "mes", label: "Mensal" },
-    { key: "bimestre", label: "Bimestral" },
-    { key: "trimestre", label: "Trimestral" },
-    { key: "ano", label: "Anual" },
-    { key: "custom", label: "Personalizado" },
-  ];
-
-  return (
-    <div>
-      <Card style={{ marginBottom: 16 }}>
-        <div style={{ fontSize: 15, fontWeight: 800, fontFamily: FONT_DISPLAY, marginBottom: 12, color: "#1c2b39" }}>Período</div>
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: preset === "custom" ? 12 : 4 }}>
-          {presets.map(p => <ToggleChip key={p.key} ativo={preset === p.key} onClick={() => setPreset(p.key)}>{p.label}</ToggleChip>)}
-        </div>
-        {preset === "custom" && (
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 4 }}>
-            <Field label="De"><input type="date" value={customStart} onChange={e => setCustomStart(e.target.value)} style={inputStyle} /></Field>
-            <Field label="Até"><input type="date" value={customEnd} onChange={e => setCustomEnd(e.target.value)} style={inputStyle} /></Field>
-          </div>
-        )}
-        {/* Adicionado: deixa explícito qual faixa de datas está sendo
-            considerada e quantos registros ela pegou — antes, um relatório
-            vazio parecia defeito quando na verdade era só o filtro de
-            período não alcançando os lançamentos. */}
-        <div style={{
-          fontSize: 11.5, color: concluidosPeriodo.length ? "#6b5d49" : "#8a6510",
-          background: concluidosPeriodo.length ? "#f4efe2" : "#fdf3e0",
-          border: `1px dashed ${concluidosPeriodo.length ? "#d9cfb7" : "#b5820a"}`,
-          borderRadius: 7, padding: "7px 10px", marginBottom: 12,
-        }}>
-          {start.toLocaleDateString("pt-BR")} a {end.toLocaleDateString("pt-BR")} · {concluidosPeriodo.length} produção{concluidosPeriodo.length !== 1 ? "ões" : ""} concluída{concluidosPeriodo.length !== 1 ? "s" : ""}
-          {concluidosPeriodo.length === 0 && " — nada lançado nesse período. Experimente um período maior (Mensal, Anual) ou use Personalizado."}
-        </div>
-        <Field label="Colaborador (opcional)">
-          <Select value={filtroColab} onChange={e => setFiltroColab(e.target.value)}>
-            <option value="">Todos</option>
-            {colaboradores.map(c => <option key={c.id} value={c.id}>{c.nome}</option>)}
-          </Select>
-        </Field>
-      </Card>
-
-      <div style={{ display: "flex", gap: 6, marginBottom: 16, flexWrap: "wrap" }}>
-        {[
-          { key: "resumo", label: "Resumo" },
-          { key: "produto", label: "Por produto" },
-          { key: "colaborador", label: "Por colaborador" },
-          { key: "abertos", label: "Em aberto" },
-          ...(ehAdministrador ? [{ key: "custos", label: "Custos" }, { key: "compras", label: "Compras" }, { key: "materiais", label: "Materiais" }] : []),
-        ].map(a => (
-          <button key={a.key} onClick={() => setAba(a.key)} style={{
-            flex: "1 1 30%", border: "1.5px solid " + (aba === a.key ? "#2f4a63" : "#d9cfb7"),
-            background: aba === a.key ? "#2f4a63" : "#fff", color: aba === a.key ? "#fff" : "#6b5d49",
-            borderRadius: 9, padding: "9px 4px", fontSize: 12.5, fontWeight: 700, cursor: "pointer",
-          }}>{a.label}</button>
-        ))}
-      </div>
-
-      {aba === "resumo" && (
-        <>
-          <Card style={{ marginBottom: 16 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-              <div style={{ fontSize: 15, fontWeight: 800, fontFamily: FONT_DISPLAY, color: "#1c2b39" }}>Resumo do período</div>
-              <div style={{ fontSize: 13, color: "#6b5d49" }}>{concluidosPeriodo.length} concluído{concluidosPeriodo.length !== 1 ? "s" : ""}</div>
-            </div>
-            <div style={{ display: "flex", gap: 20, marginBottom: 10, flexWrap: "wrap" }}>
-              <div>
-                <div style={{ fontSize: 28, fontWeight: 800, color: "#1c2b39", lineHeight: 1.1 }}>{concluidosComMetaGeral.length ? `${mediaGeral}%` : "—"}</div>
-                <div style={{ fontSize: 12, fontWeight: 600, color: "#a3937a" }}>eficiência média</div>
-              </div>
-              <div>
-                <div style={{ fontSize: 28, fontWeight: 800, color: "#1c2b39", lineHeight: 1.1 }}>{qtdTotalProduzida}</div>
-                <div style={{ fontSize: 12, fontWeight: 600, color: "#a3937a" }}>peças produzidas</div>
-              </div>
-              <div>
-                <div style={{ fontSize: 28, fontWeight: 800, color: qtdTotalDefeito ? "#b13232" : "#1c2b39", lineHeight: 1.1 }}>{qtdTotalDefeito}</div>
-                <div style={{ fontSize: 12, fontWeight: 600, color: "#a3937a" }}>com defeito</div>
-              </div>
-              <div>
-                <div style={{ fontSize: 28, fontWeight: 800, color: qtdTotalRetrabalhoMin ? "#b13232" : "#1c2b39", lineHeight: 1.1 }}>{qtdTotalRetrabalhoMin}min</div>
-                <div style={{ fontSize: 12, fontWeight: 600, color: "#a3937a" }}>retrabalho</div>
-              </div>
-            </div>
-            {concluidosPeriodo.length > concluidosComMetaGeral.length && (
-              <div style={{ fontSize: 12, color: "#8a6510", marginBottom: 10 }}>
-                {concluidosPeriodo.length - concluidosComMetaGeral.length} registro(s) sem tempo estimado cadastrado — não entram na média de eficiência.
-              </div>
-            )}
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8 }}>
-              {["A", "B", "C"].map(k => (
-                <div key={k} style={{ background: CLASS_INFO[k].bg, borderRadius: 9, padding: "9px 6px", textAlign: "center" }}>
-                  <div style={{ fontSize: 18, fontWeight: 800, color: CLASS_INFO[k].color }}>{contagemGeral[k]}</div>
-                  <div style={{ fontSize: 10.5, fontWeight: 700, color: CLASS_INFO[k].color, marginTop: 2 }}>{CLASS_INFO[k].label}</div>
-                  <div style={{ fontSize: 9.5, color: CLASS_INFO[k].color, opacity: 0.75 }}>{CLASS_INFO[k].desc}</div>
-                </div>
-              ))}
-            </div>
-          </Card>
-
-          <Card style={{ marginBottom: 16 }}>
-            <div style={{ fontSize: 15, fontWeight: 800, fontFamily: FONT_DISPLAY, marginBottom: 6, color: "#1c2b39" }}>Relatório para entrega</div>
-            <div style={{ fontSize: 12.5, color: "#6b5d49", marginBottom: 12 }}>Gera um PDF por produto/etapa com desempenho e avaliações do período para o colaborador selecionado acima.</div>
-            <PrimaryButton onClick={montarRelatorioImpressao} disabled={!filtroColab} style={{ width: "100%" }}>Gerar relatório em PDF</PrimaryButton>
-            {!filtroColab && <div style={{ fontSize: 12, color: "#b5820a", marginTop: 8 }}>Selecione um colaborador específico no filtro acima para gerar o relatório.</div>}
-          </Card>
-
-          <div style={{ fontSize: 13, fontWeight: 700, color: "#6b5d49", margin: "4px 2px 8px" }}>Desempenho por colaborador</div>
-          {porColaborador.length === 0 && <div style={{ fontSize: 13.5, color: "#a3937a", padding: "8px 2px" }}>Sem registros neste período.</div>}
-          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            {porColaborador.map(c => (
-              <Card key={c.colaboradorId} style={{ padding: 12 }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
-                  <div style={{ fontWeight: 700, fontSize: 14, color: "#2a2015" }}>{c.nome}</div>
-                  <div style={{ fontSize: 13, fontWeight: 800, color: "#2f4a63" }}>{c.mediaAjustada}%</div>
-                </div>
-                {c.penalidade > 0 && <div style={{ fontSize: 11.5, color: "#b13232", marginBottom: 6 }}>Bruto {c.mediaEf}% − {c.penalidade} p.p. por faltas/atrasos</div>}
-                <div style={{ height: 7, borderRadius: 999, background: "#efe8d8", overflow: "hidden", marginBottom: 8 }}>
-                  <div style={{ height: "100%", width: `${Math.min(c.mediaAjustada, 100)}%`, background: "#2f4a63" }} />
-                </div>
-                <div style={{ display: "flex", gap: 10, fontSize: 12, color: "#6b5d49", flexWrap: "wrap" }}>
-                  {["A", "B", "C"].map(k => <span key={k} style={{ display: "flex", alignItems: "center", gap: 3 }}><Badge cls={k} /> {c.contagem[k]}</span>)}
-                  <span style={{ marginLeft: "auto", color: "#a3937a" }}>{c.pecas} peças{c.defeitos ? ` · ${c.defeitos} c/ defeito` : ""}{c.retrabalhoMin ? ` · ${c.retrabalhoMin}min retrab.` : ""}{c.semMetaQtd ? ` · ${c.semMetaQtd} sem meta` : ""}</span>
-                </div>
-              </Card>
-            ))}
-          </div>
-        </>
-      )}
-
-      {aba === "produto" && (
-        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-          {porProduto.length === 0 && <div style={{ fontSize: 13.5, color: "#a3937a", padding: "8px 2px" }}>Sem produção concluída neste período.</div>}
-          {porProduto.map(p => (
-            <Card key={p.produtoId || p.produtoNome} style={{ padding: 0, overflow: "hidden" }}>
-              <div style={{ background: "#1c2b39", color: "#fff", padding: "10px 14px", display: "flex", justifyContent: "space-between" }}>
-                <span style={{ fontWeight: 700, fontSize: 13.5 }}>{p.produtoNome}</span>
-                <span style={{ fontWeight: 700, fontSize: 13.5 }}>{p.mediaProduto ? `${p.mediaProduto}%` : "—"}</span>
-              </div>
-              <div style={{ padding: "8px 0" }}>
-                {p.colaboradores.map((c, i) => (
-                  <div key={c.colaboradorId} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 14px", borderBottom: i < p.colaboradores.length - 1 ? "1px solid #efe8d8" : "none" }}>
-                    <span style={{ fontSize: 13, color: "#2a2015" }}>{i + 1}. {c.nome}</span>
-                    <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                      <span style={{ fontSize: 12, color: "#a3937a" }}>{c.pecas} peças</span>
-                      <span style={{ fontSize: 13, fontWeight: 700, color: "#2f4a63" }}>{c.temMeta ? `${c.eficiencia}%` : "—"}</span>
-                      {c.classificacao && <Badge cls={c.classificacao} />}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            </Card>
-          ))}
-        </div>
-      )}
-
-      {aba === "colaborador" && (
-        !filtroColab ? (
-          <div style={{ fontSize: 13.5, color: "#b5820a", background: "#fdf3e0", padding: 12, borderRadius: 8 }}>Selecione um colaborador no filtro de período para ver o histórico por produto.</div>
-        ) : !historicoColaborador || historicoColaborador.itens.length === 0 ? (
-          <div style={{ fontSize: 13.5, color: "#a3937a", padding: "8px 2px" }}>Nenhuma produção concluída neste período.</div>
-        ) : (
-          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            {historicoColaborador.itens.map((item, i) => {
-              const destaque = item.chave === historicoColaborador.melhorChave ? "verde" : item.chave === historicoColaborador.piorChave ? "vermelho" : null;
-              return (
-                <Card key={i} style={{ padding: 12, borderLeft: destaque ? `4px solid ${COR_INFO[destaque].dot}` : undefined }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                    <div>
-                      <div style={{ fontWeight: 700, fontSize: 14, color: "#2a2015" }}>{item.produtoNome}</div>
-                      <div style={{ fontSize: 12, color: "#a3937a" }}>{item.etapaNome} · {item.data.toLocaleDateString("pt-BR")} · {fmtSec(item.tempoRealSeg)}</div>
-                    </div>
-                    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                      <span style={{ fontSize: 13, fontWeight: 700, color: "#2f4a63" }}>{item.eficiencia != null ? `${item.eficiencia}%` : "—"}</span>
-                      {item.classificacao && <Badge cls={item.classificacao} />}
-                    </div>
-                  </div>
-                  {destaque && <div style={{ fontSize: 11, fontWeight: 700, color: COR_INFO[destaque].color, marginTop: 6 }}>{destaque === "verde" ? "Produto de melhor desempenho" : "Produto de menor desempenho"}</div>}
-                </Card>
-              );
-            })}
-          </div>
-        )
-      )}
-      {aba === "abertos" && (
-        <>
-          <Card style={{ marginBottom: 16 }}>
-            <div style={{ fontSize: 15, fontWeight: 800, fontFamily: FONT_DISPLAY, marginBottom: 12, color: "#1c2b39" }}>Itens em aberto por departamento</div>
-            <Field label="Departamento">
-              <Select value={filtroSetorAbertos} onChange={e => setFiltroSetorAbertos(e.target.value)}>
-                <option value="">Todos os departamentos</option>
-                {(setores || []).map(s => <option key={s.id} value={s.id}>{s.nome}</option>)}
-              </Select>
-            </Field>
-            <Field label="Agrupar">
-              <div style={{ display: "flex", gap: 8 }}>
-                <ToggleChip ativo={agrupamentoAbertos === "etapa"} onClick={() => setAgrupamentoAbertos("etapa")}>Por etapa</ToggleChip>
-                <ToggleChip ativo={agrupamentoAbertos === "colaborador"} onClick={() => setAgrupamentoAbertos("colaborador")}>Por colaborador</ToggleChip>
-                <ToggleChip ativo={agrupamentoAbertos === "funcao"} onClick={() => setAgrupamentoAbertos("funcao")}>Por função</ToggleChip>
-              </div>
-            </Field>
-            <PrimaryButton onClick={montarRelatorioAbertosImpressao} disabled={abertosFiltrados.length === 0} style={{ width: "100%" }}>Gerar para impressão</PrimaryButton>
-            {abertosFiltrados.length === 0 && <div style={{ fontSize: 12, color: "#a3937a", marginTop: 8 }}>Nenhum item em aberto para esse filtro.</div>}
-          </Card>
-
-          {gruposAbertos.length === 0 ? (
-            <div style={{ fontSize: 13.5, color: "#a3937a", padding: "8px 2px" }}>Nenhum item em aberto no momento.</div>
-          ) : (
-            <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-              {gruposAbertos.map(g => (
-                <Card key={g.chave} style={{ padding: 0, overflow: "hidden" }}>
-                  <div style={{ background: "#1c2b39", color: "#fff", padding: "10px 14px", display: "flex", justifyContent: "space-between" }}>
-                    <span style={{ fontWeight: 700, fontSize: 13.5 }}>{g.label}</span>
-                    <span style={{ fontWeight: 700, fontSize: 13.5 }}>{g.itens.length} item{g.itens.length !== 1 ? "ns" : ""}</span>
-                  </div>
-                  <div style={{ padding: "8px 0" }}>
-                    {g.itens.map((r, i) => {
-                      const metaHora = r.tipoCalculoEtapa !== "lote" && r.tempoEstimadoBaseSeg ? Math.max(1, Math.floor(3600 / r.tempoEstimadoBaseSeg)) : null;
-                      return (
-                      <div key={r.id + i} style={{ padding: "8px 14px", borderBottom: i < g.itens.length - 1 ? "1px solid #efe8d8" : "none" }}>
-                        <div style={{ fontSize: 13, color: "#2a2015", fontWeight: 600 }}>{nomeProdutoL(r.produtoId, r)} · {nomeEtapaL(r.etapaId, r)}</div>
-                        <div style={{ fontSize: 11.5, color: "#a3937a" }}>
-                          {nomeSetorL(r.setorId, r)} · {equipeDe(r).map(nomeColab).join(", ")} · {r.quantidade} peças · desde {new Date(r.inicio).toLocaleDateString("pt-BR")}
-                          {r.equipamentoNomeSnap ? ` · ${r.equipamentoNomeSnap}` : ""}{metaHora ? ` · meta: ${metaHora} peças/h` : ""}
-                        </div>
-                      </div>
-                      );
-                    })}
-                  </div>
-                </Card>
-              ))}
-            </div>
-          )}
-        </>
-      )}
-      {aba === "custos" && ehAdministrador && (
-        <>
-          <Card style={{ marginBottom: 16 }}>
-            <div style={{ fontSize: 15, fontWeight: 800, fontFamily: FONT_DISPLAY, marginBottom: 12, color: "#1c2b39" }}>Custo das operações no período</div>
-            <div style={{ display: "flex", gap: 20, flexWrap: "wrap" }}>
-              <div>
-                <div style={{ fontSize: 24, fontWeight: 800, color: "#1c2b39" }}>{fmtMoeda(custoMaoDeObraTotal)}</div>
-                <div style={{ fontSize: 12, fontWeight: 600, color: "#a3937a" }}>mão de obra</div>
-              </div>
-              <div>
-                <div style={{ fontSize: 24, fontWeight: 800, color: "#1c2b39" }}>{fmtMoeda(custoMateriaisTotal)}</div>
-                <div style={{ fontSize: 12, fontWeight: 600, color: "#a3937a" }}>materiais</div>
-              </div>
-              <div>
-                <div style={{ fontSize: 24, fontWeight: 800, color: "#2f4a63" }}>{fmtMoeda(custoTotalGeral)}</div>
-                <div style={{ fontSize: 12, fontWeight: 600, color: "#a3937a" }}>total</div>
-              </div>
-            </div>
-            <div style={{ fontSize: 11.5, color: "#a3937a", marginTop: 10 }}>
-              Mão de obra estimada a partir do salário mensal ÷ {HORAS_MES_PADRAO}h, aplicado às horas reais trabalhadas em cada etapa concluída no período. Materiais pelo preço unitário registrado no momento de cada baixa de estoque.
-            </div>
-          </Card>
-
-          <div style={{ fontSize: 13, fontWeight: 700, color: "#6b5d49", margin: "4px 2px 8px" }}>Mão de obra por colaborador</div>
-          {custoMaoDeObraPorColaborador.length === 0 ? (
-            <div style={{ fontSize: 13.5, color: "#a3937a", padding: "8px 2px", marginBottom: 16 }}>Sem produção concluída neste período.</div>
-          ) : (
-            <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 20 }}>
-              {custoMaoDeObraPorColaborador.map(c => (
-                <Card key={c.colaboradorId} style={{ padding: 12 }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                    <div>
-                      <div style={{ fontWeight: 700, fontSize: 14, color: "#2a2015" }}>{c.nome}</div>
-                      <div style={{ fontSize: 12, color: "#a3937a" }}>{c.horas}h trabalhadas{!c.temSalario ? " · sem salário cadastrado" : ""}</div>
-                    </div>
-                    <div style={{ fontSize: 14, fontWeight: 800, color: "#1c2b39" }}>{fmtMoeda(c.custo)}</div>
-                  </div>
-                </Card>
-              ))}
-            </div>
-          )}
-
-          <div style={{ fontSize: 13, fontWeight: 700, color: "#6b5d49", margin: "4px 2px 8px" }}>Materiais consumidos por item</div>
-          {custoMateriaisPorMaterial.length === 0 ? (
-            <div style={{ fontSize: 13.5, color: "#a3937a", padding: "8px 2px" }}>Nenhuma baixa de material neste período.</div>
-          ) : (
-            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-              {custoMateriaisPorMaterial.map(m => (
-                <Card key={m.materialId} style={{ padding: 12 }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                    <div>
-                      <div style={{ fontWeight: 700, fontSize: 14, color: "#2a2015" }}>{m.nome}</div>
-                      <div style={{ fontSize: 12, color: "#a3937a" }}>{m.quantidade} consumidos{!m.temPreco ? " · sem preço cadastrado" : ""}</div>
-                    </div>
-                    <div style={{ fontSize: 14, fontWeight: 800, color: "#1c2b39" }}>{fmtMoeda(m.custo)}</div>
-                  </div>
-                </Card>
-              ))}
-            </div>
-          )}
-
-          <div style={{ fontSize: 13, fontWeight: 700, color: "#6b5d49", margin: "4px 2px 8px" }}>Gasto por pedido (OP)</div>
-          {custoPorOP.length === 0 ? (
-            <div style={{ fontSize: 13.5, color: "#a3937a", padding: "8px 2px" }}>Nenhum gasto vinculado a pedidos neste período.</div>
-          ) : (
-            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-              {custoPorOP.map(o => (
-                <Card key={o.opId} style={{ padding: 12 }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                    <div>
-                      <div style={{ fontWeight: 700, fontSize: 14, color: "#2a2015" }}>OP #{String(o.numero ?? 0).padStart(3, "0")} · {o.cliente}</div>
-                      <div style={{ fontSize: 12, color: "#a3937a" }}>Mão de obra {fmtMoeda(o.maoDeObra)} · Materiais {fmtMoeda(o.materiais)}</div>
-                    </div>
-                    <div style={{ fontSize: 14, fontWeight: 800, color: "#1c2b39" }}>{fmtMoeda(o.total)}</div>
-                  </div>
-                </Card>
-              ))}
-            </div>
-          )}
-        </>
-      )}
-      {aba === "compras" && ehAdministrador && (
-        <>
-          <Card style={{ marginBottom: 16 }}>
-            <div style={{ fontSize: 15, fontWeight: 800, fontFamily: FONT_DISPLAY, marginBottom: 12, color: "#1c2b39" }}>Compras no período</div>
-            <div style={{ display: "flex", gap: 20, flexWrap: "wrap" }}>
-              <div>
-                <div style={{ fontSize: 22, fontWeight: 800, color: "#1a7a4c" }}>{fmtMoeda(totalCompradoPeriodo)}</div>
-                <div style={{ fontSize: 12, fontWeight: 600, color: "#a3937a" }}>comprado (aprovado)</div>
-              </div>
-              <div>
-                <div style={{ fontSize: 22, fontWeight: 800, color: "#8a5fb0" }}>{fmtMoeda(totalAguardandoAprovacao)}</div>
-                <div style={{ fontSize: 12, fontWeight: 600, color: "#a3937a" }}>aguardando aprovação</div>
-              </div>
-              <div>
-                <div style={{ fontSize: 22, fontWeight: 800, color: "#1c2b39" }}>{comprasNoPeriodo.length}</div>
-                <div style={{ fontSize: 12, fontWeight: 600, color: "#a3937a" }}>solicitações no período</div>
-              </div>
-            </div>
-          </Card>
-
-          {comprasNoPeriodo.length === 0 ? (
-            <div style={{ fontSize: 13.5, color: "#a3937a", padding: "8px 2px" }}>Nenhuma solicitação de compra neste período.</div>
-          ) : (
-            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-              {comprasNoPeriodo.map(({ solicitacao: s, cotacao: c, valorTotal }) => {
-                const statusInfo = STATUS_SOLICITACAO[s.status] || STATUS_SOLICITACAO.pendente;
-                return (
-                  <Card key={s.id} style={{ padding: 12 }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
-                      <div>
-                        <div style={{ fontWeight: 700, fontSize: 14, color: "#2a2015" }}>{nomeMaterialRel(s.materialId)}</div>
-                        <div style={{ fontSize: 12, color: "#6b5d49" }}>{s.quantidade} un. {c ? `· ${c.fornecedorNomeSnap}` : ""}</div>
-                        <div style={{ fontSize: 11.5, color: "#a3937a", marginTop: 2 }}>{new Date(s.concluidaEm || s.criadoEm).toLocaleDateString("pt-BR")}</div>
-                      </div>
-                      <div style={{ textAlign: "right" }}>
-                        {valorTotal != null && <div style={{ fontSize: 14, fontWeight: 800, color: "#1c2b39" }}>{fmtMoeda(valorTotal)}</div>}
-                        <span style={{ fontSize: 10.5, fontWeight: 700, color: statusInfo.color, background: statusInfo.bg, border: `1px dashed ${statusInfo.color}`, padding: "2px 8px 2px 7px", borderRadius: "3px 8px 8px 3px" }}>{statusInfo.label}</span>
-                      </div>
-                    </div>
-                  </Card>
-                );
-              })}
-            </div>
-          )}
-        </>
-      )}
-      {aba === "materiais" && ehAdministrador && (
-        <>
-          <Card style={{ marginBottom: 16 }}>
-            <div style={{ fontSize: 15, fontWeight: 800, fontFamily: FONT_DISPLAY, marginBottom: 12, color: "#1c2b39" }}>Controle de materiais</div>
-            <div style={{ display: "flex", gap: 20, flexWrap: "wrap" }}>
-              <div>
-                <div style={{ fontSize: 22, fontWeight: 800, color: "#1c2b39" }}>{fmtMoeda(valorTotalEstoque)}</div>
-                <div style={{ fontSize: 12, fontWeight: 600, color: "#a3937a" }}>valor total em estoque</div>
-              </div>
-              <div>
-                <div style={{ fontSize: 22, fontWeight: 800, color: materiaisAbaixoMinimo.length ? "#b13232" : "#1c2b39" }}>{materiaisAbaixoMinimo.length}</div>
-                <div style={{ fontSize: 12, fontWeight: 600, color: "#a3937a" }}>abaixo do mínimo</div>
-              </div>
-            </div>
-          </Card>
-
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", margin: "4px 2px 8px", gap: 8 }}>
-            <div style={{ fontSize: 13, fontWeight: 700, color: "#6b5d49" }}>
-              Materiais pendentes de OPs em aberto{materiaisComFalta.length > 0 && <span style={{ color: "#b13232" }}> · {materiaisComFalta.length} com falta no estoque</span>}
-            </div>
-            <button onClick={imprimirMateriaisPendentes} disabled={materiaisPendentes.length === 0} style={{
-              background: "transparent", border: "1px dashed " + (materiaisPendentes.length === 0 ? "#d9cfb7" : "#2f4a63"),
-              color: materiaisPendentes.length === 0 ? "#a3937a" : "#2f4a63", fontSize: 11.5, fontWeight: 700,
-              cursor: materiaisPendentes.length === 0 ? "not-allowed" : "pointer", padding: "4px 9px", borderRadius: "3px 9px 9px 3px", flexShrink: 0,
-            }}>Imprimir</button>
-          </div>
-          {materiaisPendentes.length === 0 ? (
-            <div style={{ fontSize: 13.5, color: "#a3937a", padding: "8px 2px", marginBottom: 16 }}>Nenhuma OP em aberto com materiais vinculados no momento.</div>
-          ) : (
-            <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 20 }}>
-              {materiaisPendentes.map(m => (
-                <Card key={m.materialId} style={{ padding: 12, borderLeft: m.deficit > 0 ? "4px solid #b13232" : "4px solid #2f4a63" }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                    <div>
-                      <div style={{ fontWeight: 700, fontSize: 14, color: "#2a2015" }}>{m.nome}</div>
-                      <div style={{ fontSize: 12, color: "#a3937a" }}>necessário: {m.necessario} {m.unidade} · estoque: {m.estoque} {m.unidade} · {m.opsCount} OP{m.opsCount !== 1 ? "s" : ""}</div>
-                    </div>
-                    <div style={{ fontSize: 14, fontWeight: 800, color: m.deficit > 0 ? "#b13232" : "#1a7a4c" }}>
-                      {m.deficit > 0 ? `falta ${m.deficit} ${m.unidade}` : "ok"}
-                    </div>
-                  </div>
-                </Card>
-              ))}
-            </div>
-          )}
-
-          <div style={{ fontSize: 13, fontWeight: 700, color: "#6b5d49", margin: "4px 2px 8px" }}>Estoque e movimentação no período</div>
-          {controleMateriais.length === 0 ? (
-            <div style={{ fontSize: 13.5, color: "#a3937a", padding: "8px 2px" }}>Nenhum material cadastrado.</div>
-          ) : (
-            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-              {controleMateriais.map(c => (
-                <Card key={c.material.id} style={{ padding: 12, borderLeft: c.estoqueBaixo ? "4px solid #b13232" : "4px solid #2f4a63" }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                    <div>
-                      <div style={{ fontWeight: 700, fontSize: 14, color: "#2a2015" }}>{c.material.nome}</div>
-                      <div style={{ fontSize: 12, color: "#a3937a" }}>
-                        estoque: {c.material.quantidadeEstoque} {c.material.unidade}{c.estoqueBaixo ? " · abaixo do mínimo" : ""}
-                      </div>
-                      <div style={{ fontSize: 11.5, color: "#a3937a" }}>no período: +{c.entradas} / −{c.saidas} {c.material.unidade}</div>
-                    </div>
-                    <div style={{ fontSize: 14, fontWeight: 800, color: "#1c2b39" }}>{fmtMoeda(c.valorEstoque)}</div>
-                  </div>
-                </Card>
-              ))}
-            </div>
-          )}
-        </>
-      )}
-    </div>
-  );
-}
-
-// ---------- Relatório de impressão (PDF) ----------
-function RelatorioImpressao({ payload, onFechar }) {
-  const folhaRef = useRef(null);
-  const [baixado, setBaixado] = useState(false);
-  useEffect(() => { document.title = `Relatorio - ${payload.colaboradorNome}`; }, [payload]);
-
-  function montarHtmlStandalone() {
-    const conteudo = folhaRef.current ? folhaRef.current.outerHTML : "";
-    return `<!DOCTYPE html><html><head><meta charset="utf-8" />
-      <title>Relatorio - ${payload.colaboradorNome}</title>
-      <style>
-        @page { size: portrait; margin: 14mm; }
-        * { box-sizing: border-box; }
-        html, body { width: 100%; }
-        body { margin: 0; padding: 24px; background: #fff; font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; color: #2a2015; }
-        table { width: 100%; border-collapse: collapse; table-layout: fixed; }
-        th, td { word-break: break-word; overflow-wrap: break-word; }
-        .folha { max-width: 100% !important; width: 100% !important; box-shadow: none !important; margin: 0 !important; padding: 0 !important; }
-        tr, .produto-bloco { break-inside: avoid; page-break-inside: avoid; }
-        @media print { body { padding: 0; } }
-      </style>
-    </head><body>${conteudo}</body></html>`;
-  }
-  function handleBaixar() {
-    if (!folhaRef.current) return;
-    const html = montarHtmlStandalone();
-    const blob = new Blob([html], { type: "text/html" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    const slug = payload.colaboradorNome.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, "-");
-    a.download = `relatorio-${slug || "colaborador"}.html`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    setTimeout(() => URL.revokeObjectURL(url), 2000);
-    setBaixado(true);
-  }
-  function handleImprimir() {
-    // Corrigido/adicionado: além de baixar o HTML, agora é possível imprimir
-    // (ou "Salvar como PDF") diretamente do navegador, sem precisar baixar
-    // e reabrir o arquivo manualmente.
-    window.print();
-  }
-
-  const totalPecas = payload.porProdutoEtapa.reduce((s, p) => s + p.etapas.reduce((s2, e) => s2 + e.qtd, 0), 0);
-  const totalDefeito = payload.porProdutoEtapa.reduce((s, p) => s + p.etapas.reduce((s2, e) => s2 + e.qtdDefeito, 0), 0);
-  const totalRetrabalhoMin = payload.porProdutoEtapa.reduce((s, p) => s + p.etapas.reduce((s2, e) => s2 + e.retrabalhoMin, 0), 0);
-
-  return (
-    <div style={{ minHeight: "100vh", background: "#efe9db" }}>
-      <style>{`
-        @page { size: portrait; margin: 14mm; }
-        @media print {
-          .no-print { display: none !important; }
-          .folha { box-shadow: none !important; margin: 0 !important; width: 100% !important; max-width: 100% !important; padding: 0 !important; }
-          body { background: #fff !important; }
-          table { table-layout: fixed; }
-          th, td { word-break: break-word; overflow-wrap: break-word; }
-          tr, .produto-bloco { break-inside: avoid; page-break-inside: avoid; }
-        }
-      `}</style>
-
-      <div className="no-print" style={{
-        position: "sticky", top: 0, zIndex: 10, background: "#1c2b39", color: "#fff",
-        padding: "12px 16px", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8,
-      }}>
-        <button onClick={onFechar} style={{ background: "transparent", border: "1px solid #46586a", color: "#fff", borderRadius: 8, padding: "8px 12px", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>← Voltar para lançamentos</button>
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-          <button onClick={handleImprimir} style={{ background: "transparent", border: "1px solid #46586a", color: "#fff", borderRadius: 8, padding: "8px 14px", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>Imprimir / Salvar PDF</button>
-          <button onClick={handleBaixar} style={{ background: "#2f4a63", border: "none", color: "#fff", borderRadius: 8, padding: "8px 14px", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>Baixar relatório</button>
-        </div>
-      </div>
-      <div className="no-print" style={{ maxWidth: 720, margin: "10px auto 0", padding: "0 16px", fontSize: 12, color: "#6b5d49", textAlign: "center" }}>
-        Use "Imprimir / Salvar PDF" para gerar o PDF direto, ou baixe o arquivo HTML para abrir e imprimir depois.
-      </div>
-
-      {baixado && (
-        <div className="no-print" style={{
-          maxWidth: 720, margin: "12px auto 0", padding: "12px 16px", background: "#e6f4ec", border: "1px solid #bfe3cf",
-          borderRadius: 10, display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10,
-        }}>
-          <span style={{ fontSize: 13, color: "#1a7a4c", fontWeight: 700 }}>✓ Relatório baixado com sucesso.</span>
-          <button onClick={onFechar} style={{ background: "#1a7a4c", border: "none", color: "#fff", borderRadius: 8, padding: "8px 14px", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>← Voltar para lançamentos</button>
-        </div>
-      )}
-
-      <div className="folha" ref={folhaRef} style={{
-        maxWidth: 720, margin: "20px auto 60px", background: "#fff", borderRadius: 10,
-        boxShadow: "0 2px 10px rgba(0,0,0,0.08)", padding: "32px 28px", fontFamily: "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif", color: "#2a2015",
-      }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", borderBottom: "2px solid #1c2b39", paddingBottom: 14, marginBottom: 18 }}>
-          <div>
-            <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 1.2, color: "#6b5d49", textTransform: "uppercase" }}>Relatório de desempenho</div>
-            <div style={{ fontSize: 22, fontWeight: 700, color: "#1c2b39", marginTop: 2, fontFamily: FONT_DISPLAY }}>{payload.colaboradorNome}</div>
-            <div style={{ fontSize: 13, color: "#6b5d49" }}><b>Função:</b> {payload.colaboradorFuncao || "não informada"}</div>
-          </div>
-          <div style={{ textAlign: "right", fontSize: 12, color: "#6b5d49" }}>
-            <div><b>Período:</b> {payload.periodoTexto}</div>
-            <div>Emitido em {payload.geradoEm}</div>
-          </div>
-        </div>
-
-        <div style={{ display: "flex", gap: 12, marginBottom: 22, flexWrap: "wrap" }}>
-          <div style={{ flex: "1 1 140px", background: "#f4efe2", borderRadius: 8, padding: "12px 14px" }}>
-            <div style={{ fontSize: 22, fontWeight: 800, color: "#1c2b39" }}>{payload.colabResumo.mediaAjustada}%</div>
-            <div style={{ fontSize: 11, color: "#6b5d49", fontWeight: 600 }}>desempenho final</div>
-          </div>
-          <div style={{ flex: "1 1 140px", background: "#f4efe2", borderRadius: 8, padding: "12px 14px" }}>
-            <div style={{ fontSize: 22, fontWeight: 800, color: "#1c2b39" }}>{totalPecas}</div>
-            <div style={{ fontSize: 11, color: "#6b5d49", fontWeight: 600 }}>peças produzidas</div>
-          </div>
-          <div style={{ flex: "1 1 140px", background: "#f4efe2", borderRadius: 8, padding: "12px 14px" }}>
-            <div style={{ fontSize: 22, fontWeight: 800, color: totalDefeito ? "#b13232" : "#1c2b39" }}>{totalDefeito}</div>
-            <div style={{ fontSize: 11, color: "#6b5d49", fontWeight: 600 }}>peças com defeito</div>
-          </div>
-          <div style={{ flex: "1 1 140px", background: "#f4efe2", borderRadius: 8, padding: "12px 14px" }}>
-            <div style={{ fontSize: 22, fontWeight: 800, color: totalRetrabalhoMin ? "#b13232" : "#1c2b39" }}>{totalRetrabalhoMin}min</div>
-            <div style={{ fontSize: 11, color: "#6b5d49", fontWeight: 600 }}>retrabalho</div>
-          </div>
-        </div>
-        {payload.colabResumo.penalidade > 0 && (
-          <div style={{ fontSize: 12.5, color: "#b13232", marginTop: -12, marginBottom: 20 }}>
-            Desempenho bruto {payload.colabResumo.mediaEf}% − {payload.colabResumo.penalidade} p.p. por faltas/atrasos no período = <b>{payload.colabResumo.mediaAjustada}%</b>
-          </div>
-        )}
-
-        <div style={{ fontSize: 15, fontWeight: 800, fontFamily: FONT_DISPLAY, color: "#1c2b39", marginBottom: 10 }}>Desempenho por produto e etapa</div>
-        {payload.porProdutoEtapa.length === 0 && <div style={{ fontSize: 13, color: "#a3937a", marginBottom: 16 }}>Nenhuma produção concluída neste período.</div>}
-        {payload.porProdutoEtapa.map((p, i) => (
-          <div key={i} className="produto-bloco" style={{ marginBottom: 18, breakInside: "avoid" }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", background: "#1c2b39", color: "#fff", borderRadius: "8px 8px 0 0", padding: "8px 12px" }}>
-              <span style={{ fontSize: 13, fontWeight: 700 }}>{p.produtoNome}</span>
-              <span style={{ fontSize: 13, fontWeight: 700 }}>{p.subtotalEficiencia != null ? <>{p.subtotalEficiencia}% <Badge cls={p.subtotalClassificacao} /></> : "—"}</span>
-            </div>
-            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
-              <thead>
-                <tr style={{ background: "#f4efe2" }}>
-                  <th style={{ textAlign: "left", padding: "6px 10px", fontWeight: 700, color: "#6b5d49" }}>Etapa</th>
-                  <th style={{ textAlign: "right", padding: "6px 10px", fontWeight: 700, color: "#6b5d49" }}>Boas</th>
-                  <th style={{ textAlign: "right", padding: "6px 10px", fontWeight: 700, color: "#6b5d49" }}>Defeito</th>
-                  <th style={{ textAlign: "right", padding: "6px 10px", fontWeight: 700, color: "#6b5d49" }}>Tempo real</th>
-                  <th style={{ textAlign: "right", padding: "6px 10px", fontWeight: 700, color: "#6b5d49" }}>Meta</th>
-                  <th style={{ textAlign: "right", padding: "6px 10px", fontWeight: 700, color: "#6b5d49" }}>%</th>
-                  <th style={{ textAlign: "center", padding: "6px 10px", fontWeight: 700, color: "#6b5d49" }}>Qual.</th>
-                </tr>
-              </thead>
-              <tbody>
-                {p.etapas.map((e, j) => (
-                  <tr key={j} style={{ borderBottom: "1px solid #efe8d8" }}>
-                    <td style={{ padding: "6px 10px" }}>
-                      {e.etapaNome}
-                      {e.colegas && e.colegas.length > 0 && <div style={{ fontSize: 10.5, color: "#6b5d49", fontWeight: 400 }}>Equipe: {e.colegas.join(", ")}</div>}
-                    </td>
-                    <td style={{ padding: "6px 10px", textAlign: "right" }}>{e.qtdBoa}</td>
-                    <td style={{ padding: "6px 10px", textAlign: "right", color: e.qtdDefeito ? "#b13232" : "inherit" }}>{e.qtdDefeito}</td>
-                    <td style={{ padding: "6px 10px", textAlign: "right" }}>{fmtSec(e.tempoRealSeg)}</td>
-                    <td style={{ padding: "6px 10px", textAlign: "right" }}>{e.tempoEstimadoSeg != null ? fmtSec(e.tempoEstimadoSeg) : "—"}</td>
-                    <td style={{ padding: "6px 10px", textAlign: "right", fontWeight: 700 }}>{e.eficiencia != null ? `${e.eficiencia}%` : "—"}</td>
-                    <td style={{ padding: "6px 10px", textAlign: "center" }}>{e.classificacao ? <Badge cls={e.classificacao} /> : "—"}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        ))}
-
-        <div style={{ fontSize: 15, fontWeight: 800, fontFamily: FONT_DISPLAY, color: "#1c2b39", margin: "22px 0 10px" }}>Avaliações do período</div>
-        {payload.avaliacoesColab.length > 0 ? (
-          <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 20 }}>
-            {payload.avaliacoesColab.map((a, i) => (
-              <div key={i} style={{ fontSize: 12.5, borderBottom: "1px solid #efe8d8", padding: "6px 0" }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                  <b>{new Date(a.data + "T12:00:00").toLocaleDateString("pt-BR")}</b>
-                  <div style={{ display: "flex", gap: 6 }}>
-                    {a.temFalta && <span style={{ fontSize: 10.5, fontWeight: 700, color: "#b13232", background: "#f8e6e6", padding: "2px 7px", borderRadius: 999 }}>Falta: {faltaInfo(a.tipoFalta).label}</span>}
-                    {a.temAtraso && <span style={{ fontSize: 10.5, fontWeight: 700, color: "#b5820a", background: "#faf1dc", padding: "2px 7px", borderRadius: 999 }}>Atraso {a.minutosAtraso}min</span>}
-                    {a.comportamento && comportamentoInfo(a.comportamento) && (
-                      <span style={{ fontSize: 10.5, fontWeight: 700, color: comportamentoInfo(a.comportamento).color, background: comportamentoInfo(a.comportamento).bg, padding: "2px 7px", borderRadius: 999 }}>{comportamentoInfo(a.comportamento).label}</span>
-                    )}
-                  </div>
-                </div>
-                <div style={{ color: "#6b5d49", marginTop: 2 }}>{a.descricao}</div>
-              </div>
-            ))}
-          </div>
-        ) : (
-          <div style={{ fontSize: 12.5, color: "#a3937a", marginBottom: 20 }}>Nenhuma avaliação registrada no período.</div>
-        )}
-
-        <div style={{ display: "flex", gap: 24, marginTop: 40 }}>
-          <div style={{ flex: 1, textAlign: "center" }}>
-            <div style={{ borderTop: "1px solid #2a2015", paddingTop: 6, fontSize: 12, color: "#6b5d49" }}>Colaborador</div>
-          </div>
-          <div style={{ flex: 1, textAlign: "center" }}>
-            <div style={{ borderTop: "1px solid #2a2015", paddingTop: 6, fontSize: 12, color: "#6b5d49" }}>Líder responsável</div>
-          </div>
-        </div>
-      </div>
-
-      <div className="no-print" style={{ maxWidth: 720, margin: "0 auto 40px", padding: "0 16px", textAlign: "center" }}>
-        <button onClick={onFechar} style={{ background: "#1c2b39", border: "none", color: "#fff", borderRadius: 8, padding: "10px 20px", fontSize: 13.5, fontWeight: 700, cursor: "pointer" }}>← Voltar para lançamentos</button>
-      </div>
-    </div>
-  );
-}
-
-// ---------- Relatório de itens em aberto (impressão) ----------
-// Adicionado: página de impressão dedicada para o relatório de itens em
-// aberto dos departamentos, agrupado por etapa, colaborador ou função —
-// mesmo padrão de "Imprimir / Salvar PDF" já usado no relatório de
-// desempenho do colaborador.
-function RelatorioAbertosImpressao({ payload, onFechar }) {
-  useEffect(() => { document.title = "Itens em aberto"; }, [payload]);
-  function handleImprimir() { window.print(); }
-
-  return (
-    <div style={{ minHeight: "100vh", background: "#efe9db" }}>
-      <style>{`
-        @page { size: portrait; margin: 14mm; }
-        @media print {
-          .no-print { display: none !important; }
-          .folha { box-shadow: none !important; margin: 0 !important; width: 100% !important; max-width: 100% !important; padding: 0 !important; }
-          body { background: #fff !important; }
-          .grupo-bloco { break-inside: avoid; page-break-inside: avoid; }
-        }
-      `}</style>
-
-      <div className="no-print" style={{
-        position: "sticky", top: 0, zIndex: 10, background: "#1c2b39", color: "#fff",
-        padding: "12px 16px", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8,
-      }}>
-        <button onClick={onFechar} style={{ background: "transparent", border: "1px solid #46586a", color: "#fff", borderRadius: 8, padding: "8px 12px", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>← Voltar para relatórios</button>
-        <button onClick={handleImprimir} style={{ background: "#2f4a63", border: "none", color: "#fff", borderRadius: 8, padding: "8px 14px", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>Imprimir / Salvar PDF</button>
-      </div>
-
-      <div className="folha" style={{
-        maxWidth: 720, margin: "20px auto 60px", background: "#fff", borderRadius: 10,
-        boxShadow: "0 2px 10px rgba(0,0,0,0.08)", padding: "32px 28px", fontFamily: FONT_BODY, color: "#2a2015",
-      }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", borderBottom: "2px solid #1c2b39", paddingBottom: 14, marginBottom: 18 }}>
-          <div>
-            <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 1.2, color: "#6b5d49", textTransform: "uppercase" }}>Itens em aberto</div>
-            <div style={{ fontSize: 22, fontWeight: 700, color: "#1c2b39", marginTop: 2, fontFamily: FONT_DISPLAY }}>{payload.departamentoTexto}</div>
-            <div style={{ fontSize: 13, color: "#6b5d49" }}><b>Agrupado:</b> {payload.agrupamentoLabel}</div>
-          </div>
-          <div style={{ textAlign: "right", fontSize: 12, color: "#6b5d49" }}>
-            <div><b>Total:</b> {payload.totalItens} item{payload.totalItens !== 1 ? "ns" : ""}</div>
-            <div>Emitido em {payload.geradoEm}</div>
-          </div>
-        </div>
-
-        {payload.grupos.length === 0 && <div style={{ fontSize: 13, color: "#a3937a" }}>Nenhum item em aberto.</div>}
-        {payload.grupos.map((g, i) => (
-          <div key={i} className="grupo-bloco" style={{ marginBottom: 18 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", background: "#1c2b39", color: "#fff", borderRadius: "8px 8px 0 0", padding: "8px 12px" }}>
-              <span style={{ fontSize: 13, fontWeight: 700 }}>{g.label}</span>
-              <span style={{ fontSize: 13, fontWeight: 700 }}>{g.itens.length} item{g.itens.length !== 1 ? "ns" : ""}</span>
-            </div>
-            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
-              <thead>
-                <tr style={{ background: "#f4efe2" }}>
-                  <th style={{ textAlign: "left", padding: "6px 10px", fontWeight: 700, color: "#6b5d49" }}>Produto / Etapa</th>
-                  <th style={{ textAlign: "left", padding: "6px 10px", fontWeight: 700, color: "#6b5d49" }}>Departamento</th>
-                  <th style={{ textAlign: "left", padding: "6px 10px", fontWeight: 700, color: "#6b5d49" }}>Colaborador(es)</th>
-                  <th style={{ textAlign: "right", padding: "6px 10px", fontWeight: 700, color: "#6b5d49" }}>Qtd.</th>
-                  <th style={{ textAlign: "right", padding: "6px 10px", fontWeight: 700, color: "#6b5d49" }}>Meta/h</th>
-                  <th style={{ textAlign: "right", padding: "6px 10px", fontWeight: 700, color: "#6b5d49" }}>Início</th>
-                </tr>
-              </thead>
-              <tbody>
-                {g.itens.map((item, j) => (
-                  <tr key={j} style={{ borderBottom: "1px solid #efe8d8" }}>
-                    <td style={{ padding: "6px 10px" }}>{item.produtoNome} — {item.etapaNome}{item.equipamentoNome ? ` (${item.equipamentoNome})` : ""}</td>
-                    <td style={{ padding: "6px 10px" }}>{item.setorNome}</td>
-                    <td style={{ padding: "6px 10px" }}>{item.colaboradores}</td>
-                    <td style={{ padding: "6px 10px", textAlign: "right" }}>{item.quantidade}</td>
-                    <td style={{ padding: "6px 10px", textAlign: "right" }}>{item.metaPecasHora != null ? `${item.metaPecasHora}/h` : "—"}</td>
-                    <td style={{ padding: "6px 10px", textAlign: "right" }}>{item.inicio.toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        ))}
-      </div>
-
-      <div className="no-print" style={{ maxWidth: 720, margin: "0 auto 40px", padding: "0 16px", textAlign: "center" }}>
-        <button onClick={onFechar} style={{ background: "#1c2b39", border: "none", color: "#fff", borderRadius: 8, padding: "10px 20px", fontSize: 13.5, fontWeight: 700, cursor: "pointer" }}>← Voltar para relatórios</button>
-      </div>
-    </div>
-  );
-}
-
-// ---------- Impressão em grade (tabela) — OP, Em aberto e Histórico ----------
-// Adicionado: componente genérico reaproveitado nas três telas de
-// Produção (a própria Ordem de Produção com todas as etapas, a lista de
-// operações em aberto e o histórico de produção) — recebe colunas e
-// linhas já prontas e desenha uma grade simples pronta pra imprimir ou
-// salvar como PDF pelo próprio diálogo de impressão do navegador.
-function RelatorioGradeImpressao({ payload, onFechar }) {
-  useEffect(() => { document.title = payload.titulo; }, [payload]);
-  function handleImprimir() { window.print(); }
-  // Adicionado: quando o payload tem materiais e/ou anexos além da
-  // tabela principal (caso da Ordem de Produção), o impresso sai em
-  // folhas separadas — uma folha por seção — em vez de tudo empilhado
-  // na mesma página. "Folha X de Y" ajuda a identificar cada uma depois
-  // de impressas e separadas.
-  const temMateriais = payload.materiais && payload.materiais.length > 0;
-  const temAnexos = payload.anexos && payload.anexos.length > 0;
-  // Corrigido: alguns relatórios (ex.: impressão de arte) cabem numa
-  // folha só — nesse caso não força quebra de página entre as seções
-  // nem numera "Folha X de Y", e os anexos saem em miniaturas menores
-  // (em vez de uma imagem grande por página) pra caber tudo junto.
-  const folhaUnica = !!payload.folhaUnica;
-  const totalFolhas = folhaUnica ? 1 : 1 + (temMateriais ? 1 : 0) + (temAnexos ? 1 : 0);
-
-  // Corrigido: orientação da folha agora vem do payload — a maioria dos
-  // relatórios (grade da OP, materiais) usa tabelas largas e sai melhor
-  // em paisagem, mas alguns (ex.: impressão de arte) ficam melhores em
-  // retrato. "landscape" continua sendo o padrão pra não mudar o
-  // comportamento de quem já usava esse impresso.
-  const orientacao = payload.orientacao === "retrato" ? "portrait" : "landscape";
-  // Adicionado: tamanho útil da folha A4 (297x210mm) descontando a
-  // margem de 12mm de cada lado definida em @page — é o espaço real
-  // disponível pro conteúdo em folha única.
-  const larguraMm = orientacao === "portrait" ? 186 : 273;
-  const alturaMm = orientacao === "portrait" ? 273 : 186;
-
-  // Corrigido: só remover a quebra de página forçada (feito antes) não
-  // garante que o conteúdo caiba fisicamente numa folha — se passasse
-  // da altura, o navegador simplesmente criava uma segunda página do
-  // mesmo jeito. Agora, em relatórios de folha única, o conteúdo é
-  // medido depois de montado (e depois das imagens carregarem) e
-  // encolhido via CSS transform na proporção exata que falta pra caber
-  // na área útil da folha — sempre 1 página só, do tamanho que for.
-  const caixaRef = useRef(null);
-  const conteudoRef = useRef(null);
-  const [escala, setEscala] = useState(1);
-  useEffect(() => {
-    if (!folhaUnica) { setEscala(1); return; }
-    let cancelado = false;
-    function recalcular() {
-      if (cancelado || !caixaRef.current || !conteudoRef.current) return;
-      const alturaDisponivel = caixaRef.current.clientHeight;
-      const alturaConteudo = conteudoRef.current.scrollHeight;
-      setEscala(alturaConteudo > alturaDisponivel ? Math.max(0.3, (alturaDisponivel / alturaConteudo) * 0.985) : 1);
-    }
-    setEscala(1);
-    const t1 = setTimeout(recalcular, 30);
-    const imgs = conteudoRef.current ? Array.from(conteudoRef.current.querySelectorAll("img")) : [];
-    imgs.forEach(img => {
-      if (!img.complete) { img.addEventListener("load", recalcular); img.addEventListener("error", recalcular); }
+  function salvarObs() {
+    patchEtapa({
+      observacao: obs
     });
-    const t2 = setTimeout(recalcular, 400);
-    window.addEventListener("resize", recalcular);
-    return () => {
-      cancelado = true; clearTimeout(t1); clearTimeout(t2);
-      imgs.forEach(img => { img.removeEventListener("load", recalcular); img.removeEventListener("error", recalcular); });
-      window.removeEventListener("resize", recalcular);
-    };
-  }, [folhaUnica, payload]);
-
-  return (
-    <div style={{ minHeight: "100vh", background: "#efe9db" }}>
-      <style>{`
-        @page { size: ${orientacao}; margin: 12mm; }
-        @media print {
-          .no-print { display: none !important; }
-          .no-print-video { display: none !important; }
-          .folha { box-shadow: none !important; margin: 0 !important; }
-          .folha:not(.folha-unica) { width: 100% !important; max-width: 100% !important; padding: 0 !important; }
-          body { background: #fff !important; }
-          table { table-layout: fixed; }
-          th, td { word-break: break-word; overflow-wrap: break-word; }
-          tr { break-inside: avoid; page-break-inside: avoid; }
+  }
+  async function onArquivo(e) {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = '';
+    if (!file) return;
+    const ehImagem = file.type.startsWith('image/');
+    try {
+      let url;
+      if (ehImagem) url = await comprimirImagem(file);else {
+        if (file.size > 300 * 1024) {
+          alert('Documento muito grande (máx. 300 KB).');
+          return;
         }
-      `}</style>
-
-      <div className="no-print" style={{
-        position: "sticky", top: 0, zIndex: 10, background: "#1c2b39", color: "#fff",
-        padding: "12px 16px", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8,
-      }}>
-        <button onClick={onFechar} style={{ background: "transparent", border: "1px solid #46586a", color: "#fff", borderRadius: 8, padding: "8px 12px", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>← Voltar para produção</button>
-        <button onClick={handleImprimir} style={{ background: "#2f4a63", border: "none", color: "#fff", borderRadius: 8, padding: "8px 14px", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>Imprimir / Salvar PDF</button>
-      </div>
-
-      <div
-        className={folhaUnica ? "folha folha-unica" : "folha"}
-        ref={folhaUnica ? caixaRef : null}
-        style={folhaUnica ? {
-          width: `${larguraMm}mm`, height: `${alturaMm}mm`, margin: "20px auto 60px", background: "#fff", borderRadius: 10,
-          boxShadow: "0 2px 10px rgba(0,0,0,0.08)", overflow: "hidden", fontFamily: FONT_BODY, color: "#2a2015",
-        } : {
-          maxWidth: 980, margin: "20px auto 60px", background: "#fff", borderRadius: 10,
-          boxShadow: "0 2px 10px rgba(0,0,0,0.08)", padding: "28px 26px", fontFamily: FONT_BODY, color: "#2a2015",
-        }}
-      >
-      <div
-        ref={folhaUnica ? conteudoRef : null}
-        style={folhaUnica ? { padding: "14mm 12mm", transform: `scale(${escala})`, transformOrigin: "top left", width: `${100 / escala}%`, boxSizing: "border-box" } : undefined}
-      >
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", borderBottom: "2px solid #1c2b39", paddingBottom: 14, marginBottom: 16 }}>
-          <div>
-            <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 1.2, color: "#6b5d49", textTransform: "uppercase" }}>Controle de Produção</div>
-            <div style={{ fontSize: 20, fontWeight: 700, color: "#1c2b39", marginTop: 2, fontFamily: FONT_DISPLAY }}>{payload.titulo}</div>
-            {payload.subtitulo && <div style={{ fontSize: 13, color: "#6b5d49" }}>{payload.subtitulo}</div>}
-          </div>
-          <div style={{ textAlign: "right", fontSize: 12, color: "#6b5d49" }}>
-            {totalFolhas > 1 && <div style={{ fontWeight: 700, color: "#2f4a63" }}>Folha 1 de {totalFolhas} · Atividades</div>}
-            <div><b>Total:</b> {payload.linhas.length} linha{payload.linhas.length !== 1 ? "s" : ""}</div>
-            <div>Emitido em {payload.geradoEm}</div>
-          </div>
-        </div>
-
-        {payload.linhas.length === 0 ? (
-          <div style={{ fontSize: 13, color: "#a3937a" }}>Nenhum item para exibir.</div>
-        ) : (
-          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
-            <thead>
-              <tr style={{ background: "#f4efe2" }}>
-                {payload.colunas.map(c => (
-                  <th key={c.key} style={{ textAlign: c.align || "left", padding: "7px 10px", fontWeight: 700, color: "#6b5d49", borderBottom: "1.5px solid #e6ddc8" }}>{c.label}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {payload.linhas.map((linha, i) => (
-                <tr key={i} style={{ borderBottom: "1px solid #efe8d8", background: i % 2 === 1 ? "#faf6ec" : "transparent" }}>
-                  {payload.colunas.map(c => (
-                    <td key={c.key} style={{ textAlign: c.align || "left", padding: "6px 10px" }}>{linha[c.key] ?? "—"}</td>
-                  ))}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-
-        {payload.materiais && payload.materiais.length > 0 && (
-          // Adicionado: começa numa folha nova ao imprimir — a OP agora
-          // sai impressa em folhas separadas (Atividades / Materiais /
-          // Arquivos), cada uma podendo ir pra uma pessoa diferente
-          // (produção, separação de materiais, referência visual).
-          <div style={{ marginTop: 22, ...(folhaUnica ? {} : { pageBreakBefore: "always", breakBefore: "page" }) }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
-              <div>
-                <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 1.2, color: "#6b5d49", textTransform: "uppercase" }}>{payload.titulo}</div>
-                <div style={{ fontSize: 13.5, fontWeight: 700, color: "#1c2b39", marginTop: 2, fontFamily: FONT_DISPLAY }}>Materiais necessários</div>
-              </div>
-              {!folhaUnica && <div style={{ fontSize: 12, fontWeight: 700, color: "#2f4a63" }}>Folha 2 de {totalFolhas}</div>}
-            </div>
-            <div style={{ marginTop: 10 }} />
-            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
-              <thead>
-                <tr style={{ background: "#f4efe2" }}>
-                  <th style={{ textAlign: "left", padding: "7px 10px", fontWeight: 700, color: "#6b5d49", borderBottom: "1.5px solid #e6ddc8" }}>Material</th>
-                  <th style={{ textAlign: "right", padding: "7px 10px", fontWeight: 700, color: "#6b5d49", borderBottom: "1.5px solid #e6ddc8" }}>Necessário</th>
-                  <th style={{ textAlign: "right", padding: "7px 10px", fontWeight: 700, color: "#6b5d49", borderBottom: "1.5px solid #e6ddc8" }}>Em estoque</th>
-                  <th style={{ textAlign: "center", padding: "7px 10px", fontWeight: 700, color: "#6b5d49", borderBottom: "1.5px solid #e6ddc8" }}>Separado</th>
-                </tr>
-              </thead>
-              <tbody>
-                {payload.materiais.map((m, i) => (
-                  <tr key={m.id} style={{ borderBottom: "1px solid #efe8d8", background: i % 2 === 1 ? "#faf6ec" : "transparent" }}>
-                    <td style={{ padding: "6px 10px" }}>{m.nome}</td>
-                    <td style={{ padding: "6px 10px", textAlign: "right", fontWeight: 700 }}>{m.quantidade} {m.unidade}</td>
-                    <td style={{ padding: "6px 10px", textAlign: "right" }}>{m.estoque != null ? `${m.estoque} ${m.unidade}` : "—"}</td>
-                    <td style={{ padding: "6px 10px", textAlign: "center", color: "#a3937a" }}>☐</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-
-        {payload.anexos && payload.anexos.length > 0 && (
-          <div style={{ marginTop: 22, ...(folhaUnica ? {} : { pageBreakBefore: "always", breakBefore: "page" }) }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 10 }}>
-              <div>
-                <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 1.2, color: "#6b5d49", textTransform: "uppercase" }}>{payload.titulo}</div>
-                <div style={{ fontSize: 13.5, fontWeight: 700, color: "#1c2b39", marginTop: 2, fontFamily: FONT_DISPLAY }}>Arquivos anexados</div>
-              </div>
-              {!folhaUnica && <div style={{ fontSize: 12, fontWeight: 700, color: "#2f4a63" }}>Folha {totalFolhas} de {totalFolhas}</div>}
-            </div>
-            {/* Corrigido: relatórios de folha única também usam 2 colunas
-                com imagem grande (igual aos demais relatórios) — a
-                logo/arte fica bem mais visível; o encolhimento
-                automático da folha (mais acima) garante que ainda cabe
-                tudo numa página só, do tamanho que for necessário. */}
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: folhaUnica ? 12 : 14 }}>
-              {payload.anexos.map((a, i) => (
-                <div key={a.id} style={{
-                  border: "1px solid #e6ddc8", borderRadius: 8, overflow: "hidden", breakInside: "avoid",
-                  ...(folhaUnica ? {} : {
-                    pageBreakAfter: i % 2 === 1 && i !== payload.anexos.length - 1 ? "always" : "auto",
-                    breakAfter: i % 2 === 1 && i !== payload.anexos.length - 1 ? "page" : "auto",
-                  }),
-                }}>
-                  {a.tipo && a.tipo.startsWith("image/") ? (
-                    <img src={a.dataUrl} alt={a.nome} style={{ width: "100%", height: folhaUnica ? "280px" : "46vh", objectFit: "contain", display: "block", background: "#f4efe2" }} />
-                  ) : a.tipo && a.tipo.startsWith("video/") ? (
-                    <video src={a.dataUrl} controls style={{ width: "100%", height: folhaUnica ? "280px" : "46vh", objectFit: "contain", display: "block", background: "#000" }} className="no-print-video" />
-                  ) : (
-                    <div style={{ width: "100%", height: folhaUnica ? "280px" : "46vh", display: "flex", alignItems: "center", justifyContent: "center", color: "#a3937a" }}>Arquivo</div>
-                  )}
-                  <div style={{ fontSize: 12, color: "#6b5d49", padding: "6px 9px", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{a.nome}</div>
-                </div>
-              ))}
-            </div>
-            <div className="no-print" style={{ fontSize: 11, color: "#a3937a", marginTop: 8 }}>Vídeos não aparecem no PDF impresso — só na tela. Nomes dos arquivos ficam listados no impresso.</div>
-          </div>
-        )}
-      </div>
-      </div>
-
-      <div className="no-print" style={{ maxWidth: 980, margin: "0 auto 40px", padding: "0 16px", textAlign: "center" }}>
-        <button onClick={onFechar} style={{ background: "#1c2b39", border: "none", color: "#fff", borderRadius: 8, padding: "10px 20px", fontSize: 13.5, fontWeight: 700, cursor: "pointer" }}>← Voltar para produção</button>
-      </div>
-    </div>
-  );
-}
-
-// ---------- Cadastros ----------
-function Cadastros({ produtos, setProdutos, etapas, setEtapas, vinculos, setVinculos, colaboradores, setColaboradores, setores, setSetores, equipes, setEquipes, anexos, onSalvarAnexos, onRemoverAnexo, acessos, clientes, setClientes, materiais, setMateriais, consumosMaterial, setConsumosMaterial, fornecedores, setFornecedores, equipamentos, setEquipamentos, solicitacoesCompra, cotacoesCompra, feriados, setFeriados, gruposProduto, setGruposProduto, gruposMaterial, setGruposMaterial, tamanhos, setTamanhos, ehAdministrador }) {
-  const [sub, setSub] = useState("departamentos");
-
-  return (
-    <div>
-      <div style={{ display: "flex", gap: 6, marginBottom: 16, flexWrap: "wrap" }}>
-        {[
-          { key: "departamentos", label: "Departamentos" },
-          { key: "produtos", label: "Produtos" },
-          { key: "materiais", label: "Materiais" },
-          { key: "fornecedores", label: "Fornecedores" },
-          { key: "equipamentos", label: "Equipamentos" },
-          { key: "colaboradores", label: "Colaboradores" },
-          { key: "equipes", label: "Equipes" },
-          { key: "clientes", label: "Clientes" },
-          { key: "feriados", label: "Feriados" },
-        ].map(s => (
-          <button key={s.key} onClick={() => setSub(s.key)} style={{
-            flex: "1 1 30%", border: "1.5px solid " + (sub === s.key ? "#2f4a63" : "#d9cfb7"),
-            background: sub === s.key ? "#2f4a63" : "#fff", color: sub === s.key ? "#fff" : "#6b5d49",
-            borderRadius: 9, padding: "9px 4px", fontSize: 12.5, fontWeight: 700, cursor: "pointer",
-          }}>{s.label}</button>
-        ))}
-      </div>
-      {sub === "departamentos" && <DepartamentosCadastro setores={setores} setSetores={setSetores} etapas={etapas} setEtapas={setEtapas} vinculos={vinculos} setVinculos={setVinculos} equipes={equipes} setEquipes={setEquipes} anexos={anexos} onSalvarAnexos={onSalvarAnexos} onRemoverAnexo={onRemoverAnexo} />}
-      {sub === "colaboradores" && <ColaboradoresCadastro colaboradores={colaboradores} setColaboradores={setColaboradores} acessos={acessos} ehAdministrador={ehAdministrador} />}
-      {sub === "equipes" && <EquipesCadastro equipes={equipes} setEquipes={setEquipes} setores={setores} colaboradores={colaboradores} />}
-      {sub === "produtos" && (
-        <ProdutosCadastro
-          produtos={produtos} setProdutos={setProdutos} etapas={etapas} vinculos={vinculos} setVinculos={setVinculos} setores={setores}
-          materiais={materiais} consumosMaterial={consumosMaterial} setConsumosMaterial={setConsumosMaterial} colaboradores={colaboradores}
-          gruposProduto={gruposProduto} setGruposProduto={setGruposProduto}
-          tamanhos={tamanhos} setTamanhos={setTamanhos}
-          ehAdministrador={ehAdministrador}
-        />
-      )}
-      {sub === "materiais" && <MateriaisCadastro materiais={materiais} setMateriais={setMateriais} consumosMaterial={consumosMaterial} setConsumosMaterial={setConsumosMaterial} fornecedores={fornecedores} setFornecedores={setFornecedores} gruposMaterial={gruposMaterial} setGruposMaterial={setGruposMaterial} />}
-      {sub === "fornecedores" && <FornecedoresCadastro fornecedores={fornecedores} setFornecedores={setFornecedores} solicitacoesCompra={solicitacoesCompra} cotacoesCompra={cotacoesCompra} materiais={materiais} />}
-      {sub === "equipamentos" && <EquipamentosCadastro equipamentos={equipamentos} setEquipamentos={setEquipamentos} setores={setores} />}
-      {sub === "clientes" && <ClientesCadastro clientes={clientes} setClientes={setClientes} />}
-      {sub === "feriados" && <FeriadosCadastro feriados={feriados} setFeriados={setFeriados} />}
-    </div>
-  );
-}
-
-// Adicionado: "Departamentos" reúne o que antes eram as abas separadas
-// Setores e Etapas — o departamento (Corte, Silk, Preparação, Costura,
-// Embalagem...) é o cadastro principal, e "Atividades" é a sub-aba que
-// define as tarefas de cada departamento (mesmo cadastro de etapas de
-// antes, só reorganizado para refletir a hierarquia real da confecção).
-function DepartamentosCadastro({ setores, setSetores, etapas, setEtapas, vinculos, setVinculos, equipes, setEquipes, anexos, onSalvarAnexos, onRemoverAnexo }) {
-  const [subsub, setSubsub] = useState("departamentos");
-  return (
-    <div>
-      <div style={{ display: "flex", gap: 6, marginBottom: 14 }}>
-        {[
-          { key: "departamentos", label: "Departamentos" },
-          { key: "atividades", label: "Atividades" },
-        ].map(s => (
-          <button key={s.key} onClick={() => setSubsub(s.key)} style={{
-            flex: 1, border: "1.5px dashed " + (subsub === s.key ? "#2f4a63" : "#d9cfb7"),
-            background: subsub === s.key ? "#f4ecd8" : "#fff", color: subsub === s.key ? "#2f4a63" : "#6b5d49",
-            borderRadius: 8, padding: "7px 4px", fontSize: 12, fontWeight: 700, cursor: "pointer",
-          }}>{s.label}</button>
-        ))}
-      </div>
-      {subsub === "departamentos" && <SetoresCadastro setores={setores} setSetores={setSetores} etapas={etapas} setEtapas={setEtapas} equipes={equipes} setEquipes={setEquipes} anexos={anexos} onSalvarAnexos={onSalvarAnexos} onRemoverAnexo={onRemoverAnexo} />}
-      {subsub === "atividades" && <EtapasCadastro etapas={etapas} setEtapas={setEtapas} vinculos={vinculos} setVinculos={setVinculos} setores={setores} />}
-    </div>
-  );
-}
-
-const TIPOS_SETOR = [
-  { key: "padrao", label: "Padrão" },
-  { key: "corte", label: "Corte (campos extras)" },
-  { key: "silk", label: "Silk (campos extras)" },
-];
-
-function SetoresCadastro({ setores, setSetores, etapas, setEtapas, equipes, setEquipes, anexos, onSalvarAnexos, onRemoverAnexo }) {
-  const [nome, setNome] = useState("");
-  const [tipo, setTipo] = useState("padrao");
-  const [expandido, setExpandido] = useState(null);
-  const [editandoId, setEditandoId] = useState(null);
-  const [nomeEdicao, setNomeEdicao] = useState("");
-  const [tipoEdicao, setTipoEdicao] = useState("padrao");
-  const fileInputRef = useRef(null);
-
-  async function adicionar() {
-    if (!nome.trim()) return;
-    await setSetores([...setores, { id: uid(), nome: nome.trim(), tipo }]);
-    setNome(""); setTipo("padrao");
-  }
-  async function excluir(id) {
-    if (!window.confirm("Excluir este setor? As etapas vinculadas a ele ficarão sem setor.")) return;
-    await setSetores(setores.filter(s => s.id !== id));
-    await setEtapas(etapas.map(e => e.setorId === id ? { ...e, setorId: null } : e));
-    await setEquipes(equipes.filter(eq => eq.setorId !== id));
-    const anexosDoSetorAExcluir = anexos.filter(a => a.setorId === id);
-    await Promise.all(anexosDoSetorAExcluir.map(a => onRemoverAnexo(a.id)));
-  }
-  function iniciarEdicao(s) {
-    setEditandoId(s.id); setNomeEdicao(s.nome); setTipoEdicao(s.tipo || "padrao"); setExpandido(s.id);
-  }
-  async function salvarEdicao(id) {
-    if (!nomeEdicao.trim()) return;
-    await setSetores(setores.map(s => s.id === id ? { ...s, nome: nomeEdicao.trim(), tipo: tipoEdicao } : s));
-    setEditandoId(null);
-  }
-  const qtdEtapas = (id) => etapas.filter(e => e.setorId === id).length;
-  const anexosDoSetor = (id) => anexos.filter(a => a.setorId === id);
-
-  async function anexarArquivos(setorId, fileList) {
-    const arquivos = Array.from(fileList || []);
-    const novos = [];
-    for (const file of arquivos) {
-      if (file.size > 4.5 * 1024 * 1024) {
-        alert(`"${file.name}" é maior que 4,5MB e não pode ser anexado.`);
-        continue;
+        url = await new Promise((res, rej) => {
+          const r = new FileReader();
+          r.onload = () => res(r.result);
+          r.onerror = () => rej(new Error('Falha ao ler.'));
+          r.readAsDataURL(file);
+        });
       }
-      const dataUrl = await new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve(reader.result);
-        reader.onerror = reject;
-        reader.readAsDataURL(file);
+      patchEtapa({
+        anexos: [...(etapa.anexos || []), {
+          id: uid(),
+          nome: file.name,
+          tipo: ehImagem ? 'imagem' : 'documento',
+          url,
+          quando: agoraISO()
+        }]
       });
-      novos.push({ id: uid(), setorId, nome: file.name, tipo: file.type, dataUrl, criadoEm: new Date().toISOString() });
+    } catch (err) {
+      alert('Não foi possível anexar: ' + (err && err.message));
     }
-    if (novos.length) await onSalvarAnexos(novos);
   }
-  async function removerAnexoClick(id) {
-    if (!window.confirm("Remover este anexo?")) return;
-    await onRemoverAnexo(id);
+  function rmAnexo(id) {
+    patchEtapa({
+      anexos: (etapa.anexos || []).filter(a => a.id !== id)
+    });
   }
-
-  return (
-    <div>
-      <Card style={{ marginBottom: 16 }}>
-        <div style={{ fontSize: 15, fontWeight: 800, fontFamily: FONT_DISPLAY, marginBottom: 12, color: "#1c2b39" }}>Novo setor</div>
-        <Field label="Nome">
-          <input value={nome} onChange={e => setNome(e.target.value)} placeholder="Ex.: Silk, Corte, Preparação" style={inputStyle} onKeyDown={e => e.key === "Enter" && adicionar()} />
-        </Field>
-        <Field label="Tipo de setor">
-          <Select value={tipo} onChange={e => setTipo(e.target.value)}>
-            {TIPOS_SETOR.map(t => <option key={t.key} value={t.key}>{t.label}</option>)}
-          </Select>
-          <div style={{ fontSize: 11.5, color: "#a3937a", marginTop: 5 }}>Define quais campos extras aparecem ao iniciar produção neste setor (independente do nome escolhido).</div>
-        </Field>
-        <PrimaryButton onClick={adicionar} disabled={!nome.trim()} style={{ width: "100%" }}><Plus size={16} /> Adicionar setor</PrimaryButton>
-      </Card>
-      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-        {setores.map(s => {
-          const aberto = expandido === s.id;
-          const editando = editandoId === s.id;
-          const anexosSetor = anexosDoSetor(s.id);
-          return (
-            <Card key={s.id} style={{ padding: 0, overflow: "hidden" }}>
-              <div style={{ padding: "11px 14px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                <div onClick={() => !editando && setExpandido(aberto ? null : s.id)} style={{ cursor: "pointer", flex: 1 }}>
-                  <div style={{ fontWeight: 700, fontSize: 14, color: "#2a2015" }}>{s.nome}</div>
-                  <div style={{ fontSize: 12, color: "#a3937a" }}>
-                    {(TIPOS_SETOR.find(t => t.key === (s.tipo || "padrao")) || TIPOS_SETOR[0]).label} · {qtdEtapas(s.id)} etapa{qtdEtapas(s.id) !== 1 ? "s" : ""} · {anexosSetor.length} anexo{anexosSetor.length !== 1 ? "s" : ""}
-                  </div>
-                </div>
-                <IconButton onClick={(e) => { e.stopPropagation(); iniciarEdicao(s); }} title="Editar"><ClipboardList size={15} /></IconButton>
-                <IconButton onClick={(e) => { e.stopPropagation(); excluir(s.id); }} danger title="Excluir setor"><Trash2 size={15} /></IconButton>
-              </div>
-              {aberto && (
-                <div style={{ borderTop: "1px solid #efe8d8", padding: 14, background: "#faf6ec" }}>
-                  {editando && (
-                    <div style={{ marginBottom: 14, paddingBottom: 14, borderBottom: "1px solid #efe8d8" }}>
-                      <Field label="Nome">
-                        <input value={nomeEdicao} onChange={e => setNomeEdicao(e.target.value)} style={inputStyle} />
-                      </Field>
-                      <Field label="Tipo de setor">
-                        <Select value={tipoEdicao} onChange={e => setTipoEdicao(e.target.value)}>
-                          {TIPOS_SETOR.map(t => <option key={t.key} value={t.key}>{t.label}</option>)}
-                        </Select>
-                      </Field>
-                      <div style={{ display: "flex", gap: 8 }}>
-                        <PrimaryButton onClick={() => salvarEdicao(s.id)} disabled={!nomeEdicao.trim()} style={{ flex: 1 }}>Salvar</PrimaryButton>
-                        <button onClick={() => setEditandoId(null)} style={{ border: "1.5px solid #d9cfb7", background: "#fff", borderRadius: 9, padding: "0 14px", color: "#6b5d49", fontWeight: 700, cursor: "pointer" }}>Cancelar</button>
-                      </div>
-                    </div>
-                  )}
-                  <div style={{ fontSize: 12, fontWeight: 700, color: "#6b5d49", marginBottom: 8 }}>Fotos e arquivos do setor</div>
-                  {anexosSetor.length > 0 && (
-                    <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8, marginBottom: 10 }}>
-                      {anexosSetor.map(a => (
-                        <div key={a.id} style={{ position: "relative", border: "1px solid #e6ddc8", borderRadius: 8, overflow: "hidden", background: "#fff" }}>
-                          {a.tipo && a.tipo.startsWith("image/") ? (
-                            <img src={a.dataUrl} alt={a.nome} style={{ width: "100%", height: 70, objectFit: "cover", display: "block" }} />
-                          ) : (
-                            <div style={{ width: "100%", height: 70, display: "flex", alignItems: "center", justifyContent: "center", color: "#a3937a" }}>
-                              <Paperclip size={22} />
-                            </div>
-                          )}
-                          <div style={{ fontSize: 9.5, color: "#6b5d49", padding: "3px 5px", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{a.nome}</div>
-                          <button onClick={() => removerAnexoClick(a.id)} style={{ position: "absolute", top: 3, right: 3, background: "rgba(255,255,255,0.9)", border: "none", borderRadius: 999, width: 20, height: 20, cursor: "pointer", color: "#b13232", display: "flex", alignItems: "center", justifyContent: "center" }}>
-                            <X size={12} />
-                          </button>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                  <input ref={fileInputRef} type="file" multiple accept="image/*,.pdf,.doc,.docx,.xls,.xlsx" style={{ display: "none" }}
-                    onChange={e => { anexarArquivos(s.id, e.target.files); e.target.value = ""; }} />
-                  <button type="button" onClick={() => fileInputRef.current && fileInputRef.current.click()} style={{
-                    fontSize: 12.5, border: "1px solid #d9cfb7", background: "#fff", borderRadius: 7, padding: "7px 11px",
-                    cursor: "pointer", display: "flex", alignItems: "center", gap: 6, color: "#6b5d49",
-                  }}><Paperclip size={14} /> Anexar foto/arquivo</button>
-                </div>
-              )}
-            </Card>
-          );
-        })}
-        {setores.length === 0 && <div style={{ fontSize: 13.5, color: "#a3937a", padding: "8px 2px" }}>Nenhum setor cadastrado.</div>}
-      </div>
-    </div>
-  );
-}
-
-function EquipesCadastro({ equipes, setEquipes, setores, colaboradores }) {
-  const [nome, setNome] = useState("");
-  const [setorId, setSetorId] = useState("");
-  const [membros, setMembros] = useState([]);
-  const [editandoId, setEditandoId] = useState(null);
-  const [nomeEdicao, setNomeEdicao] = useState("");
-  const [setorEdicao, setSetorEdicao] = useState("");
-  const [membrosEdicao, setMembrosEdicao] = useState([]);
-
-  function toggleMembro(id) { setMembros(m => m.includes(id) ? m.filter(x => x !== id) : [...m, id]); }
-  function toggleMembroEdicao(id) { setMembrosEdicao(m => m.includes(id) ? m.filter(x => x !== id) : [...m, id]); }
-  async function adicionar() {
-    if (!nome.trim() || membros.length === 0) return;
-    await setEquipes([...equipes, { id: uid(), nome: nome.trim(), setorId: setorId || null, membros }]);
-    setNome(""); setMembros([]);
-  }
-  async function excluir(id) { if (window.confirm("Excluir esta equipe?")) await setEquipes(equipes.filter(e => e.id !== id)); }
-  function iniciarEdicao(eq) {
-    setEditandoId(eq.id); setNomeEdicao(eq.nome); setSetorEdicao(eq.setorId || ""); setMembrosEdicao(eq.membros || []);
-  }
-  async function salvarEdicao(id) {
-    // Corrigido: agora é possível renomear uma equipe, trocar seu setor ou
-    // ajustar os membros sem excluir e recriar (equipes salvas eram usadas
-    // apenas para preencher rapidamente o início de produção — perder a
-    // equipe também perdia esse atalho).
-    if (!nomeEdicao.trim() || membrosEdicao.length === 0) return;
-    await setEquipes(equipes.map(eq => eq.id === id ? { ...eq, nome: nomeEdicao.trim(), setorId: setorEdicao || null, membros: membrosEdicao } : eq));
-    setEditandoId(null);
-  }
-  const nomeSetor = (id) => setores.find(s => s.id === id)?.nome || "Qualquer setor";
-  const nomeColab = (id) => colaboradores.find(c => c.id === id)?.nome || "—";
-  return (
-    <div>
-      <Card style={{ marginBottom: 16 }}>
-        <div style={{ fontSize: 15, fontWeight: 800, fontFamily: FONT_DISPLAY, marginBottom: 12, color: "#1c2b39" }}>Nova equipe</div>
-        <Field label="Nome da equipe"><input value={nome} onChange={e => setNome(e.target.value)} placeholder="Ex.: Equipe Corte 1" style={inputStyle} /></Field>
-        <Field label="Setor (opcional)">
-          <Select value={setorId} onChange={e => setSetorId(e.target.value)}>
-            <option value="">Qualquer setor</option>
-            {setores.map(s => <option key={s.id} value={s.id}>{s.nome}</option>)}
-          </Select>
-        </Field>
-        {colaboradores.length === 0 ? (
-          <div style={{ fontSize: 12.5, color: "#a3937a", marginBottom: 12 }}>Cadastre colaboradores primeiro para formar uma equipe.</div>
-        ) : (
-          <Field label="Membros">
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-              {colaboradores.map(c => <ToggleChip key={c.id} ativo={membros.includes(c.id)} onClick={() => toggleMembro(c.id)}>{c.nome}</ToggleChip>)}
-            </div>
-          </Field>
-        )}
-        <PrimaryButton onClick={adicionar} disabled={!nome.trim() || membros.length === 0} style={{ width: "100%" }}><Plus size={16} /> Adicionar equipe</PrimaryButton>
-      </Card>
-      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-        {equipes.map(eq => {
-          const editando = editandoId === eq.id;
-          return (
-            <Card key={eq.id} style={{ padding: "11px 14px" }}>
-              {editando ? (
-                <div>
-                  <Field label="Nome da equipe"><input value={nomeEdicao} onChange={e => setNomeEdicao(e.target.value)} style={inputStyle} /></Field>
-                  <Field label="Setor (opcional)">
-                    <Select value={setorEdicao} onChange={e => setSetorEdicao(e.target.value)}>
-                      <option value="">Qualquer setor</option>
-                      {setores.map(s => <option key={s.id} value={s.id}>{s.nome}</option>)}
-                    </Select>
-                  </Field>
-                  <Field label="Membros">
-                    <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-                      {colaboradores.map(c => <ToggleChip key={c.id} ativo={membrosEdicao.includes(c.id)} onClick={() => toggleMembroEdicao(c.id)}>{c.nome}</ToggleChip>)}
-                    </div>
-                  </Field>
-                  <div style={{ display: "flex", gap: 8 }}>
-                    <PrimaryButton onClick={() => salvarEdicao(eq.id)} disabled={!nomeEdicao.trim() || membrosEdicao.length === 0} style={{ flex: 1 }}>Salvar</PrimaryButton>
-                    <button onClick={() => setEditandoId(null)} style={{ border: "1.5px solid #d9cfb7", background: "#fff", borderRadius: 9, padding: "0 14px", color: "#6b5d49", fontWeight: 700, cursor: "pointer" }}>Cancelar</button>
-                  </div>
-                </div>
-              ) : (
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
-                  <div>
-                    <div style={{ fontWeight: 700, fontSize: 14, color: "#2a2015" }}>{eq.nome}</div>
-                    <div style={{ fontSize: 12, color: "#a3937a" }}>{nomeSetor(eq.setorId)} · {eq.membros.map(nomeColab).join(", ")}</div>
-                  </div>
-                  <div style={{ display: "flex" }}>
-                    <IconButton onClick={() => iniciarEdicao(eq)} title="Editar"><ClipboardList size={15} /></IconButton>
-                    <IconButton onClick={() => excluir(eq.id)} danger title="Excluir"><Trash2 size={15} /></IconButton>
-                  </div>
-                </div>
-              )}
-            </Card>
-          );
-        })}
-        {equipes.length === 0 && <div style={{ fontSize: 13.5, color: "#a3937a", padding: "8px 2px" }}>Nenhuma equipe cadastrada.</div>}
-      </div>
-    </div>
-  );
-}
-
-const TIPOS_CALCULO_ETAPA = [
-  { key: "peca", label: "Por peça", desc: "tempo estimado é multiplicado pela quantidade" },
-  { key: "lote", label: "Por lote", desc: "tempo estimado fixo, não multiplica pela quantidade" },
-];
-
-function EtapasCadastro({ etapas, setEtapas, vinculos, setVinculos, setores }) {
-  const [nome, setNome] = useState("");
-  const [setorId, setSetorId] = useState("");
-  const [tipoCalculo, setTipoCalculo] = useState("peca");
-  const [editandoId, setEditandoId] = useState(null);
-  const [nomeEdicao, setNomeEdicao] = useState("");
-  const [setorEdicao, setSetorEdicao] = useState("");
-  const [tipoCalculoEdicao, setTipoCalculoEdicao] = useState("peca");
-
-  async function adicionar() {
-    if (!nome.trim() || !setorId) return;
-    await setEtapas([...etapas, { id: uid(), nome: nome.trim(), setorId, tipoCalculo }]);
-    setNome(""); setTipoCalculo("peca");
-  }
-  async function excluir(id) {
-    const vinculosDaEtapa = vinculos.filter(v => v.etapaId === id);
-    const aviso = vinculosDaEtapa.length > 0
-      ? `Excluir esta etapa? Ela está vinculada a ${vinculosDaEtapa.length} produto(s) — os vínculos (com os tempos estimados) serão removidos também. Produções já concluídas mantêm o nome da etapa no histórico.`
-      : "Excluir esta etapa?";
-    if (!window.confirm(aviso)) return;
-    await setEtapas(etapas.filter(e => e.id !== id));
-    await setVinculos(vinculos.filter(v => v.etapaId !== id));
-  }
-  function iniciarEdicao(e) {
-    setEditandoId(e.id); setNomeEdicao(e.nome); setSetorEdicao(e.setorId || ""); setTipoCalculoEdicao(e.tipoCalculo || "peca");
-  }
-  async function salvarEdicao(id) {
-    if (!nomeEdicao.trim()) return;
-    // Corrigido: agora é possível renomear uma etapa (ou mudar seu setor /
-    // tipo de cálculo) sem precisar excluir e recriar — o que antes
-    // apagava os vínculos com os produtos e os tempos estimados já
-    // cadastrados.
-    await setEtapas(etapas.map(e => e.id === id ? { ...e, nome: nomeEdicao.trim(), setorId: setorEdicao || null, tipoCalculo: tipoCalculoEdicao } : e));
-    setEditandoId(null);
-  }
-  const nomeSetor = (id) => setores.find(s => s.id === id)?.nome || "Sem setor";
-  const infoCalculo = (key) => TIPOS_CALCULO_ETAPA.find(t => t.key === (key || "peca")) || TIPOS_CALCULO_ETAPA[0];
-  return (
-    <div>
-      <Card style={{ marginBottom: 16 }}>
-        <div style={{ fontSize: 15, fontWeight: 800, fontFamily: FONT_DISPLAY, marginBottom: 12, color: "#1c2b39" }}>Nova etapa</div>
-        {setores.length === 0 ? (
-          <div style={{ fontSize: 12.5, color: "#a3937a", marginBottom: 8 }}>Cadastre um setor primeiro (aba Setores).</div>
-        ) : (
-          <>
-            <Field label="Setor">
-              <Select value={setorId} onChange={e => setSetorId(e.target.value)}>
-                <option value="">Selecione…</option>
-                {setores.map(s => <option key={s.id} value={s.id}>{s.nome}</option>)}
-              </Select>
-            </Field>
-            <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
-              <input value={nome} onChange={e => setNome(e.target.value)} placeholder="Ex.: Fechamento lateral" style={{ ...inputStyle, flex: 1 }} onKeyDown={e => e.key === "Enter" && adicionar()} />
-            </div>
-            <Field label="Tipo de cálculo do tempo">
-              <div style={{ display: "flex", gap: 8 }}>
-                {TIPOS_CALCULO_ETAPA.map(t => (
-                  <ToggleChip key={t.key} ativo={tipoCalculo === t.key} onClick={() => setTipoCalculo(t.key)}>{t.label}</ToggleChip>
-                ))}
-              </div>
-              <div style={{ fontSize: 11.5, color: "#a3937a", marginTop: 5 }}>{infoCalculo(tipoCalculo).desc}. Ex.: costura é "por peça"; risco/enfesto no Corte costumam ser "por lote".</div>
-            </Field>
-            <PrimaryButton onClick={adicionar} disabled={!nome.trim() || !setorId} style={{ width: "100%" }}><Plus size={16} /> Adicionar etapa</PrimaryButton>
-          </>
-        )}
-      </Card>
-      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-        {etapas.map(e => {
-          const editando = editandoId === e.id;
-          return (
-            <Card key={e.id} style={{ padding: "11px 14px" }}>
-              {editando ? (
-                <div>
-                  <Field label="Nome"><input value={nomeEdicao} onChange={ev => setNomeEdicao(ev.target.value)} style={inputStyle} /></Field>
-                  <Field label="Setor">
-                    <Select value={setorEdicao} onChange={ev => setSetorEdicao(ev.target.value)}>
-                      <option value="">Sem setor</option>
-                      {setores.map(s => <option key={s.id} value={s.id}>{s.nome}</option>)}
-                    </Select>
-                  </Field>
-                  <Field label="Tipo de cálculo do tempo">
-                    <div style={{ display: "flex", gap: 8 }}>
-                      {TIPOS_CALCULO_ETAPA.map(t => (
-                        <ToggleChip key={t.key} ativo={tipoCalculoEdicao === t.key} onClick={() => setTipoCalculoEdicao(t.key)}>{t.label}</ToggleChip>
-                      ))}
-                    </div>
-                  </Field>
-                  <div style={{ display: "flex", gap: 8 }}>
-                    <PrimaryButton onClick={() => salvarEdicao(e.id)} disabled={!nomeEdicao.trim()} style={{ flex: 1 }}>Salvar</PrimaryButton>
-                    <button onClick={() => setEditandoId(null)} style={{ border: "1.5px solid #d9cfb7", background: "#fff", borderRadius: 9, padding: "0 14px", color: "#6b5d49", fontWeight: 700, cursor: "pointer" }}>Cancelar</button>
-                  </div>
-                </div>
-              ) : (
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                  <div>
-                    <span style={{ fontWeight: 600, fontSize: 14, color: "#2a2015" }}>{e.nome}</span>
-                    <div style={{ fontSize: 11.5, color: "#a3937a" }}>{nomeSetor(e.setorId)} · {infoCalculo(e.tipoCalculo).label}</div>
-                  </div>
-                  <div style={{ display: "flex" }}>
-                    <IconButton onClick={() => iniciarEdicao(e)} title="Editar"><ClipboardList size={15} /></IconButton>
-                    <IconButton onClick={() => excluir(e.id)} danger title="Excluir"><Trash2 size={15} /></IconButton>
-                  </div>
-                </div>
-              )}
-            </Card>
-          );
-        })}
-        {etapas.length === 0 && <div style={{ fontSize: 13.5, color: "#a3937a", padding: "8px 2px" }}>Nenhuma etapa cadastrada.</div>}
-      </div>
-    </div>
-  );
-}
-
-const PERFIS_COLABORADOR = [
-  { key: "colaborador", label: "Colaborador" },
-  { key: "gestor", label: "Gestor" },
-  { key: "administrador", label: "Administrador" },
-];
-
-function ColaboradoresCadastro({ colaboradores, setColaboradores, acessos, ehAdministrador }) {
-  const [nome, setNome] = useState("");
-  const [funcao, setFuncao] = useState("");
-  const [salarioMensal, setSalarioMensal] = useState("");
-  const [senha, setSenha] = useState("");
-  const [perfil, setPerfil] = useState("colaborador");
-  const [editandoId, setEditandoId] = useState(null);
-  const [nomeEdicao, setNomeEdicao] = useState("");
-  const [funcaoEdicao, setFuncaoEdicao] = useState("");
-  const [salarioEdicao, setSalarioEdicao] = useState("");
-  const [senhaEdicao, setSenhaEdicao] = useState("");
-  const [perfilEdicao, setPerfilEdicao] = useState("colaborador");
-
-  async function adicionar() {
-    if (!nome.trim()) return;
-    await setColaboradores([...colaboradores, {
-      id: uid(), nome: nome.trim(), funcao: funcao.trim(),
-      // Adicionado: salário mensal do colaborador, usado como base para
-      // cálculo de custo das operações (custo de mão de obra por hora/peça).
-      salarioMensal: salarioMensal ? Math.round(parseFloat(salarioMensal) * 100) / 100 : null,
-      // Adicionado: senha (opcional) para acessar o sistema com este
-      // cadastro, e perfil de acesso que define quais abas o colaborador
-      // enxerga ao entrar. Sem senha, basta selecionar o nome para entrar.
-      senha: ehAdministrador ? (senha || null) : null,
-      perfil: ehAdministrador ? perfil : "colaborador",
-    }]);
-    setNome(""); setFuncao(""); setSalarioMensal(""); setSenha(""); setPerfil("colaborador");
-  }
-  async function excluir(id) { if (window.confirm("Excluir este colaborador? O histórico de produção dele será mantido, mas ele some da lista de seleção.")) await setColaboradores(colaboradores.filter(c => c.id !== id)); }
-  function iniciarEdicao(c) {
-    setEditandoId(c.id); setNomeEdicao(c.nome); setFuncaoEdicao(c.funcao || ""); setSalarioEdicao(c.salarioMensal != null ? String(c.salarioMensal) : "");
-    setSenhaEdicao(c.senha || ""); setPerfilEdicao(c.perfil || "colaborador");
-  }
-  async function salvarEdicao(id) {
-    // Corrigido: agora é possível corrigir o nome/função de um colaborador
-    // (ex.: erro de digitação) sem excluir e recriar — o que faria o
-    // colaborador sumir de registros já concluídos com o mesmo id, além de
-    // perder o histórico de acessos vinculado a ele.
-    if (!nomeEdicao.trim()) return;
-    await setColaboradores(colaboradores.map(c => c.id === id ? {
-      ...c, nome: nomeEdicao.trim(), funcao: funcaoEdicao.trim(),
-      salarioMensal: salarioEdicao ? Math.round(parseFloat(salarioEdicao) * 100) / 100 : null,
-      senha: ehAdministrador ? (senhaEdicao || null) : c.senha,
-      perfil: ehAdministrador ? perfilEdicao : (c.perfil || "colaborador"),
-    } : c));
-    setEditandoId(null);
-  }
-  const ultimosAcessos = [...(acessos || [])].sort((a, b) => new Date(b.dataHora) - new Date(a.dataHora)).slice(0, 15);
-  const fmtSalario = (v) => v != null ? v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" }) : null;
-  const labelPerfil = (key) => (PERFIS_COLABORADOR.find(p => p.key === key) || PERFIS_COLABORADOR[0]).label;
-  return (
-    <div>
-      <Card style={{ marginBottom: 16 }}>
-        <div style={{ fontSize: 15, fontWeight: 800, fontFamily: FONT_DISPLAY, marginBottom: 12, color: "#1c2b39" }}>Novo colaborador</div>
-        <Field label="Nome"><input value={nome} onChange={e => setNome(e.target.value)} placeholder="Nome completo" style={inputStyle} /></Field>
-        <Field label="Função (opcional)"><input value={funcao} onChange={e => setFuncao(e.target.value)} placeholder="Ex.: Costureira, Cortador" style={inputStyle} /></Field>
-        <Field label="Salário mensal (opcional)">
-          <input type="number" min="0" step="0.01" value={salarioMensal} onChange={e => setSalarioMensal(e.target.value)} placeholder="Ex.: 1800.00" style={inputStyle} />
-          <div style={{ fontSize: 11.5, color: "#a3937a", marginTop: 5 }}>Usado como base para cálculo de custo das operações. Não aparece em relatórios de desempenho.</div>
-        </Field>
-        {ehAdministrador ? (
-          <>
-            <Field label="Senha de acesso (opcional)">
-              <input type="password" value={senha} onChange={e => setSenha(e.target.value)} placeholder="Deixe em branco para entrar sem senha" style={inputStyle} />
-            </Field>
-            <Field label="Perfil de acesso">
-              <Select value={perfil} onChange={e => setPerfil(e.target.value)}>
-                {PERFIS_COLABORADOR.map(p => <option key={p.key} value={p.key}>{p.label}</option>)}
-              </Select>
-              <div style={{ fontSize: 11.5, color: "#a3937a", marginTop: 5 }}>Colaborador só vê Produção. Gestor e Administrador veem tudo — só o Administrador edita senha/perfil e compras.</div>
-            </Field>
-          </>
-        ) : (
-          <div style={{ fontSize: 12, color: "#a3937a", background: "#f4efe2", border: "1px dashed #d9cfb7", borderRadius: 8, padding: "8px 10px", marginBottom: 14 }}>
-            Senha e perfil de acesso só podem ser definidos por um administrador.
-          </div>
-        )}
-        <PrimaryButton onClick={adicionar} disabled={!nome.trim()} style={{ width: "100%" }}><Plus size={16} /> Adicionar</PrimaryButton>
-      </Card>
-      <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 20 }}>
-        {colaboradores.map(c => {
-          const editando = editandoId === c.id;
-          return (
-            <Card key={c.id} style={{ padding: "11px 14px" }}>
-              {editando ? (
-                <div>
-                  <Field label="Nome"><input value={nomeEdicao} onChange={e => setNomeEdicao(e.target.value)} style={inputStyle} /></Field>
-                  <Field label="Função (opcional)"><input value={funcaoEdicao} onChange={e => setFuncaoEdicao(e.target.value)} style={inputStyle} /></Field>
-                  <Field label="Salário mensal (opcional)">
-                    <input type="number" min="0" step="0.01" value={salarioEdicao} onChange={e => setSalarioEdicao(e.target.value)} style={inputStyle} />
-                  </Field>
-                  {ehAdministrador ? (
-                    <>
-                      <Field label="Senha de acesso (opcional)">
-                        <input type="password" value={senhaEdicao} onChange={e => setSenhaEdicao(e.target.value)} placeholder="Deixe em branco para entrar sem senha" style={inputStyle} />
-                      </Field>
-                      <Field label="Perfil de acesso">
-                        <Select value={perfilEdicao} onChange={e => setPerfilEdicao(e.target.value)}>
-                          {PERFIS_COLABORADOR.map(p => <option key={p.key} value={p.key}>{p.label}</option>)}
-                        </Select>
-                      </Field>
-                    </>
-                  ) : (
-                    <div style={{ fontSize: 12, color: "#a3937a", marginBottom: 14 }}>Senha e perfil só podem ser alterados por um administrador.</div>
-                  )}
-                  <div style={{ display: "flex", gap: 8 }}>
-                    <PrimaryButton onClick={() => salvarEdicao(c.id)} disabled={!nomeEdicao.trim()} style={{ flex: 1 }}>Salvar</PrimaryButton>
-                    <button onClick={() => setEditandoId(null)} style={{ border: "1.5px solid #d9cfb7", background: "#fff", borderRadius: 9, padding: "0 14px", color: "#6b5d49", fontWeight: 700, cursor: "pointer" }}>Cancelar</button>
-                  </div>
-                </div>
-              ) : (
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                  <div>
-                    <div style={{ fontWeight: 700, fontSize: 14, color: "#2a2015" }}>{c.nome}</div>
-                    {c.funcao && <div style={{ fontSize: 12.5, color: "#6b5d49" }}>{c.funcao}</div>}
-                    <div style={{ fontSize: 11.5, color: "#a3937a", marginTop: 2 }}>
-                      {fmtSalario(c.salarioMensal) ? `${fmtSalario(c.salarioMensal)}/mês · ` : ""}{labelPerfil(c.perfil)}{c.senha ? " · com senha" : ""}
-                    </div>
-                  </div>
-                  <div style={{ display: "flex" }}>
-                    <IconButton onClick={() => iniciarEdicao(c)} title="Editar"><ClipboardList size={15} /></IconButton>
-                    <IconButton onClick={() => excluir(c.id)} danger title="Excluir"><Trash2 size={15} /></IconButton>
-                  </div>
-                </div>
-              )}
-            </Card>
-          );
-        })}
-        {colaboradores.length === 0 && <div style={{ fontSize: 13.5, color: "#a3937a", padding: "8px 2px" }}>Nenhum colaborador cadastrado.</div>}
-      </div>
-
-      <div style={{ fontSize: 13, fontWeight: 700, color: "#6b5d49", margin: "4px 2px 8px" }}>Últimos acessos ao sistema</div>
-      {ultimosAcessos.length === 0 && <div style={{ fontSize: 13.5, color: "#a3937a", padding: "8px 2px" }}>Nenhum acesso registrado ainda.</div>}
-      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-        {ultimosAcessos.map(a => (
-          <div key={a.id} style={{ display: "flex", justifyContent: "space-between", fontSize: 12.5, color: "#6b5d49", background: "#fff", border: "1px solid #e6ddc8", borderRadius: 8, padding: "7px 10px" }}>
-            <span>{a.nome}</span>
-            <span style={{ color: "#a3937a" }}>{new Date(a.dataHora).toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}</span>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-// ---------- Materiais (estoque e unidade) ----------
-// Adicionado: cadastro de materiais com quantidade em estoque. É a base
-// da aba Consumo — cada produto pode ter uma ficha de consumo (em
-// Cadastros → Produtos) que informa quanto de cada material uma peça
-// consome; quando uma OP é concluída, o estoque aqui cadastrado recebe a
-// baixa automática.
-const UNIDADES_MATERIAL = ["m", "kg", "un", "rolo", "cone", "l", "pacote"];
-
-function MateriaisCadastro({ materiais, setMateriais, consumosMaterial, setConsumosMaterial, fornecedores, setFornecedores, gruposMaterial, setGruposMaterial }) {
-  const [nome, setNome] = useState("");
-  const [unidade, setUnidade] = useState("m");
-  const [quantidadeEstoque, setQuantidadeEstoque] = useState("");
-  const [estoqueMinimo, setEstoqueMinimo] = useState("");
-  const [estoqueMaximo, setEstoqueMaximo] = useState("");
-  const [preco, setPreco] = useState("");
-  // Corrigido: fornecedor agora é o primeiro campo do cadastro (e
-  // obrigatório) — é o código de cadastro dele que compõe o código do
-  // material (fornecedor.sequência).
-  const [fornecedorId, setFornecedorId] = useState("");
-  const [novoFornecedorAberto, setNovoFornecedorAberto] = useState(false);
-  const [novoFornecedorNome, setNovoFornecedorNome] = useState("");
-  // Adicionado: além do fornecedor principal (usado no código), o
-  // material pode ter outros fornecedores que também vendem esse
-  // material — útil pra cotar preço com mais de um na hora de comprar.
-  const [outroFornecedorId, setOutroFornecedorId] = useState("");
-  const [fornecedoresExtrasIds, setFornecedoresExtrasIds] = useState([]);
-  // Adicionado: grupo de materiais — mesmo cadastro compartilhado com
-  // Produtos (grupo_material), com opção de criar um novo ali mesmo.
-  const [grupoMaterialId, setGrupoMaterialId] = useState("");
-  const [novoGrupoAberto, setNovoGrupoAberto] = useState(false);
-  const [novoGrupoNome, setNovoGrupoNome] = useState("");
-  const [editandoId, setEditandoId] = useState(null);
-  const [nomeEdicao, setNomeEdicao] = useState("");
-  const [unidadeEdicao, setUnidadeEdicao] = useState("m");
-  const [estoqueMinimoEdicao, setEstoqueMinimoEdicao] = useState("");
-  const [estoqueMaximoEdicao, setEstoqueMaximoEdicao] = useState("");
-  const [precoEdicao, setPrecoEdicao] = useState("");
-  const [fornecedorIdEdicao, setFornecedorIdEdicao] = useState("");
-  const [novoFornecedorAbertoEdicao, setNovoFornecedorAbertoEdicao] = useState(false);
-  const [novoFornecedorNomeEdicao, setNovoFornecedorNomeEdicao] = useState("");
-  const [outroFornecedorIdEdicao, setOutroFornecedorIdEdicao] = useState("");
-  const [fornecedoresExtrasIdsEdicao, setFornecedoresExtrasIdsEdicao] = useState([]);
-  const [grupoMaterialIdEdicao, setGrupoMaterialIdEdicao] = useState("");
-  const [novoGrupoAbertoEdicao, setNovoGrupoAbertoEdicao] = useState(false);
-  const [novoGrupoNomeEdicao, setNovoGrupoNomeEdicao] = useState("");
-  const [ajusteId, setAjusteId] = useState(null);
-  const [ajusteValor, setAjusteValor] = useState("");
-  const [ajusteTipo, setAjusteTipo] = useState("entrada");
-  const fornecedorPorId = (id) => (fornecedores || []).find(f => f.id === id) || null;
-  async function criarFornecedorRapido(nomeBruto, aoCriar) {
-    const nomeCriado = nomeBruto.trim();
-    if (!nomeCriado) return;
-    const codigo = (fornecedores || []).reduce((max, f) => Math.max(max, f.codigo || 0), 0) + 1;
-    const novo = { id: uid(), codigo, nome: nomeCriado, contato: "", categoria: "", observacao: "" };
-    await setFornecedores([...(fornecedores || []), novo]);
-    aoCriar(novo.id);
-  }
-  function adicionarFornecedorExtra() {
-    if (!outroFornecedorId || outroFornecedorId === fornecedorId || fornecedoresExtrasIds.includes(outroFornecedorId)) return;
-    setFornecedoresExtrasIds(ids => [...ids, outroFornecedorId]);
-    setOutroFornecedorId("");
-  }
-  function removerFornecedorExtra(id) { setFornecedoresExtrasIds(ids => ids.filter(x => x !== id)); }
-  function adicionarFornecedorExtraEdicao() {
-    if (!outroFornecedorIdEdicao || outroFornecedorIdEdicao === fornecedorIdEdicao || fornecedoresExtrasIdsEdicao.includes(outroFornecedorIdEdicao)) return;
-    setFornecedoresExtrasIdsEdicao(ids => [...ids, outroFornecedorIdEdicao]);
-    setOutroFornecedorIdEdicao("");
-  }
-  function removerFornecedorExtraEdicao(id) { setFornecedoresExtrasIdsEdicao(ids => ids.filter(x => x !== id)); }
-  const grupoMaterialPorId = (id) => gruposMaterial.find(g => g.id === id) || null;
-  async function criarGrupoMaterial(nomeBruto, aoCriar) {
-    const nomeCriado = nomeBruto.trim().toUpperCase();
-    if (!nomeCriado) return;
-    const codigo = gruposMaterial.reduce((max, g) => Math.max(max, g.codigo || 0), 0) + 1;
-    const novo = { id: uid(), codigo, nome: nomeCriado };
-    await setGruposMaterial([...gruposMaterial, novo]);
-    aoCriar(novo.id);
-  }
-  // Adicionado: pesquisa por nome do material, fornecedor ou grupo — útil
-  // quando o cadastro cresce e fica difícil rolar a lista toda.
-  const [busca, setBusca] = useState("");
-  const materiaisFiltrados = useMemo(() => {
-    const termo = busca.trim().toLowerCase();
-    return [...materiais]
-      .filter(m => !termo || m.nome.toLowerCase().includes(termo) || (m.fornecedorNomeSnap || "").toLowerCase().includes(termo) || (m.fornecedoresExtrasNomesSnap || []).some(n => n.toLowerCase().includes(termo)) || (m.grupoMaterialNomeSnap || "").toLowerCase().includes(termo))
-      .sort((a, b) => a.nome.localeCompare(b.nome));
-  }, [materiais, busca]);
-
-  const podeAdicionarMaterial = nome.trim().length > 0 && !!fornecedorId;
-
-  async function adicionar() {
-    if (!podeAdicionarMaterial) return;
-    // Corrigido: o código do material passa a ser fornecedor + sequência
-    // do cadastro (ex.: 003.014 = fornecedor 003, 14º material
-    // cadastrado). A sequência continua sendo guardada à parte
-    // (sequencia) — é ela que o cadastro de Produtos usa como
-    // referência do segmento "tipo" no código do produto.
-    const sequencia = materiais.reduce((max, m) => Math.max(max, m.sequencia || 0), 0) + 1;
-    const fornecedor = fornecedorPorId(fornecedorId);
-    const seg = (n) => String(n || 0).padStart(3, "0");
-    await setMateriais([...materiais, {
-      id: uid(), sequencia, codigo: `${seg(fornecedor?.codigo)}.${seg(sequencia)}`,
-      nome: nome.trim(), unidade,
-      quantidadeEstoque: quantidadeEstoque ? Math.round(parseFloat(quantidadeEstoque) * 1000) / 1000 : 0,
-      estoqueMinimo: estoqueMinimo ? Math.round(parseFloat(estoqueMinimo) * 1000) / 1000 : null,
-      // Adicionado: estoque máximo (usado para sugerir a quantidade de
-      // uma solicitação de compra) e preço unitário — base do custo de
-      // material nos relatórios e nas cotações de compra.
-      estoqueMaximo: estoqueMaximo ? Math.round(parseFloat(estoqueMaximo) * 1000) / 1000 : null,
-      preco: preco ? Math.round(parseFloat(preco) * 100) / 100 : null,
-      // Adicionado: fornecedor principal do material (do cadastro de
-      // Fornecedores) — o nome fica salvo junto (snapshot) pra continuar
-      // aparecendo mesmo se o fornecedor for renomeado ou excluído depois.
-      fornecedorId, fornecedorNomeSnap: fornecedor?.nome || null,
-      // Adicionado: outros fornecedores que também vendem esse material,
-      // além do principal — não entram no código, só ficam registrados
-      // pra cotar preço na hora de comprar.
-      fornecedoresExtrasIds: fornecedoresExtrasIds,
-      fornecedoresExtrasNomesSnap: fornecedoresExtrasIds.map(id => fornecedorPorId(id)?.nome).filter(Boolean),
-      grupoMaterialId: grupoMaterialId || null, grupoMaterialNomeSnap: grupoMaterialId ? grupoMaterialPorId(grupoMaterialId)?.nome || null : null,
-    }]);
-    setNome(""); setQuantidadeEstoque(""); setEstoqueMinimo(""); setEstoqueMaximo(""); setPreco(""); setFornecedorId(""); setFornecedoresExtrasIds([]); setGrupoMaterialId("");
-  }
-  async function excluir(id) {
-    const consumosDoMaterial = consumosMaterial.filter(c => c.materialId === id);
-    const aviso = consumosDoMaterial.length > 0
-      ? `Excluir este material? Ele está na ficha de consumo de ${consumosDoMaterial.length} produto(s) — esses vínculos serão removidos também.`
-      : "Excluir este material?";
-    if (!window.confirm(aviso)) return;
-    await setMateriais(materiais.filter(m => m.id !== id));
-    await setConsumosMaterial(consumosMaterial.filter(c => c.materialId !== id));
-  }
-  function iniciarEdicao(m) {
-    setEditandoId(m.id); setNomeEdicao(m.nome); setUnidadeEdicao(m.unidade || "m");
-    setEstoqueMinimoEdicao(m.estoqueMinimo != null ? String(m.estoqueMinimo) : "");
-    setEstoqueMaximoEdicao(m.estoqueMaximo != null ? String(m.estoqueMaximo) : "");
-    setPrecoEdicao(m.preco != null ? String(m.preco) : "");
-    setFornecedorIdEdicao(m.fornecedorId || "");
-    setFornecedoresExtrasIdsEdicao(m.fornecedoresExtrasIds || []);
-    setGrupoMaterialIdEdicao(m.grupoMaterialId || "");
-  }
-  async function salvarEdicao(id) {
-    if (!nomeEdicao.trim() || !fornecedorIdEdicao) return;
-    const fornecedor = fornecedorPorId(fornecedorIdEdicao);
-    const seg = (n) => String(n || 0).padStart(3, "0");
-    await setMateriais(materiais.map(m => m.id === id ? {
-      ...m, nome: nomeEdicao.trim(), unidade: unidadeEdicao,
-      estoqueMinimo: estoqueMinimoEdicao ? Math.round(parseFloat(estoqueMinimoEdicao) * 1000) / 1000 : null,
-      estoqueMaximo: estoqueMaximoEdicao ? Math.round(parseFloat(estoqueMaximoEdicao) * 1000) / 1000 : null,
-      preco: precoEdicao ? Math.round(parseFloat(precoEdicao) * 100) / 100 : null,
-      fornecedorId: fornecedorIdEdicao, fornecedorNomeSnap: fornecedor?.nome || null,
-      fornecedoresExtrasIds: fornecedoresExtrasIdsEdicao,
-      fornecedoresExtrasNomesSnap: fornecedoresExtrasIdsEdicao.map(fid => fornecedorPorId(fid)?.nome).filter(Boolean),
-      // Corrigido: se o fornecedor mudar na edição, o código é
-      // recalculado com o novo fornecedor, mantendo a mesma sequência.
-      codigo: `${seg(fornecedor?.codigo)}.${seg(m.sequencia)}`,
-      grupoMaterialId: grupoMaterialIdEdicao || null, grupoMaterialNomeSnap: grupoMaterialIdEdicao ? grupoMaterialPorId(grupoMaterialIdEdicao)?.nome || null : null,
-    } : m));
-    setEditandoId(null);
-  }
-  function abrirAjuste(id) { setAjusteId(ajusteId === id ? null : id); setAjusteValor(""); setAjusteTipo("entrada"); }
-  async function confirmarAjuste(m) {
-    const valor = parseFloat(ajusteValor || "0");
-    if (!(valor > 0)) return;
-    const delta = ajusteTipo === "entrada" ? valor : -valor;
-    await setMateriais(materiais.map(mm => mm.id === m.id ? { ...mm, quantidadeEstoque: Math.round((mm.quantidadeEstoque + delta) * 1000) / 1000 } : mm));
-    setAjusteId(null); setAjusteValor("");
-  }
-  const fmtPreco = (v) => v != null ? v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" }) : null;
-
-  return (
-    <div>
-      <Card style={{ marginBottom: 16 }}>
-        <div style={{ fontSize: 15, fontWeight: 800, fontFamily: FONT_DISPLAY, marginBottom: 4, color: "#1c2b39" }}>Novo material</div>
-        <div style={{ fontSize: 11.5, color: "#a3937a", marginBottom: 10 }}>
-          Código: <b style={{ color: "#6b5d49", fontFamily: "monospace" }}>{String(fornecedorPorId(fornecedorId)?.codigo || 0).padStart(3, "0")}.{String(materiais.reduce((max, m) => Math.max(max, m.sequencia || 0), 0) + 1).padStart(3, "0")}</b>
-        </div>
-        <Field label="Fornecedor (obrigatório)">
-          <Select value={fornecedorId} onChange={e => setFornecedorId(e.target.value)}>
-            <option value="">Selecione…</option>
-            {[...(fornecedores || [])].sort((a, b) => a.nome.localeCompare(b.nome)).map(f => <option key={f.id} value={f.id}>{f.codigo != null ? `${String(f.codigo).padStart(3, "0")} · ` : ""}{f.nome}</option>)}
-          </Select>
-          <button type="button" onClick={() => setNovoFornecedorAberto(v => !v)} style={linkButtonStyle}>{novoFornecedorAberto ? "Cancelar" : "+ Novo fornecedor"}</button>
-          {novoFornecedorAberto && (
-            <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
-              <input value={novoFornecedorNome} onChange={e => setNovoFornecedorNome(e.target.value)} placeholder="Nome do fornecedor" style={{ ...inputStyle, flex: 1 }} onKeyDown={e => e.key === "Enter" && criarFornecedorRapido(novoFornecedorNome, id => { setFornecedorId(id); setNovoFornecedorNome(""); setNovoFornecedorAberto(false); })} />
-              <PrimaryButton onClick={() => criarFornecedorRapido(novoFornecedorNome, id => { setFornecedorId(id); setNovoFornecedorNome(""); setNovoFornecedorAberto(false); })} disabled={!novoFornecedorNome.trim()}><Plus size={16} /></PrimaryButton>
-            </div>
-          )}
-        </Field>
-        <Field label="Outros fornecedores (opcional)">
-          <div style={{ display: "flex", gap: 6 }}>
-            <Select value={outroFornecedorId} onChange={e => setOutroFornecedorId(e.target.value)} style={{ flex: 1 }}>
-              <option value="">Selecione…</option>
-              {[...(fornecedores || [])].filter(f => f.id !== fornecedorId && !fornecedoresExtrasIds.includes(f.id)).sort((a, b) => a.nome.localeCompare(b.nome)).map(f => <option key={f.id} value={f.id}>{f.nome}</option>)}
-            </Select>
-            <PrimaryButton onClick={adicionarFornecedorExtra} disabled={!outroFornecedorId}><Plus size={16} /></PrimaryButton>
-          </div>
-          {fornecedoresExtrasIds.length > 0 && (
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 8 }}>
-              {fornecedoresExtrasIds.map(id => (
-                <span key={id} style={{ display: "flex", alignItems: "center", gap: 4, background: "#f4efe2", border: "1px solid #d9cfb7", borderRadius: 999, padding: "3px 4px 3px 10px", fontSize: 12, color: "#6b5d49" }}>
-                  {fornecedorPorId(id)?.nome || "—"}
-                  <IconButton onClick={() => removerFornecedorExtra(id)} danger title="Remover"><X size={13} /></IconButton>
-                </span>
-              ))}
-            </div>
-          )}
-        </Field>
-        <Field label="Nome">
-          <input value={nome} onChange={e => setNome(e.target.value)} placeholder="Ex.: Malha 100% algodão" style={inputStyle} onKeyDown={e => e.key === "Enter" && adicionar()} />
-        </Field>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-          <Field label="Unidade">
-            <Select value={unidade} onChange={e => setUnidade(e.target.value)}>
-              {UNIDADES_MATERIAL.map(u => <option key={u} value={u}>{u}</option>)}
-            </Select>
-          </Field>
-          <Field label="Preço unitário (opcional)">
-            <input type="number" min="0" step="0.01" value={preco} onChange={e => setPreco(e.target.value)} placeholder="Ex.: 18.90" style={inputStyle} />
-          </Field>
-        </div>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
-          <Field label="Estoque atual">
-            <input type="number" min="0" step="0.01" value={quantidadeEstoque} onChange={e => setQuantidadeEstoque(e.target.value)} placeholder="0" style={inputStyle} />
-          </Field>
-          <Field label="Mínimo (opcional)">
-            <input type="number" min="0" step="0.01" value={estoqueMinimo} onChange={e => setEstoqueMinimo(e.target.value)} placeholder="Alerta" style={inputStyle} />
-          </Field>
-          <Field label="Máximo (opcional)">
-            <input type="number" min="0" step="0.01" value={estoqueMaximo} onChange={e => setEstoqueMaximo(e.target.value)} placeholder="Ideal" style={inputStyle} />
-          </Field>
-        </div>
-        <Field label="Grupo de materiais (opcional)">
-          <Select value={grupoMaterialId} onChange={e => setGrupoMaterialId(e.target.value)}>
-            <option value="">Selecione…</option>
-            {[...gruposMaterial].sort((a, b) => a.codigo - b.codigo).map(g => <option key={g.id} value={g.id}>{String(g.codigo).padStart(3, "0")} · {g.nome}</option>)}
-          </Select>
-          <button type="button" onClick={() => setNovoGrupoAberto(v => !v)} style={linkButtonStyle}>{novoGrupoAberto ? "Cancelar" : "+ Novo grupo"}</button>
-          {novoGrupoAberto && (
-            <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
-              <input value={novoGrupoNome} onChange={e => setNovoGrupoNome(e.target.value.toUpperCase())} placeholder="NOME DO GRUPO" style={{ ...inputStyle, flex: 1 }} onKeyDown={e => e.key === "Enter" && criarGrupoMaterial(novoGrupoNome, id => { setGrupoMaterialId(id); setNovoGrupoNome(""); setNovoGrupoAberto(false); })} />
-              <PrimaryButton onClick={() => criarGrupoMaterial(novoGrupoNome, id => { setGrupoMaterialId(id); setNovoGrupoNome(""); setNovoGrupoAberto(false); })} disabled={!novoGrupoNome.trim()}><Plus size={16} /></PrimaryButton>
-            </div>
-          )}
-        </Field>
-        <PrimaryButton onClick={adicionar} disabled={!podeAdicionarMaterial} style={{ width: "100%" }}><Plus size={16} /> Adicionar material</PrimaryButton>
-        {!fornecedorId && <div style={{ fontSize: 11, color: "#a3937a", marginTop: 6, textAlign: "center" }}>Selecione (ou cadastre) o fornecedor para poder adicionar.</div>}
-      </Card>
-
-      {materiais.length > 0 && (
-        <Card style={{ marginBottom: 12, padding: 12 }}>
-          <Field label="Pesquisar material">
-            <input value={busca} onChange={e => setBusca(e.target.value)} placeholder="Nome do material ou fornecedor…" style={inputStyle} />
-          </Field>
-        </Card>
-      )}
-      {materiais.length > 0 && materiaisFiltrados.length === 0 && (
-        <div style={{ fontSize: 13.5, color: "#a3937a", padding: "8px 2px", marginBottom: 8 }}>Nenhum material encontrado para essa pesquisa.</div>
-      )}
-      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-        {materiaisFiltrados.map(m => {
-          const editando = editandoId === m.id;
-          const estoqueBaixo = m.estoqueMinimo != null && m.quantidadeEstoque <= m.estoqueMinimo;
-          return (
-            <Card key={m.id} style={{ padding: "11px 14px" }}>
-              {editando ? (
-                <div>
-                  <Field label="Nome"><input value={nomeEdicao} onChange={e => setNomeEdicao(e.target.value)} style={inputStyle} /></Field>
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-                    <Field label="Unidade">
-                      <Select value={unidadeEdicao} onChange={e => setUnidadeEdicao(e.target.value)}>
-                        {UNIDADES_MATERIAL.map(u => <option key={u} value={u}>{u}</option>)}
-                      </Select>
-                    </Field>
-                    <Field label="Preço unitário (opcional)">
-                      <input type="number" min="0" step="0.01" value={precoEdicao} onChange={e => setPrecoEdicao(e.target.value)} style={inputStyle} />
-                    </Field>
-                  </div>
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-                    <Field label="Mínimo (opcional)">
-                      <input type="number" min="0" step="0.01" value={estoqueMinimoEdicao} onChange={e => setEstoqueMinimoEdicao(e.target.value)} style={inputStyle} />
-                    </Field>
-                    <Field label="Máximo (opcional)">
-                      <input type="number" min="0" step="0.01" value={estoqueMaximoEdicao} onChange={e => setEstoqueMaximoEdicao(e.target.value)} style={inputStyle} />
-                    </Field>
-                  </div>
-                  <Field label="Fornecedor (obrigatório)">
-                    <Select value={fornecedorIdEdicao} onChange={e => setFornecedorIdEdicao(e.target.value)}>
-                      <option value="">Selecione…</option>
-                      {[...(fornecedores || [])].sort((a, b) => a.nome.localeCompare(b.nome)).map(f => <option key={f.id} value={f.id}>{f.codigo != null ? `${String(f.codigo).padStart(3, "0")} · ` : ""}{f.nome}</option>)}
-                    </Select>
-                    <button type="button" onClick={() => setNovoFornecedorAbertoEdicao(v => !v)} style={linkButtonStyle}>{novoFornecedorAbertoEdicao ? "Cancelar" : "+ Novo fornecedor"}</button>
-                    {novoFornecedorAbertoEdicao && (
-                      <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
-                        <input value={novoFornecedorNomeEdicao} onChange={e => setNovoFornecedorNomeEdicao(e.target.value)} placeholder="Nome do fornecedor" style={{ ...inputStyle, flex: 1 }} />
-                        <PrimaryButton onClick={() => criarFornecedorRapido(novoFornecedorNomeEdicao, id => { setFornecedorIdEdicao(id); setNovoFornecedorNomeEdicao(""); setNovoFornecedorAbertoEdicao(false); })} disabled={!novoFornecedorNomeEdicao.trim()}><Plus size={16} /></PrimaryButton>
-                      </div>
-                    )}
-                  </Field>
-                  <Field label="Outros fornecedores (opcional)">
-                    <div style={{ display: "flex", gap: 6 }}>
-                      <Select value={outroFornecedorIdEdicao} onChange={e => setOutroFornecedorIdEdicao(e.target.value)} style={{ flex: 1 }}>
-                        <option value="">Selecione…</option>
-                        {[...(fornecedores || [])].filter(f => f.id !== fornecedorIdEdicao && !fornecedoresExtrasIdsEdicao.includes(f.id)).sort((a, b) => a.nome.localeCompare(b.nome)).map(f => <option key={f.id} value={f.id}>{f.nome}</option>)}
-                      </Select>
-                      <PrimaryButton onClick={adicionarFornecedorExtraEdicao} disabled={!outroFornecedorIdEdicao}><Plus size={16} /></PrimaryButton>
-                    </div>
-                    {fornecedoresExtrasIdsEdicao.length > 0 && (
-                      <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 8 }}>
-                        {fornecedoresExtrasIdsEdicao.map(id => (
-                          <span key={id} style={{ display: "flex", alignItems: "center", gap: 4, background: "#f4efe2", border: "1px solid #d9cfb7", borderRadius: 999, padding: "3px 4px 3px 10px", fontSize: 12, color: "#6b5d49" }}>
-                            {fornecedorPorId(id)?.nome || "—"}
-                            <IconButton onClick={() => removerFornecedorExtraEdicao(id)} danger title="Remover"><X size={13} /></IconButton>
-                          </span>
-                        ))}
-                      </div>
-                    )}
-                  </Field>
-                  <Field label="Grupo de materiais (opcional)">
-                    <Select value={grupoMaterialIdEdicao} onChange={e => setGrupoMaterialIdEdicao(e.target.value)}>
-                      <option value="">Selecione…</option>
-                      {[...gruposMaterial].sort((a, b) => a.codigo - b.codigo).map(g => <option key={g.id} value={g.id}>{String(g.codigo).padStart(3, "0")} · {g.nome}</option>)}
-                    </Select>
-                    <button type="button" onClick={() => setNovoGrupoAbertoEdicao(v => !v)} style={linkButtonStyle}>{novoGrupoAbertoEdicao ? "Cancelar" : "+ Novo grupo"}</button>
-                    {novoGrupoAbertoEdicao && (
-                      <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
-                        <input value={novoGrupoNomeEdicao} onChange={e => setNovoGrupoNomeEdicao(e.target.value.toUpperCase())} placeholder="NOME DO GRUPO" style={{ ...inputStyle, flex: 1 }} />
-                        <PrimaryButton onClick={() => criarGrupoMaterial(novoGrupoNomeEdicao, id => { setGrupoMaterialIdEdicao(id); setNovoGrupoNomeEdicao(""); setNovoGrupoAbertoEdicao(false); })} disabled={!novoGrupoNomeEdicao.trim()}><Plus size={16} /></PrimaryButton>
-                      </div>
-                    )}
-                  </Field>
-                  <div style={{ display: "flex", gap: 8 }}>
-                    <PrimaryButton onClick={() => salvarEdicao(m.id)} disabled={!nomeEdicao.trim() || !fornecedorIdEdicao} style={{ flex: 1 }}>Salvar</PrimaryButton>
-                    <button onClick={() => setEditandoId(null)} style={{ border: "1.5px solid #d9cfb7", background: "#fff", borderRadius: 9, padding: "0 14px", color: "#6b5d49", fontWeight: 700, cursor: "pointer" }}>Cancelar</button>
-                  </div>
-                </div>
-              ) : (
-                <>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                    <div>
-                      <div style={{ fontWeight: 700, fontSize: 14, color: "#2a2015" }}>
-                        {m.codigo != null && <span style={{ color: "#a3937a", fontWeight: 600, fontFamily: "monospace" }}>{m.codigo} · </span>}
-                        {m.nome}
-                      </div>
-                      <div style={{ fontSize: 12, color: estoqueBaixo ? "#b13232" : "#a3937a" }}>
-                        {m.quantidadeEstoque} {m.unidade} em estoque{estoqueBaixo ? " · abaixo do mínimo" : ""}
-                        {m.estoqueMinimo != null || m.estoqueMaximo != null ? ` (min ${m.estoqueMinimo ?? "—"} / máx ${m.estoqueMaximo ?? "—"})` : ""}
-                      </div>
-                      {fmtPreco(m.preco) && <div style={{ fontSize: 11.5, color: "#a3937a" }}>{fmtPreco(m.preco)}/{m.unidade}</div>}
-                      {m.grupoMaterialNomeSnap && <div style={{ fontSize: 11.5, color: "#a3937a" }}>Grupo: {m.grupoMaterialNomeSnap}</div>}
-                      {m.fornecedorNomeSnap && (
-                        <div style={{ fontSize: 11.5, color: "#a3937a" }}>
-                          Fornecedor: {m.fornecedorNomeSnap}
-                          {(m.fornecedoresExtrasNomesSnap || []).length > 0 ? ` · também: ${m.fornecedoresExtrasNomesSnap.join(", ")}` : ""}
-                        </div>
-                      )}
-                    </div>
-                    <div style={{ display: "flex" }}>
-                      <IconButton onClick={() => abrirAjuste(m.id)} title="Ajustar estoque"><Plus size={15} /></IconButton>
-                      <IconButton onClick={() => iniciarEdicao(m)} title="Editar"><ClipboardList size={15} /></IconButton>
-                      <IconButton onClick={() => excluir(m.id)} danger title="Excluir"><Trash2 size={15} /></IconButton>
-                    </div>
-                  </div>
-                  {ajusteId === m.id && (
-                    <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px solid #efe8d8" }}>
-                      <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
-                        <ToggleChip ativo={ajusteTipo === "entrada"} onClick={() => setAjusteTipo("entrada")}>Entrada</ToggleChip>
-                        <ToggleChip ativo={ajusteTipo === "saida"} colorAtivo="#b13232" onClick={() => setAjusteTipo("saida")}>Saída</ToggleChip>
-                      </div>
-                      <div style={{ display: "flex", gap: 8 }}>
-                        <input type="number" min="0" step="0.01" value={ajusteValor} onChange={e => setAjusteValor(e.target.value)} placeholder={`Quantidade em ${m.unidade}`} style={{ ...inputStyle, flex: 1 }} />
-                        <PrimaryButton onClick={() => confirmarAjuste(m)} disabled={!(parseFloat(ajusteValor || "0") > 0)}>Confirmar</PrimaryButton>
-                      </div>
-                    </div>
-                  )}
-                </>
-              )}
-            </Card>
-          );
-        })}
-        {materiais.length === 0 && <div style={{ fontSize: 13.5, color: "#a3937a", padding: "8px 2px" }}>Nenhum material cadastrado.</div>}
-      </div>
-    </div>
-  );
-}
-
-// ---------- Fornecedores (cadastro + histórico das últimas compras) ----------
-// Adicionado: cadastro de fornecedores usado nas cotações de compra
-// (Consumo → Compras). Ao expandir um fornecedor, mostra o histórico das
-// compras já fechadas com ele — a partir das cotações vencedoras
-// (solicitações cujo cotacaoEscolhidaId aponta pra uma cotação deste
-// fornecedor).
-function FornecedoresCadastro({ fornecedores, setFornecedores, solicitacoesCompra, cotacoesCompra, materiais }) {
-  const [nome, setNome] = useState("");
-  const [contato, setContato] = useState("");
-  const [categoria, setCategoria] = useState("");
-  const [observacao, setObservacao] = useState("");
-  const [editandoId, setEditandoId] = useState(null);
-  const [nomeEdicao, setNomeEdicao] = useState("");
-  const [contatoEdicao, setContatoEdicao] = useState("");
-  const [categoriaEdicao, setCategoriaEdicao] = useState("");
-  const [observacaoEdicao, setObservacaoEdicao] = useState("");
-  const [expandidoId, setExpandidoId] = useState(null);
-
-  async function adicionar() {
-    if (!nome.trim()) return;
-    // Adicionado: código numérico sequencial de cadastro — é esse código
-    // que compõe o código do material (fornecedor + sequência) em
-    // Cadastros → Materiais.
-    const codigo = (fornecedores || []).reduce((max, f) => Math.max(max, f.codigo || 0), 0) + 1;
-    await setFornecedores([...(fornecedores || []), {
-      id: uid(), codigo, nome: nome.trim(), contato: contato.trim(), categoria: categoria.trim(), observacao: observacao.trim(),
-    }]);
-    setNome(""); setContato(""); setCategoria(""); setObservacao("");
-  }
-  async function excluir(id) {
-    if (!window.confirm("Excluir este fornecedor? As cotações já registradas com ele mantêm o nome salvo.")) return;
-    await setFornecedores((fornecedores || []).filter(f => f.id !== id));
-  }
-  function iniciarEdicao(f) {
-    setEditandoId(f.id); setNomeEdicao(f.nome); setContatoEdicao(f.contato || ""); setCategoriaEdicao(f.categoria || ""); setObservacaoEdicao(f.observacao || "");
-  }
-  async function salvarEdicao(id) {
-    if (!nomeEdicao.trim()) return;
-    await setFornecedores((fornecedores || []).map(f => f.id === id ? {
-      ...f, nome: nomeEdicao.trim(), contato: contatoEdicao.trim(), categoria: categoriaEdicao.trim(), observacao: observacaoEdicao.trim(),
-    } : f));
-    setEditandoId(null);
-  }
-  const nomeMaterial = (id) => (materiais || []).find(m => m.id === id)?.nome || "—";
-
-  // Histórico: para cada fornecedor, todas as cotações dele que venceram
-  // a negociação (viraram compra), mais recentes primeiro.
-  function historicoDoFornecedor(fornecedorId) {
-    return (cotacoesCompra || [])
-      .filter(c => c.fornecedorId === fornecedorId)
-      .map(c => ({ cotacao: c, solicitacao: (solicitacoesCompra || []).find(s => s.cotacaoEscolhidaId === c.id) }))
-      .filter(x => x.solicitacao)
-      .sort((a, b) => new Date(b.solicitacao.concluidaEm || 0) - new Date(a.solicitacao.concluidaEm || 0));
-  }
-
-  return (
-    <div>
-      <Card style={{ marginBottom: 16 }}>
-        <div style={{ fontSize: 15, fontWeight: 800, fontFamily: FONT_DISPLAY, marginBottom: 12, color: "#1c2b39" }}>Novo fornecedor</div>
-        <Field label="Nome"><input value={nome} onChange={e => setNome(e.target.value)} placeholder="Nome ou razão social" style={inputStyle} /></Field>
-        <Field label="Contato (opcional)"><input value={contato} onChange={e => setContato(e.target.value)} placeholder="Telefone, WhatsApp ou e-mail" style={inputStyle} /></Field>
-        <Field label="Categoria (opcional)"><input value={categoria} onChange={e => setCategoria(e.target.value)} placeholder="Ex.: Tecidos, Aviamentos, Embalagens" style={inputStyle} /></Field>
-        <Field label="Observação (opcional)"><input value={observacao} onChange={e => setObservacao(e.target.value)} placeholder="Ex.: prazo médio de entrega, condição preferida" style={inputStyle} /></Field>
-        <PrimaryButton onClick={adicionar} disabled={!nome.trim()} style={{ width: "100%" }}><Plus size={16} /> Adicionar fornecedor</PrimaryButton>
-      </Card>
-      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-        {(fornecedores || []).map(f => {
-          const editando = editandoId === f.id;
-          const aberto = expandidoId === f.id;
-          const historico = historicoDoFornecedor(f.id);
-          return (
-            <Card key={f.id} style={{ padding: 0, overflow: "hidden" }}>
-              <div style={{ padding: "11px 14px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                <div onClick={() => !editando && setExpandidoId(aberto ? null : f.id)} style={{ cursor: "pointer", flex: 1 }}>
-                  <div style={{ fontWeight: 700, fontSize: 14, color: "#2a2015" }}>
-                    {f.codigo != null && <span style={{ color: "#a3937a", fontWeight: 600, fontFamily: "monospace" }}>{String(f.codigo).padStart(3, "0")} · </span>}
-                    {f.nome}
-                  </div>
-                  <div style={{ fontSize: 12, color: "#a3937a" }}>
-                    {f.categoria ? `${f.categoria} · ` : ""}{f.contato || "sem contato"} · {historico.length} compra{historico.length !== 1 ? "s" : ""}
-                  </div>
-                </div>
-                <IconButton onClick={(e) => { e.stopPropagation(); iniciarEdicao(f); setExpandidoId(f.id); }} title="Editar"><ClipboardList size={15} /></IconButton>
-                <IconButton onClick={(e) => { e.stopPropagation(); excluir(f.id); }} danger title="Excluir"><Trash2 size={15} /></IconButton>
-              </div>
-              {aberto && (
-                <div style={{ borderTop: "1px solid #efe8d8", padding: 14, background: "#faf6ec" }}>
-                  {editando && (
-                    <div style={{ marginBottom: 14, paddingBottom: 14, borderBottom: "1px solid #efe8d8" }}>
-                      <Field label="Nome"><input value={nomeEdicao} onChange={e => setNomeEdicao(e.target.value)} style={inputStyle} /></Field>
-                      <Field label="Contato (opcional)"><input value={contatoEdicao} onChange={e => setContatoEdicao(e.target.value)} style={inputStyle} /></Field>
-                      <Field label="Categoria (opcional)"><input value={categoriaEdicao} onChange={e => setCategoriaEdicao(e.target.value)} style={inputStyle} /></Field>
-                      <Field label="Observação (opcional)"><input value={observacaoEdicao} onChange={e => setObservacaoEdicao(e.target.value)} style={inputStyle} /></Field>
-                      <div style={{ display: "flex", gap: 8 }}>
-                        <PrimaryButton onClick={() => salvarEdicao(f.id)} disabled={!nomeEdicao.trim()} style={{ flex: 1 }}>Salvar</PrimaryButton>
-                        <button onClick={() => setEditandoId(null)} style={{ border: "1.5px solid #d9cfb7", background: "#fff", borderRadius: 9, padding: "0 14px", color: "#6b5d49", fontWeight: 700, cursor: "pointer" }}>Cancelar</button>
-                      </div>
-                    </div>
-                  )}
-                  <div style={{ fontSize: 12, fontWeight: 700, color: "#1c2b39", marginBottom: 8 }}>Histórico das últimas compras</div>
-                  {historico.length === 0 ? (
-                    <div style={{ fontSize: 12, color: "#a3937a" }}>Nenhuma compra fechada com este fornecedor ainda.</div>
-                  ) : (
-                    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                      {historico.slice(0, 20).map(({ cotacao, solicitacao }) => (
-                        <div key={cotacao.id} style={{ background: "#fff", border: "1px solid #e6ddc8", borderRadius: 8, padding: "8px 10px" }}>
-                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
-                            <div>
-                              <div style={{ fontWeight: 700, fontSize: 13, color: "#2a2015" }}>{nomeMaterial(solicitacao.materialId)}</div>
-                              <div style={{ fontSize: 11.5, color: "#6b5d49" }}>{solicitacao.quantidade} un. · {cotacao.precoUnitario.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}/un.</div>
-                            </div>
-                            <div style={{ textAlign: "right" }}>
-                              <div style={{ fontSize: 13, fontWeight: 800, color: "#1c2b39" }}>{(cotacao.precoUnitario * solicitacao.quantidade).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}</div>
-                              <div style={{ fontSize: 10.5, color: "#a3937a" }}>{solicitacao.concluidaEm ? new Date(solicitacao.concluidaEm).toLocaleDateString("pt-BR") : "—"}</div>
-                            </div>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              )}
-            </Card>
-          );
-        })}
-        {(!fornecedores || fornecedores.length === 0) && <div style={{ fontSize: 13.5, color: "#a3937a", padding: "8px 2px" }}>Nenhum fornecedor cadastrado.</div>}
-      </div>
-    </div>
-  );
-}
-
-const STATUS_EQUIPAMENTO = [
-  { key: "ativo", label: "Ativo", color: "#1a7a4c", bg: "#e6f4ec" },
-  { key: "manutencao", label: "Em manutenção", color: "#b5820a", bg: "#fdf3e0" },
-  { key: "inativo", label: "Inativo", color: "#b13232", bg: "#f8e6e6" },
-];
-
-// ---------- Equipamentos (máquinas por departamento) ----------
-// Adicionado: cadastro de equipamentos/máquinas (ex.: overlock, galoneira,
-// reta, plotter de corte, máquina de silk), vinculados a um departamento.
-// Usado ao iniciar uma etapa de produção, para registrar em qual
-// equipamento o trabalho foi feito.
-function EquipamentosCadastro({ equipamentos, setEquipamentos, setores }) {
-  const [nome, setNome] = useState("");
-  const [tipo, setTipo] = useState("");
-  const [setorId, setSetorId] = useState("");
-  const [status, setStatus] = useState("ativo");
-  const [editandoId, setEditandoId] = useState(null);
-  const [nomeEdicao, setNomeEdicao] = useState("");
-  const [tipoEdicao, setTipoEdicao] = useState("");
-  const [setorEdicao, setSetorEdicao] = useState("");
-  const [statusEdicao, setStatusEdicao] = useState("ativo");
-
-  async function adicionar() {
-    if (!nome.trim()) return;
-    await setEquipamentos([...(equipamentos || []), {
-      id: uid(), nome: nome.trim(), tipo: tipo.trim(), setorId: setorId || null, status,
-    }]);
-    setNome(""); setTipo(""); setSetorId(""); setStatus("ativo");
-  }
-  async function excluir(id) {
-    if (!window.confirm("Excluir este equipamento?")) return;
-    await setEquipamentos((equipamentos || []).filter(e => e.id !== id));
-  }
-  function iniciarEdicao(e) {
-    setEditandoId(e.id); setNomeEdicao(e.nome); setTipoEdicao(e.tipo || ""); setSetorEdicao(e.setorId || ""); setStatusEdicao(e.status || "ativo");
-  }
-  async function salvarEdicao(id) {
-    if (!nomeEdicao.trim()) return;
-    await setEquipamentos((equipamentos || []).map(e => e.id === id ? {
-      ...e, nome: nomeEdicao.trim(), tipo: tipoEdicao.trim(), setorId: setorEdicao || null, status: statusEdicao,
-    } : e));
-    setEditandoId(null);
-  }
-  const nomeSetor = (id) => setores.find(s => s.id === id)?.nome || "Sem departamento";
-  const infoStatus = (key) => STATUS_EQUIPAMENTO.find(s => s.key === key) || STATUS_EQUIPAMENTO[0];
-
-  return (
-    <div>
-      <Card style={{ marginBottom: 16 }}>
-        <div style={{ fontSize: 15, fontWeight: 800, fontFamily: FONT_DISPLAY, marginBottom: 12, color: "#1c2b39" }}>Novo equipamento</div>
-        <Field label="Nome"><input value={nome} onChange={e => setNome(e.target.value)} placeholder="Ex.: Overlock 03, Plotter de corte" style={inputStyle} /></Field>
-        <Field label="Tipo/modelo (opcional)"><input value={tipo} onChange={e => setTipo(e.target.value)} placeholder="Ex.: Overlock 5 fios" style={inputStyle} /></Field>
-        <Field label="Departamento (opcional)">
-          <Select value={setorId} onChange={e => setSetorId(e.target.value)}>
-            <option value="">Sem departamento</option>
-            {setores.map(s => <option key={s.id} value={s.id}>{s.nome}</option>)}
-          </Select>
-        </Field>
-        <Field label="Status">
-          <div style={{ display: "flex", gap: 8 }}>
-            {STATUS_EQUIPAMENTO.map(s => (
-              <ToggleChip key={s.key} ativo={status === s.key} colorAtivo={s.color} onClick={() => setStatus(s.key)}>{s.label}</ToggleChip>
-            ))}
-          </div>
-        </Field>
-        <PrimaryButton onClick={adicionar} disabled={!nome.trim()} style={{ width: "100%" }}><Plus size={16} /> Adicionar equipamento</PrimaryButton>
-      </Card>
-      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-        {(equipamentos || []).map(eq => {
-          const editando = editandoId === eq.id;
-          const info = infoStatus(eq.status);
-          return (
-            <Card key={eq.id} style={{ padding: "11px 14px" }}>
-              {editando ? (
-                <div>
-                  <Field label="Nome"><input value={nomeEdicao} onChange={e => setNomeEdicao(e.target.value)} style={inputStyle} /></Field>
-                  <Field label="Tipo/modelo (opcional)"><input value={tipoEdicao} onChange={e => setTipoEdicao(e.target.value)} style={inputStyle} /></Field>
-                  <Field label="Departamento (opcional)">
-                    <Select value={setorEdicao} onChange={e => setSetorEdicao(e.target.value)}>
-                      <option value="">Sem departamento</option>
-                      {setores.map(s => <option key={s.id} value={s.id}>{s.nome}</option>)}
-                    </Select>
-                  </Field>
-                  <Field label="Status">
-                    <div style={{ display: "flex", gap: 8 }}>
-                      {STATUS_EQUIPAMENTO.map(s => (
-                        <ToggleChip key={s.key} ativo={statusEdicao === s.key} colorAtivo={s.color} onClick={() => setStatusEdicao(s.key)}>{s.label}</ToggleChip>
-                      ))}
-                    </div>
-                  </Field>
-                  <div style={{ display: "flex", gap: 8 }}>
-                    <PrimaryButton onClick={() => salvarEdicao(eq.id)} disabled={!nomeEdicao.trim()} style={{ flex: 1 }}>Salvar</PrimaryButton>
-                    <button onClick={() => setEditandoId(null)} style={{ border: "1.5px solid #d9cfb7", background: "#fff", borderRadius: 9, padding: "0 14px", color: "#6b5d49", fontWeight: 700, cursor: "pointer" }}>Cancelar</button>
-                  </div>
-                </div>
-              ) : (
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                  <div>
-                    <div style={{ fontWeight: 700, fontSize: 14, color: "#2a2015" }}>{eq.nome}</div>
-                    <div style={{ fontSize: 12, color: "#a3937a" }}>{eq.tipo ? `${eq.tipo} · ` : ""}{nomeSetor(eq.setorId)}</div>
-                  </div>
-                  <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-                    <span style={{ fontSize: 10.5, fontWeight: 700, color: info.color, background: info.bg, border: `1px dashed ${info.color}`, padding: "2px 8px 2px 7px", borderRadius: "3px 8px 8px 3px" }}>{info.label}</span>
-                    <IconButton onClick={() => iniciarEdicao(eq)} title="Editar"><ClipboardList size={15} /></IconButton>
-                    <IconButton onClick={() => excluir(eq.id)} danger title="Excluir"><Trash2 size={15} /></IconButton>
-                  </div>
-                </div>
-              )}
-            </Card>
-          );
-        })}
-        {(!equipamentos || equipamentos.length === 0) && <div style={{ fontSize: 13.5, color: "#a3937a", padding: "8px 2px" }}>Nenhum equipamento cadastrado.</div>}
-      </div>
-    </div>
-  );
-}
-
-// ---------- Clientes (cadastro simples, usado para amarrar a OP) ----------
-function ClientesCadastro({ clientes, setClientes }) {
-  const [nome, setNome] = useState("");
-  const [contato, setContato] = useState("");
-  const [observacao, setObservacao] = useState("");
-  const [editandoId, setEditandoId] = useState(null);
-  const [nomeEdicao, setNomeEdicao] = useState("");
-  const [contatoEdicao, setContatoEdicao] = useState("");
-  const [observacaoEdicao, setObservacaoEdicao] = useState("");
-
-  async function adicionar() {
-    if (!nome.trim()) return;
-    await setClientes([...(clientes || []), { id: uid(), nome: nome.trim(), contato: contato.trim(), observacao: observacao.trim() }]);
-    setNome(""); setContato(""); setObservacao("");
-  }
-  async function excluir(id) {
-    if (!window.confirm("Excluir este cliente? Ordens de produção já vinculadas a ele mantêm o nome salvo.")) return;
-    await setClientes((clientes || []).filter(c => c.id !== id));
-  }
-  function iniciarEdicao(c) { setEditandoId(c.id); setNomeEdicao(c.nome); setContatoEdicao(c.contato || ""); setObservacaoEdicao(c.observacao || ""); }
-  async function salvarEdicao(id) {
-    if (!nomeEdicao.trim()) return;
-    await setClientes((clientes || []).map(c => c.id === id ? { ...c, nome: nomeEdicao.trim(), contato: contatoEdicao.trim(), observacao: observacaoEdicao.trim() } : c));
-    setEditandoId(null);
-  }
-
-  return (
-    <div>
-      <Card style={{ marginBottom: 16 }}>
-        <div style={{ fontSize: 15, fontWeight: 800, fontFamily: FONT_DISPLAY, marginBottom: 12, color: "#1c2b39" }}>Novo cliente</div>
-        <Field label="Nome"><input value={nome} onChange={e => setNome(e.target.value)} placeholder="Nome ou razão social" style={inputStyle} /></Field>
-        <Field label="Contato (opcional)"><input value={contato} onChange={e => setContato(e.target.value)} placeholder="Telefone, WhatsApp ou e-mail" style={inputStyle} /></Field>
-        <Field label="Observação (opcional)"><input value={observacao} onChange={e => setObservacao(e.target.value)} placeholder="Ex.: sempre pede embalagem individual" style={inputStyle} /></Field>
-        <PrimaryButton onClick={adicionar} disabled={!nome.trim()} style={{ width: "100%" }}><Plus size={16} /> Adicionar cliente</PrimaryButton>
-      </Card>
-      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-        {(clientes || []).map(c => {
-          const editando = editandoId === c.id;
-          return (
-            <Card key={c.id} style={{ padding: "11px 14px" }}>
-              {editando ? (
-                <div>
-                  <Field label="Nome"><input value={nomeEdicao} onChange={e => setNomeEdicao(e.target.value)} style={inputStyle} /></Field>
-                  <Field label="Contato (opcional)"><input value={contatoEdicao} onChange={e => setContatoEdicao(e.target.value)} style={inputStyle} /></Field>
-                  <Field label="Observação (opcional)"><input value={observacaoEdicao} onChange={e => setObservacaoEdicao(e.target.value)} style={inputStyle} /></Field>
-                  <div style={{ display: "flex", gap: 8 }}>
-                    <PrimaryButton onClick={() => salvarEdicao(c.id)} disabled={!nomeEdicao.trim()} style={{ flex: 1 }}>Salvar</PrimaryButton>
-                    <button onClick={() => setEditandoId(null)} style={{ border: "1.5px solid #d9cfb7", background: "#fff", borderRadius: 9, padding: "0 14px", color: "#6b5d49", fontWeight: 700, cursor: "pointer" }}>Cancelar</button>
-                  </div>
-                </div>
-              ) : (
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                  <div>
-                    <div style={{ fontWeight: 700, fontSize: 14, color: "#2a2015" }}>{c.nome}</div>
-                    {c.contato && <div style={{ fontSize: 12.5, color: "#6b5d49" }}>{c.contato}</div>}
-                    {c.observacao && <div style={{ fontSize: 11.5, color: "#a3937a", marginTop: 2 }}>{c.observacao}</div>}
-                  </div>
-                  <div style={{ display: "flex" }}>
-                    <IconButton onClick={() => iniciarEdicao(c)} title="Editar"><ClipboardList size={15} /></IconButton>
-                    <IconButton onClick={() => excluir(c.id)} danger title="Excluir"><Trash2 size={15} /></IconButton>
-                  </div>
-                </div>
-              )}
-            </Card>
-          );
-        })}
-        {(!clientes || clientes.length === 0) && <div style={{ fontSize: 13.5, color: "#a3937a", padding: "8px 2px" }}>Nenhum cliente cadastrado.</div>}
-      </div>
-    </div>
-  );
-}
-
-// ---------- Feriados (usados na liberação de produção) ----------
-// Adicionado: cadastro simples de feriados (data + descrição) — a
-// liberação de produção usa essa lista para impedir programar nesses
-// dias (junto com domingos, que já são bloqueados por padrão).
-function FeriadosCadastro({ feriados, setFeriados }) {
-  const [data, setData] = useState("");
-  const [descricao, setDescricao] = useState("");
-
-  async function adicionar() {
-    if (!data) return;
-    await setFeriados([...(feriados || []), { id: uid(), data, descricao: descricao.trim() }]);
-    setData(""); setDescricao("");
-  }
-  async function excluir(id) {
-    if (!window.confirm("Excluir este feriado?")) return;
-    await setFeriados((feriados || []).filter(f => f.id !== id));
-  }
-  const ordenados = [...(feriados || [])].sort((a, b) => a.data.localeCompare(b.data));
-
-  return (
-    <div>
-      <Card style={{ marginBottom: 16 }}>
-        <div style={{ fontSize: 15, fontWeight: 800, fontFamily: FONT_DISPLAY, marginBottom: 12, color: "#1c2b39" }}>Novo feriado</div>
-        <div style={{ fontSize: 12.5, color: "#6b5d49", marginBottom: 12 }}>
-          Datas cadastradas aqui ficam bloqueadas para programar produção — junto com os domingos, que já são bloqueados por padrão. Sábados exigem autorização de um Gestor ou Administrador, mas não precisam ser cadastrados aqui.
-        </div>
-        <Field label="Data"><input type="date" value={data} onChange={e => setData(e.target.value)} style={inputStyle} /></Field>
-        <Field label="Descrição (opcional)"><input value={descricao} onChange={e => setDescricao(e.target.value)} placeholder="Ex.: Independência, recesso da fábrica" style={inputStyle} /></Field>
-        <PrimaryButton onClick={adicionar} disabled={!data} style={{ width: "100%" }}><Plus size={16} /> Adicionar feriado</PrimaryButton>
-      </Card>
-      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-        {ordenados.map(f => (
-          <Card key={f.id} style={{ padding: "11px 14px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <div>
-              <div style={{ fontWeight: 700, fontSize: 14, color: "#2a2015" }}>{new Date(f.data + "T12:00:00").toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit", year: "numeric", weekday: "long" })}</div>
-              {f.descricao && <div style={{ fontSize: 12.5, color: "#6b5d49" }}>{f.descricao}</div>}
-            </div>
-            <IconButton onClick={() => excluir(f.id)} danger title="Excluir"><Trash2 size={15} /></IconButton>
-          </Card>
-        ))}
-        {ordenados.length === 0 && <div style={{ fontSize: 13.5, color: "#a3937a", padding: "8px 2px" }}>Nenhum feriado cadastrado.</div>}
-      </div>
-    </div>
-  );
-}
-
-// Adicionado: grupo de materiais, tipo de tecido e cor viraram cadastros
-// próprios — cada um com um código numérico sequencial atribuído na
-// ordem em que é criado (ex.: "AVENTAL" = grupo 001, "TACTEL" = tipo
-// 001, "PRETO" = cor 001). O código do produto é a junção desses três
-// códigos, separados por ponto (ex.: 001.001.001), com uma descrição por
-// extenso ao lado pra facilitar a leitura (ex.: "AVENTAL TACTEL P").
-// Adicionado: tamanho é cadastro próprio com código numérico sequencial
-// (ex.: "P" = tamanho 001) e entra como 3º segmento do código do produto.
-//
-// Corrigido: "cor" foi removida do cadastro de produtos. "Tipo de
-// tecido" deixou de ser um cadastro próprio escolhido direto no produto
-// — agora o produto busca o tecido na base de Materiais, herdando o
-// segmento "tipo" do próprio código de cadastro do material escolhido.
-function montarCodigoProduto({ grupoCodigo, tipoCodigo, tamanhoCodigo }) {
-  const seg = (n) => String(n || 0).padStart(3, "0");
-  return `${seg(grupoCodigo)}.${seg(tipoCodigo)}.${seg(tamanhoCodigo)}`;
-}
-function descricaoCodigoProduto({ grupoNome, tipoNome, tamanhoNome }) {
-  return [grupoNome, tipoNome, tamanhoNome].filter(Boolean).join(" ") || "—";
-}
-
-function ProdutosCadastro({ produtos, setProdutos, etapas, vinculos, setVinculos, setores, materiais, consumosMaterial, setConsumosMaterial, colaboradores, gruposProduto, setGruposProduto, tamanhos, setTamanhos, ehAdministrador }) {
-  const [nome, setNome] = useState("");
-  const [expandido, setExpandido] = useState(null);
-  const [novaEtapaId, setNovaEtapaId] = useState("");
-  const [novoTempoMin, setNovoTempoMin] = useState("");
-  const [novoTempoSeg, setNovoTempoSeg] = useState("");
-  const [editandoId, setEditandoId] = useState(null);
-  const [nomeEdicao, setNomeEdicao] = useState("");
-  const [novoMaterialId, setNovoMaterialId] = useState("");
-  const [novaQtdMaterial, setNovaQtdMaterial] = useState("");
-  // Adicionado: grupo de materiais e tamanho — seleções de cadastros
-  // próprios (com opção de criar um novo ali mesmo). Tamanho é
-  // obrigatório; grupo continua opcional.
-  //
-  // Corrigido: o tecido do produto agora é um material de verdade,
-  // buscado na base de Materiais (materialTecidoId), em vez de um
-  // cadastro de "tipo de tecido" à parte.
-  const [grupoProdutoId, setGrupoProdutoId] = useState("");
-  const [materialTecidoId, setMaterialTecidoId] = useState("");
-  const [tamanhoId, setTamanhoId] = useState("");
-  const [novoGrupoAberto, setNovoGrupoAberto] = useState(false);
-  const [novoGrupoNome, setNovoGrupoNome] = useState("");
-  const [novoTamanhoAberto, setNovoTamanhoAberto] = useState(false);
-  const [novoTamanhoNome, setNovoTamanhoNome] = useState("");
-  const [grupoProdutoIdEdicao, setGrupoProdutoIdEdicao] = useState("");
-  const [materialTecidoIdEdicao, setMaterialTecidoIdEdicao] = useState("");
-  const [tamanhoIdEdicao, setTamanhoIdEdicao] = useState("");
-  const [novoGrupoAbertoEdicao, setNovoGrupoAbertoEdicao] = useState(false);
-  const [novoGrupoNomeEdicao, setNovoGrupoNomeEdicao] = useState("");
-  const [novoTamanhoAbertoEdicao, setNovoTamanhoAbertoEdicao] = useState(false);
-  const [novoTamanhoNomeEdicao, setNovoTamanhoNomeEdicao] = useState("");
-  const [buscaProduto, setBuscaProduto] = useState("");
-
-  async function criarGrupo(nomeBruto, aoCriar) {
-    const nomeCriado = nomeBruto.trim().toUpperCase();
-    if (!nomeCriado) return;
-    const codigo = gruposProduto.reduce((max, g) => Math.max(max, g.codigo || 0), 0) + 1;
-    const novo = { id: uid(), codigo, nome: nomeCriado };
-    await setGruposProduto([...gruposProduto, novo]);
-    aoCriar(novo.id);
-  }
-  async function criarTamanho(nomeBruto, aoCriar) {
-    const nomeCriado = nomeBruto.trim().toUpperCase();
-    if (!nomeCriado) return;
-    const codigo = tamanhos.reduce((max, t) => Math.max(max, t.codigo || 0), 0) + 1;
-    const novo = { id: uid(), codigo, nome: nomeCriado };
-    await setTamanhos([...tamanhos, novo]);
-    aoCriar(novo.id);
-  }
-  const nomeGrupo = (id) => gruposProduto.find(g => g.id === id)?.nome || null;
-  const nomeTamanho = (id) => tamanhos.find(t => t.id === id)?.nome || null;
-  const codigoGrupo = (id) => gruposProduto.find(g => g.id === id)?.codigo;
-  const codigoTamanho = (id) => tamanhos.find(t => t.id === id)?.codigo;
-  // O "tipo" do produto vem do material escolhido como tecido: cada
-  // material tem sua própria sequência de cadastro (o código visível do
-  // material em Materiais é fornecedor + essa sequência), usada direto
-  // como o segmento "tipo" do código do produto.
-  const materialTecido = (id) => materiais.find(m => m.id === id) || null;
-  const nomeMaterialTecido = (id) => materialTecido(id)?.nome || null;
-  const codigoTipoDoMaterial = (id) => materialTecido(id)?.sequencia;
-  const materiaisOrdenados = useMemo(() => [...materiais].sort((a, b) => a.nome.localeCompare(b.nome)), [materiais]);
-
-  const podeCriarProduto = nome.trim().length > 0 && !!tamanhoId;
-
-  async function adicionarProduto() {
-    if (!podeCriarProduto) return;
-    // A sequência (ordem de entrada/lançamento) fica guardada no produto
-    // pra referência, mas não entra mais no código — o código é
-    // grupo.tipo.tamanho, como pedido.
-    const sequencia = produtos.reduce((max, p) => Math.max(max, p.sequencia || 0), 0) + 1;
-    const p = {
-      id: uid(), sequencia,
-      nome: nome.trim().toUpperCase(),
-      grupoProdutoId: grupoProdutoId || null, grupoProdutoNomeSnap: nomeGrupo(grupoProdutoId),
-      materialTecidoId: materialTecidoId || null, materialTecidoNomeSnap: nomeMaterialTecido(materialTecidoId),
-      tamanhoId, tamanhoNomeSnap: nomeTamanho(tamanhoId),
-      codigo: montarCodigoProduto({ grupoCodigo: codigoGrupo(grupoProdutoId), tipoCodigo: codigoTipoDoMaterial(materialTecidoId), tamanhoCodigo: codigoTamanho(tamanhoId) }),
+  function finalizar(tipo) {
+    const q = tipo === 'total' ? restante : num(qtdFinal);
+    if (tipo === 'parcial' && (q <= 0 || q > restante)) {
+      alert(`Informe uma quantidade entre 1 e ${restante}.`);
+      return;
+    }
+    const novoTotal = jaFeito + q;
+    const completou = novoTotal >= qtdBase;
+    const registro = {
+      id: uid(),
+      quando: agoraISO(),
+      tipo,
+      quantidade: q,
+      acumulado: novoTotal,
+      observacao: obs
     };
-    await setProdutos([...produtos, p]);
-    setNome(""); setGrupoProdutoId(""); setMaterialTecidoId(""); setTamanhoId("");
-    setExpandido(p.id);
-  }
-  async function excluirProduto(id) {
-    if (!window.confirm("Excluir este produto e todos os vínculos de etapas e materiais dele?")) return;
-    await setProdutos(produtos.filter(p => p.id !== id));
-    await setVinculos(vinculos.filter(v => v.produtoId !== id));
-    await setConsumosMaterial(consumosMaterial.filter(c => c.produtoId !== id));
-  }
-  function iniciarEdicaoProduto(p) {
-    setEditandoId(p.id); setNomeEdicao(p.nome);
-    setGrupoProdutoIdEdicao(p.grupoProdutoId || ""); setMaterialTecidoIdEdicao(p.materialTecidoId || ""); setTamanhoIdEdicao(p.tamanhoId || "");
-  }
-  async function salvarEdicaoProduto(id) {
-    // Corrigido: agora é possível renomear um produto sem excluir e
-    // recriar — o que antes apagava todos os vínculos de etapas e tempos
-    // estimados já cadastrados para ele.
-    if (!nomeEdicao.trim() || !tamanhoIdEdicao) return;
-    await setProdutos(produtos.map(p => p.id === id ? {
-      ...p, nome: nomeEdicao.trim().toUpperCase(),
-      grupoProdutoId: grupoProdutoIdEdicao || null, grupoProdutoNomeSnap: nomeGrupo(grupoProdutoIdEdicao),
-      materialTecidoId: materialTecidoIdEdicao || null, materialTecidoNomeSnap: nomeMaterialTecido(materialTecidoIdEdicao),
-      tamanhoId: tamanhoIdEdicao, tamanhoNomeSnap: nomeTamanho(tamanhoIdEdicao),
-      codigo: montarCodigoProduto({ grupoCodigo: codigoGrupo(grupoProdutoIdEdicao), tipoCodigo: codigoTipoDoMaterial(materialTecidoIdEdicao), tamanhoCodigo: codigoTamanho(tamanhoIdEdicao) }),
-    } : p));
-    setEditandoId(null);
-  }
-  async function vincularEtapa(produtoId) {
-    const min = parseInt(novoTempoMin || "0", 10);
-    // Corrigido: segundos digitados acima de 59 (ex.: "90") eram somados
-    // normalmente ao total, então não travava o cálculo — mas o campo não
-    // avisava o usuário. Agora o valor é limitado a 0–59 na própria tela.
-    const segBruto = parseInt(novoTempoSeg || "0", 10);
-    const seg = Math.min(Math.max(segBruto, 0), 59);
-    const total = min * 60 + seg;
-    if (!novaEtapaId || total <= 0) return;
-    const existente = vinculos.find(v => v.produtoId === produtoId && v.etapaId === novaEtapaId);
-    if (existente) {
-      await setVinculos(vinculos.map(v => v.id === existente.id ? { ...v, tempoEstimadoSeg: total } : v));
-    } else {
-      // Adicionado: cada vínculo guarda uma "ordem" — a posição da etapa
-      // na sequência de produção do produto (usada pelas Ordens de
-      // Produção para saber qual é a próxima etapa do lote). Uma etapa
-      // nova entra no fim da fila por padrão.
-      const vinculosDoProduto = vinculos.filter(v => v.produtoId === produtoId);
-      const maiorOrdem = vinculosDoProduto.reduce((max, v) => Math.max(max, v.ordem ?? 0), -1);
-      await setVinculos([...vinculos, { id: uid(), produtoId, etapaId: novaEtapaId, tempoEstimadoSeg: total, ordem: maiorOrdem + 1 }]);
+    patchEtapa({
+      qtdConcluida: novoTotal,
+      status: completou ? 'Concluída' : 'Em andamento',
+      dataConclusao: completou ? todayISO() : '',
+      observacao: obs,
+      finalizacoes: [...(etapa.finalizacoes || []), registro]
+    });
+    setQtdFinal('');
+    if (!completou) {
+      alert(`Produção parcial registrada: ${q} peça(s). Restam ${qtdBase - novoTotal} — a etapa e a OP continuam em aberto.`);
     }
-    setNovaEtapaId(""); setNovoTempoMin(""); setNovoTempoSeg("");
+    onClose();
   }
-  async function removerVinculo(vid) { await setVinculos(vinculos.filter(v => v.id !== vid)); }
-  async function moverVinculo(produtoId, vinculoId, direcao) {
-    // Adicionado: reordena a sequência de etapas do produto trocando a
-    // "ordem" do vínculo selecionado com a do vizinho (sobe/desce na
-    // lista). É essa ordem que define a sequência da Ordem de Produção.
-    const ordenados = [...vinculos.filter(v => v.produtoId === produtoId)].sort((a, b) => (a.ordem ?? 0) - (b.ordem ?? 0));
-    const idx = ordenados.findIndex(v => v.id === vinculoId);
-    const alvoIdx = idx + direcao;
-    if (idx === -1 || alvoIdx < 0 || alvoIdx >= ordenados.length) return;
-    const atual = ordenados[idx];
-    const vizinho = ordenados[alvoIdx];
-    const ordemAtual = atual.ordem ?? idx;
-    const ordemVizinho = vizinho.ordem ?? alvoIdx;
-    await setVinculos(vinculos.map(v => {
-      if (v.id === atual.id) return { ...v, ordem: ordemVizinho };
-      if (v.id === vizinho.id) return { ...v, ordem: ordemAtual };
-      return v;
-    }));
-  }
-  const nomeEtapa = (id) => etapas.find(e => e.id === id)?.nome || "—";
-
-  // Adicionado: ficha de consumo de materiais do produto — quanto de cada
-  // material uma peça consome. Alimenta a baixa automática de estoque
-  // quando a OP é concluída (ver Consumo → Movimentações).
-  async function vincularMaterial(produtoId) {
-    const qtd = parseFloat(novaQtdMaterial || "0");
-    if (!novoMaterialId || !(qtd > 0)) return;
-    const existente = consumosMaterial.find(c => c.produtoId === produtoId && c.materialId === novoMaterialId);
-    if (existente) {
-      await setConsumosMaterial(consumosMaterial.map(c => c.id === existente.id ? { ...c, quantidadePorPeca: qtd } : c));
-    } else {
-      await setConsumosMaterial([...consumosMaterial, { id: uid(), produtoId, materialId: novoMaterialId, quantidadePorPeca: qtd }]);
+  const finalizacoes = etapa.finalizacoes || [];
+  return /*#__PURE__*/React.createElement(Modal, {
+    title: `${rotuloOP(op)} · ${etapa.nome}`,
+    onClose: onClose,
+    wide: true
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "small muted",
+    style: {
+      marginBottom: 12
     }
-    setNovoMaterialId(""); setNovaQtdMaterial("");
-  }
-  async function removerConsumoMaterial(cid) { await setConsumosMaterial(consumosMaterial.filter(c => c.id !== cid)); }
-  const nomeMaterial = (id) => materiais.find(m => m.id === id)?.nome || "—";
-  const unidadeMaterial = (id) => materiais.find(m => m.id === id)?.unidade || "";
-
-  // Adicionado: custo estimado por peça, combinando mão de obra e
-  // material — dá uma referência de custo unitário direto no cadastro,
-  // sem precisar abrir uma OP ou orçamento pra ter uma ideia do custo.
-  // Mão de obra usa o salário médio dos colaboradores (convertido para
-  // valor-hora com a mesma base de 220h/mês do relatório de custos),
-  // já que o produto ainda não tem colaborador definido nessa etapa.
-  const colaboradoresComSalario = (colaboradores || []).filter(c => c.salarioMensal);
-  const valorHoraMedio = colaboradoresComSalario.length > 0
-    ? colaboradoresComSalario.reduce((s, c) => s + c.salarioMensal, 0) / colaboradoresComSalario.length / HORAS_MES_PADRAO
-    : 0;
-  function custoDoProduto(produtoId) {
-    const vinculosProduto = vinculos.filter(v => v.produtoId === produtoId);
-    const vinculosPeca = vinculosProduto.filter(v => (etapas.find(e => e.id === v.etapaId)?.tipoCalculo || "peca") !== "lote");
-    const vinculosLote = vinculosProduto.filter(v => (etapas.find(e => e.id === v.etapaId)?.tipoCalculo || "peca") === "lote");
-    const maoDeObra = vinculosPeca.reduce((s, v) => s + (v.tempoEstimadoSeg / 3600) * valorHoraMedio, 0);
-    const material = consumosMaterial.filter(c => c.produtoId === produtoId)
-      .reduce((s, c) => s + c.quantidadePorPeca * (materiais.find(m => m.id === c.materialId)?.preco || 0), 0);
-    return { maoDeObra, material, total: maoDeObra + material, vinculosLote };
-  }
-
-  return (
-    <div>
-      <Card style={{ marginBottom: 16 }}>
-        <div style={{ fontSize: 15, fontWeight: 800, fontFamily: FONT_DISPLAY, marginBottom: 4, color: "#1c2b39" }}>Novo produto</div>
-        <div style={{ fontSize: 11.5, color: "#a3937a", marginBottom: 10 }}>
-          Código: <b style={{ color: "#6b5d49", fontFamily: "monospace" }}>{montarCodigoProduto({ grupoCodigo: codigoGrupo(grupoProdutoId), tipoCodigo: codigoTipoDoMaterial(materialTecidoId), tamanhoCodigo: codigoTamanho(tamanhoId) })}</b> — {descricaoCodigoProduto({ grupoNome: nomeGrupo(grupoProdutoId), tipoNome: nomeMaterialTecido(materialTecidoId), tamanhoNome: nomeTamanho(tamanhoId) })}
-        </div>
-        <Field label="Nome">
-          <input value={nome} onChange={e => setNome(e.target.value.toUpperCase())} placeholder="EX.: CAMISETA BÁSICA" style={inputStyle} onKeyDown={e => e.key === "Enter" && adicionarProduto()} />
-        </Field>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
-          <Field label="Grupo de produto (opcional)">
-            <Select value={grupoProdutoId} onChange={e => setGrupoProdutoId(e.target.value)}>
-              <option value="">Selecione…</option>
-              {[...gruposProduto].sort((a, b) => a.codigo - b.codigo).map(g => <option key={g.id} value={g.id}>{String(g.codigo).padStart(3, "0")} · {g.nome}</option>)}
-            </Select>
-            <button type="button" onClick={() => setNovoGrupoAberto(v => !v)} style={linkButtonStyle}>{novoGrupoAberto ? "Cancelar" : "+ Novo grupo"}</button>
-            {novoGrupoAberto && (
-              <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
-                <input value={novoGrupoNome} onChange={e => setNovoGrupoNome(e.target.value.toUpperCase())} placeholder="NOME DO GRUPO" style={{ ...inputStyle, flex: 1 }} onKeyDown={e => e.key === "Enter" && criarGrupo(novoGrupoNome, id => { setGrupoProdutoId(id); setNovoGrupoNome(""); setNovoGrupoAberto(false); })} />
-                <PrimaryButton onClick={() => criarGrupo(novoGrupoNome, id => { setGrupoProdutoId(id); setNovoGrupoNome(""); setNovoGrupoAberto(false); })} disabled={!novoGrupoNome.trim()}><Plus size={16} /></PrimaryButton>
-              </div>
-            )}
-          </Field>
-          <Field label="Tecido (cadastro de Materiais, opcional)">
-            <Select value={materialTecidoId} onChange={e => setMaterialTecidoId(e.target.value)}>
-              <option value="">Selecione…</option>
-              {materiaisOrdenados.map(m => <option key={m.id} value={m.id}>{m.codigo != null ? `${m.codigo} · ` : ""}{m.nome}</option>)}
-            </Select>
-          </Field>
-          <Field label="Tamanho (obrigatório)">
-            <Select value={tamanhoId} onChange={e => setTamanhoId(e.target.value)}>
-              <option value="">Selecione…</option>
-              {[...tamanhos].sort((a, b) => a.codigo - b.codigo).map(t => <option key={t.id} value={t.id}>{String(t.codigo).padStart(3, "0")} · {t.nome}</option>)}
-            </Select>
-            <button type="button" onClick={() => setNovoTamanhoAberto(v => !v)} style={linkButtonStyle}>{novoTamanhoAberto ? "Cancelar" : "+ Novo tamanho"}</button>
-            {novoTamanhoAberto && (
-              <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
-                <input value={novoTamanhoNome} onChange={e => setNovoTamanhoNome(e.target.value.toUpperCase())} placeholder="EX.: P" style={{ ...inputStyle, flex: 1 }} onKeyDown={e => e.key === "Enter" && criarTamanho(novoTamanhoNome, id => { setTamanhoId(id); setNovoTamanhoNome(""); setNovoTamanhoAberto(false); })} />
-                <PrimaryButton onClick={() => criarTamanho(novoTamanhoNome, id => { setTamanhoId(id); setNovoTamanhoNome(""); setNovoTamanhoAberto(false); })} disabled={!novoTamanhoNome.trim()}><Plus size={16} /></PrimaryButton>
-              </div>
-            )}
-          </Field>
-        </div>
-        <PrimaryButton onClick={adicionarProduto} disabled={!podeCriarProduto} style={{ width: "100%" }}><Plus size={16} /> Adicionar produto</PrimaryButton>
-        {!tamanhoId && <div style={{ fontSize: 11, color: "#a3937a", marginTop: 6, textAlign: "center" }}>Selecione (ou cadastre) o tamanho para poder adicionar.</div>}
-      </Card>
-
-      <Card style={{ marginBottom: 16, padding: 12 }}>
-        <Field label="Pesquisar produto">
-          <input value={buscaProduto} onChange={e => setBuscaProduto(e.target.value)} placeholder="Código, nome, grupo, tecido ou tamanho…" style={inputStyle} />
-        </Field>
-      </Card>
-
-      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-        {produtos.filter(p => {
-          const termo = buscaProduto.trim().toUpperCase();
-          if (!termo) return true;
-          return [p.codigo, p.nome, p.grupoProdutoNomeSnap, p.materialTecidoNomeSnap, p.tamanhoNomeSnap].filter(Boolean).some(v => v.toUpperCase().includes(termo));
-        }).map(p => {
-          const vinculosProduto = vinculos.filter(v => v.produtoId === p.id);
-          const consumosProduto = consumosMaterial.filter(c => c.produtoId === p.id);
-          const aberto = expandido === p.id;
-          const editando = editandoId === p.id;
-          const custo = aberto ? custoDoProduto(p.id) : null;
-          return (
-            <Card key={p.id} style={{ padding: 0, overflow: "hidden" }}>
-              <div style={{ padding: "12px 14px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                <div onClick={() => !editando && setExpandido(aberto ? null : p.id)} style={{ cursor: "pointer", flex: 1 }}>
-                  <div style={{ fontWeight: 700, fontSize: 14, color: "#2a2015" }}>
-                    {p.codigo != null && <span style={{ color: "#a3937a", fontWeight: 600, fontFamily: "monospace" }}>{p.codigo} · </span>}
-                    {p.nome}
-                  </div>
-                  <div style={{ fontSize: 12, color: "#a3937a" }}>
-                    {descricaoCodigoProduto({ grupoNome: p.grupoProdutoNomeSnap, tipoNome: p.materialTecidoNomeSnap, tamanhoNome: p.tamanhoNomeSnap })}
-                    {" · "}{vinculosProduto.length} etapa{vinculosProduto.length !== 1 ? "s" : ""} vinculada{vinculosProduto.length !== 1 ? "s" : ""} · {consumosProduto.length} material{consumosProduto.length !== 1 ? "is" : ""}
-                  </div>
-                </div>
-                <IconButton onClick={(e) => { e.stopPropagation(); iniciarEdicaoProduto(p); setExpandido(p.id); }} title="Editar"><ClipboardList size={15} /></IconButton>
-                <IconButton onClick={(e) => { e.stopPropagation(); excluirProduto(p.id); }} danger title="Excluir produto"><Trash2 size={15} /></IconButton>
-              </div>
-              {aberto && (
-                <div style={{ borderTop: "1px solid #efe8d8", padding: 14, background: "#faf6ec" }}>
-                  {editando && (
-                    <div style={{ marginBottom: 14, paddingBottom: 14, borderBottom: "1px solid #efe8d8" }}>
-                      <Field label="Nome do produto">
-                        <input value={nomeEdicao} onChange={e => setNomeEdicao(e.target.value.toUpperCase())} style={inputStyle} />
-                      </Field>
-                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
-                        <Field label="Grupo de produto (opcional)">
-                          <Select value={grupoProdutoIdEdicao} onChange={e => setGrupoProdutoIdEdicao(e.target.value)}>
-                            <option value="">Selecione…</option>
-                            {[...gruposProduto].sort((a, b) => a.codigo - b.codigo).map(g => <option key={g.id} value={g.id}>{String(g.codigo).padStart(3, "0")} · {g.nome}</option>)}
-                          </Select>
-                          <button type="button" onClick={() => setNovoGrupoAbertoEdicao(v => !v)} style={linkButtonStyle}>{novoGrupoAbertoEdicao ? "Cancelar" : "+ Novo grupo"}</button>
-                          {novoGrupoAbertoEdicao && (
-                            <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
-                              <input value={novoGrupoNomeEdicao} onChange={e => setNovoGrupoNomeEdicao(e.target.value.toUpperCase())} placeholder="NOME DO GRUPO" style={{ ...inputStyle, flex: 1 }} />
-                              <PrimaryButton onClick={() => criarGrupo(novoGrupoNomeEdicao, id => { setGrupoProdutoIdEdicao(id); setNovoGrupoNomeEdicao(""); setNovoGrupoAbertoEdicao(false); })} disabled={!novoGrupoNomeEdicao.trim()}><Plus size={16} /></PrimaryButton>
-                            </div>
-                          )}
-                        </Field>
-                        <Field label="Tecido (cadastro de Materiais, opcional)">
-                          <Select value={materialTecidoIdEdicao} onChange={e => setMaterialTecidoIdEdicao(e.target.value)}>
-                            <option value="">Selecione…</option>
-                            {materiaisOrdenados.map(m => <option key={m.id} value={m.id}>{m.codigo != null ? `${m.codigo} · ` : ""}{m.nome}</option>)}
-                          </Select>
-                        </Field>
-                        <Field label="Tamanho (obrigatório)">
-                          <Select value={tamanhoIdEdicao} onChange={e => setTamanhoIdEdicao(e.target.value)}>
-                            <option value="">Selecione…</option>
-                            {[...tamanhos].sort((a, b) => a.codigo - b.codigo).map(t => <option key={t.id} value={t.id}>{String(t.codigo).padStart(3, "0")} · {t.nome}</option>)}
-                          </Select>
-                          <button type="button" onClick={() => setNovoTamanhoAbertoEdicao(v => !v)} style={linkButtonStyle}>{novoTamanhoAbertoEdicao ? "Cancelar" : "+ Novo tamanho"}</button>
-                          {novoTamanhoAbertoEdicao && (
-                            <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
-                              <input value={novoTamanhoNomeEdicao} onChange={e => setNovoTamanhoNomeEdicao(e.target.value.toUpperCase())} placeholder="EX.: P" style={{ ...inputStyle, flex: 1 }} />
-                              <PrimaryButton onClick={() => criarTamanho(novoTamanhoNomeEdicao, id => { setTamanhoIdEdicao(id); setNovoTamanhoNomeEdicao(""); setNovoTamanhoAbertoEdicao(false); })} disabled={!novoTamanhoNomeEdicao.trim()}><Plus size={16} /></PrimaryButton>
-                            </div>
-                          )}
-                        </Field>
-                      </div>
-                      <div style={{ fontSize: 11, color: "#a3937a", marginBottom: 10 }}>
-                        Novo código: <b style={{ color: "#6b5d49", fontFamily: "monospace" }}>{montarCodigoProduto({ grupoCodigo: codigoGrupo(grupoProdutoIdEdicao), tipoCodigo: codigoTipoDoMaterial(materialTecidoIdEdicao), tamanhoCodigo: codigoTamanho(tamanhoIdEdicao) })}</b> — {descricaoCodigoProduto({ grupoNome: nomeGrupo(grupoProdutoIdEdicao), tipoNome: nomeMaterialTecido(materialTecidoIdEdicao), tamanhoNome: nomeTamanho(tamanhoIdEdicao) })}
-                      </div>
-                      <div style={{ display: "flex", gap: 8 }}>
-                        <PrimaryButton onClick={() => salvarEdicaoProduto(p.id)} disabled={!nomeEdicao.trim() || !tamanhoIdEdicao} style={{ flex: 1 }}>Salvar</PrimaryButton>
-                        <button onClick={() => setEditandoId(null)} style={{ border: "1.5px solid #d9cfb7", background: "#fff", borderRadius: 9, padding: "0 14px", color: "#6b5d49", fontWeight: 700, cursor: "pointer" }}>Cancelar</button>
-                      </div>
-                    </div>
-                  )}
-                  <div style={{ fontSize: 12.5, fontWeight: 700, color: "#1c2b39", marginBottom: 8 }}>Sequência de etapas</div>
-                  {vinculosProduto.length > 0 && (
-                    <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 12 }}>
-                      {[...vinculosProduto].sort((a, b) => (a.ordem ?? 0) - (b.ordem ?? 0)).map((v, i, arr) => {
-                        const etapaDoVinculo = etapas.find(e => e.id === v.etapaId);
-                        const ehLote = (etapaDoVinculo?.tipoCalculo || "peca") === "lote";
-                        return (
-                          <div key={v.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", background: "#fff", border: "1px solid #e6ddc8", borderRadius: 8, padding: "7px 10px" }}>
-                            <span style={{ fontSize: 13, color: "#2a2015", display: "flex", alignItems: "center", gap: 6 }}>
-                              <span style={{ fontSize: 10.5, fontWeight: 700, color: "#a3937a", minWidth: 14 }}>{i + 1}º</span>
-                              {nomeEtapa(v.etapaId)}
-                            </span>
-                            <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-                              <span style={{ fontSize: 12, color: "#6b5d49", fontWeight: 600, marginRight: 2 }}>{fmtSec(v.tempoEstimadoSeg)}{ehLote ? "/lote" : "/peça"}</span>
-                              <IconButton onClick={() => moverVinculo(p.id, v.id, -1)} title="Mover para cima">
-                                <ChevronUp size={14} style={{ opacity: i === 0 ? 0.3 : 1 }} />
-                              </IconButton>
-                              <IconButton onClick={() => moverVinculo(p.id, v.id, 1)} title="Mover para baixo">
-                                <ChevronDown size={14} style={{ opacity: i === arr.length - 1 ? 0.3 : 1 }} />
-                              </IconButton>
-                              <IconButton onClick={() => removerVinculo(v.id)} danger title="Remover"><X size={14} /></IconButton>
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-                  {etapas.length === 0 ? (
-                    <div style={{ fontSize: 12.5, color: "#a3937a", marginBottom: 16 }}>Cadastre etapas na aba "Etapas" para poder vinculá-las.</div>
-                  ) : (
-                    <div style={{ marginBottom: 18 }}>
-                      <div style={{ fontSize: 12, fontWeight: 700, color: "#6b5d49", marginBottom: 6 }}>Vincular etapa</div>
-                      <div style={{ display: "flex", gap: 6, marginBottom: 6 }}>
-                        <Select value={novaEtapaId} onChange={e => setNovaEtapaId(e.target.value)} style={{ flex: 1 }}>
-                          <option value="">Etapa…</option>
-                          {etapas.map(e => (
-                            <option key={e.id} value={e.id}>
-                              {e.nome}{setores.find(s => s.id === e.setorId) ? ` — ${setores.find(s => s.id === e.setorId).nome}` : ""} ({(e.tipoCalculo || "peca") === "lote" ? "por lote" : "por peça"})
-                            </option>
-                          ))}
-                        </Select>
-                      </div>
-                      {novaEtapaId && (
-                        <div style={{ fontSize: 11.5, color: "#a3937a", marginBottom: 6 }}>
-                          Tempo {(etapas.find(e => e.id === novaEtapaId)?.tipoCalculo || "peca") === "lote" ? "fixo para o lote inteiro" : "de uma peça"}:
-                        </div>
-                      )}
-                      <div style={{ display: "flex", gap: 6 }}>
-                        <input type="number" min="0" placeholder="min" value={novoTempoMin} onChange={e => setNovoTempoMin(e.target.value)} style={{ ...inputStyle, width: 70 }} />
-                        <input type="number" min="0" max="59" placeholder="seg" value={novoTempoSeg} onChange={e => setNovoTempoSeg(e.target.value)} style={{ ...inputStyle, width: 70 }} />
-                        <PrimaryButton onClick={() => vincularEtapa(p.id)} disabled={!novaEtapaId} style={{ flex: 1 }}>Vincular</PrimaryButton>
-                      </div>
-                    </div>
-                  )}
-
-                  <div style={{ fontSize: 12.5, fontWeight: 700, color: "#1c2b39", marginBottom: 8, paddingTop: 4, borderTop: "1px solid #efe8d8" }}>Consumo de materiais (por peça)</div>
-                  {consumosProduto.length > 0 && (
-                    <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 12 }}>
-                      {consumosProduto.map(c => (
-                        <div key={c.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", background: "#fff", border: "1px solid #e6ddc8", borderRadius: 8, padding: "7px 10px" }}>
-                          <span style={{ fontSize: 13, color: "#2a2015" }}>{nomeMaterial(c.materialId)}</span>
-                          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                            <span style={{ fontSize: 12, color: "#6b5d49", fontWeight: 600 }}>{c.quantidadePorPeca} {unidadeMaterial(c.materialId)}/peça</span>
-                            <IconButton onClick={() => removerConsumoMaterial(c.id)} danger title="Remover"><X size={14} /></IconButton>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                  {materiais.length === 0 ? (
-                    <div style={{ fontSize: 12.5, color: "#a3937a" }}>Cadastre materiais em Cadastros → Materiais para poder vinculá-los.</div>
-                  ) : (
-                    <div style={{ display: "flex", gap: 6 }}>
-                      <Select value={novoMaterialId} onChange={e => setNovoMaterialId(e.target.value)} style={{ flex: 1 }}>
-                        <option value="">Material…</option>
-                        {[...materiais].sort((a, b) => a.nome.localeCompare(b.nome)).map(m => <option key={m.id} value={m.id}>{m.nome} ({m.unidade})</option>)}
-                      </Select>
-                      <input type="number" min="0" step="0.001" placeholder="qtd/peça" value={novaQtdMaterial} onChange={e => setNovaQtdMaterial(e.target.value)} style={{ ...inputStyle, width: 90 }} />
-                      <PrimaryButton onClick={() => vincularMaterial(p.id)} disabled={!novoMaterialId || !(parseFloat(novaQtdMaterial || "0") > 0)}>Vincular</PrimaryButton>
-                    </div>
-                  )}
-
-                  {custo && (custo.maoDeObra > 0 || custo.material > 0) && (
-                    <div style={{ marginTop: 16, paddingTop: 12, borderTop: "1px solid #efe8d8" }}>
-                      <div style={{ fontSize: 12.5, fontWeight: 700, color: "#1c2b39", marginBottom: 8 }}>Custo estimado por peça</div>
-                      <div style={{ display: "flex", gap: 18, flexWrap: "wrap", background: "#fff", border: "1px solid #e6ddc8", borderRadius: 8, padding: "10px 14px" }}>
-                        <div>
-                          <div style={{ fontSize: 18, fontWeight: 800, color: "#2f4a63" }}>{fmtMoeda(custo.total)}</div>
-                          <div style={{ fontSize: 10.5, color: "#a3937a" }}>custo total</div>
-                        </div>
-                        <div>
-                          <div style={{ fontSize: 14, fontWeight: 700, color: "#6b5d49" }}>{fmtMoeda(custo.maoDeObra)}</div>
-                          <div style={{ fontSize: 10.5, color: "#a3937a" }}>mão de obra</div>
-                        </div>
-                        <div>
-                          <div style={{ fontSize: 14, fontWeight: 700, color: "#6b5d49" }}>{fmtMoeda(custo.material)}</div>
-                          <div style={{ fontSize: 10.5, color: "#a3937a" }}>material</div>
-                        </div>
-                      </div>
-                      {!valorHoraMedio && (
-                        <div style={{ fontSize: 11, color: "#a3937a", marginTop: 6 }}>Cadastre o salário mensal dos colaboradores em Cadastros → Colaboradores para estimar a mão de obra.</div>
-                      )}
-                      {custo.vinculosLote.length > 0 && (
-                        <div style={{ fontSize: 11, color: "#a3937a", marginTop: 6 }}>
-                          Não inclui {custo.vinculosLote.length} etapa{custo.vinculosLote.length !== 1 ? "s" : ""} por lote ({custo.vinculosLote.map(v => nomeEtapa(v.etapaId)).join(", ")}) — o tempo delas é fixo por lote, então o custo por peça depende do tamanho do lote de produção.
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </div>
-              )}
-            </Card>
-          );
-        })}
-        {produtos.length === 0 && <div style={{ fontSize: 13.5, color: "#a3937a", padding: "8px 2px" }}>Nenhum produto cadastrado.</div>}
-      </div>
-    </div>
-  );
+  }, produto ? produto.nome : '—', " · ", dep ? dep.nome : 'sem departamento', " · ", maq ? `${maq.codigo} · ${maq.nome}` : 'sem equipamento', ' · ', "Responsável: ", /*#__PURE__*/React.createElement("strong", null, responsaveisEtapa(etapa).join(', ') || '—')), /*#__PURE__*/React.createElement("div", {
+    className: "rep-grid",
+    style: {
+      gridTemplateColumns: 'repeat(4,1fr)',
+      display: 'grid',
+      gap: 10,
+      marginBottom: 14
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "rep-box"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "k"
+  }, "Quantidade"), /*#__PURE__*/React.createElement("div", {
+    className: "v"
+  }, qtdBase)), /*#__PURE__*/React.createElement("div", {
+    className: "rep-box"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "k"
+  }, "Concluído"), /*#__PURE__*/React.createElement("div", {
+    className: "v"
+  }, jaFeito)), /*#__PURE__*/React.createElement("div", {
+    className: "rep-box"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "k"
+  }, "Restante"), /*#__PURE__*/React.createElement("div", {
+    className: "v",
+    style: {
+      color: restante > 0 ? 'var(--bad)' : 'var(--ok)'
+    }
+  }, restante)), /*#__PURE__*/React.createElement("div", {
+    className: "rep-box"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "k"
+  }, "Situação"), /*#__PURE__*/React.createElement("div", {
+    className: "v",
+    style: {
+      fontSize: 14
+    }
+  }, etapa.status))), /*#__PURE__*/React.createElement(Field, {
+    label: "Observação da etapa"
+  }, /*#__PURE__*/React.createElement("textarea", {
+    rows: "3",
+    value: obs,
+    onChange: e => setObs(e.target.value),
+    placeholder: "Ocorrências, ajustes, defeitos encontrados…"
+  })), /*#__PURE__*/React.createElement("button", {
+    className: "btn ghost sm",
+    onClick: salvarObs,
+    style: {
+      marginBottom: 14
+    }
+  }, "Salvar observação"), /*#__PURE__*/React.createElement("div", {
+    className: "field"
+  }, /*#__PURE__*/React.createElement("label", null, "Anexar foto ou arquivo"), /*#__PURE__*/React.createElement("input", {
+    type: "file",
+    accept: "image/*,.pdf,.doc,.docx,.xls,.xlsx",
+    onChange: onArquivo
+  }), (etapa.anexos || []).length > 0 && /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexWrap: 'wrap',
+      gap: 10,
+      marginTop: 10
+    }
+  }, (etapa.anexos || []).map(a => /*#__PURE__*/React.createElement("div", {
+    key: a.id,
+    style: {
+      width: 130,
+      border: '1px solid var(--line)',
+      borderRadius: 6,
+      padding: 8,
+      background: '#fff'
+    }
+  }, a.tipo === 'imagem' ? /*#__PURE__*/React.createElement("img", {
+    src: a.url,
+    alt: a.nome,
+    style: {
+      width: '100%',
+      height: 80,
+      objectFit: 'cover',
+      borderRadius: 4
+    }
+  }) : /*#__PURE__*/React.createElement("div", {
+    style: {
+      height: 80,
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      background: '#f0ede6',
+      borderRadius: 4,
+      fontSize: 26
+    }
+  }, "📄"), /*#__PURE__*/React.createElement("div", {
+    className: "small",
+    style: {
+      wordBreak: 'break-word',
+      margin: '6px 0'
+    }
+  }, a.nome), /*#__PURE__*/React.createElement("div", {
+    className: "small muted",
+    style: {
+      marginBottom: 6
+    }
+  }, a.quando || ''), /*#__PURE__*/React.createElement("button", {
+    className: "btn danger sm",
+    onClick: () => rmAnexo(a.id)
+  }, "Remover"))))), /*#__PURE__*/React.createElement("div", {
+    className: "panel",
+    style: {
+      background: '#fff'
+    }
+  }, /*#__PURE__*/React.createElement("h3", null, "Finalizar produção"), restante <= 0 ? /*#__PURE__*/React.createElement("div", {
+    className: "small",
+    style: {
+      color: 'var(--ok)',
+      fontWeight: 600
+    }
+  }, "Etapa concluída — ", jaFeito, " de ", qtdBase, " peças.") : /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+    className: "grid2"
+  }, /*#__PURE__*/React.createElement(Field, {
+    label: `Quantidade produzida (restam ${restante})`
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "number",
+    min: "1",
+    max: restante,
+    value: qtdFinal,
+    onChange: e => setQtdFinal(e.target.value),
+    placeholder: String(restante)
+  })), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'flex-end',
+      gap: 8,
+      flexWrap: 'wrap'
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "btn ghost sm",
+    onClick: () => finalizar('parcial'),
+    disabled: !qtdFinal
+  }, "Finalizar parcial"), /*#__PURE__*/React.createElement("button", {
+    className: "btn accent sm",
+    onClick: () => finalizar('total')
+  }, "Finalizar total (", restante, ")"))), /*#__PURE__*/React.createElement("div", {
+    className: "small muted"
+  }, "Na finalização parcial a etapa fica ", /*#__PURE__*/React.createElement("strong", null, "Em andamento"), " e a Ordem de Produção permanece ", /*#__PURE__*/React.createElement("strong", null, "em aberto"), " com o saldo restante."))), finalizacoes.length > 0 && /*#__PURE__*/React.createElement("div", {
+    className: "panel",
+    style: {
+      padding: 0
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      padding: '14px 18px 0 18px'
+    }
+  }, /*#__PURE__*/React.createElement("h3", null, "Histórico de apontamentos")), /*#__PURE__*/React.createElement("table", null, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("th", null, "Quando"), /*#__PURE__*/React.createElement("th", null, "Tipo"), /*#__PURE__*/React.createElement("th", {
+    className: "num"
+  }, "Quantidade"), /*#__PURE__*/React.createElement("th", {
+    className: "num"
+  }, "Acumulado"), /*#__PURE__*/React.createElement("th", null, "Observação"))), /*#__PURE__*/React.createElement("tbody", null, finalizacoes.slice().reverse().map(x => /*#__PURE__*/React.createElement("tr", {
+    key: x.id
+  }, /*#__PURE__*/React.createElement("td", {
+    className: "small muted"
+  }, x.quando), /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement(Badge, {
+    tone: x.tipo === 'total' ? 'ok' : 'warn'
+  }, x.tipo === 'total' ? 'Total' : 'Parcial')), /*#__PURE__*/React.createElement("td", {
+    className: "num"
+  }, x.quantidade), /*#__PURE__*/React.createElement("td", {
+    className: "num"
+  }, x.acumulado, "/", qtdBase), /*#__PURE__*/React.createElement("td", {
+    className: "small muted"
+  }, x.observacao || '—')))))), /*#__PURE__*/React.createElement("div", {
+    className: "modal-actions"
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "btn ghost",
+    onClick: onClose
+  }, "Fechar")));
 }
+function AprovacaoModal({
+  row,
+  onClose,
+  onSave
+}) {
+  const [f, setF] = useState({
+    data: row.data,
+    colaborador: row.colaborador,
+    aprovador: '',
+    observacao: ''
+  });
+  const set = (k, v) => setF(prev => ({
+    ...prev,
+    [k]: v
+  }));
+  return /*#__PURE__*/React.createElement(Modal, {
+    title: "Solicitar aprovação de carga horária",
+    onClose: onClose
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "small muted",
+    style: {
+      marginBottom: 14
+    }
+  }, row.colaborador, " está programado com ", /*#__PURE__*/React.createElement("strong", null, minParaHHMM(row.totalMin)), " em ", fmtDate(row.data), ehSabado(row.data) ? ' — trabalho aos sábados exige autorização de superior.' : `, acima da jornada normal de ${minParaHHMM(LIMITE_CARGA_MIN)} (extensão permitida até ${JORNADA.extensaoAte}).`, ' ', "Informe quem está autorizando."), /*#__PURE__*/React.createElement("div", {
+    className: "grid2"
+  }, /*#__PURE__*/React.createElement(Field, {
+    label: "Aprovado por (superior)"
+  }, /*#__PURE__*/React.createElement("input", {
+    value: f.aprovador,
+    onChange: e => set('aprovador', e.target.value),
+    placeholder: "Nome do gestor/administrador"
+  }))), /*#__PURE__*/React.createElement(Field, {
+    label: "Observação (opcional)"
+  }, /*#__PURE__*/React.createElement("textarea", {
+    rows: "2",
+    value: f.observacao,
+    onChange: e => set('observacao', e.target.value)
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "modal-actions"
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "btn ghost",
+    onClick: onClose
+  }, "Cancelar"), /*#__PURE__*/React.createElement("button", {
+    className: "btn accent",
+    onClick: () => onSave(f),
+    disabled: !f.aprovador
+  }, "Aprovar carga")));
+}
+
+/* ==========================================================
+   ORÇAMENTOS DE COMPRA — propostas e comparativo
+========================================================== */
+function totalProposta(p, quantidade) {
+  return num(p.valorUnitario) * num(quantidade) + num(p.frete);
+}
+function analisarPropostas(orc) {
+  const props = orc.propostas || [];
+  if (props.length === 0) return {
+    props: [],
+    melhorPreco: null,
+    melhorPrazo: null,
+    recomendada: null
+  };
+  const comTotal = props.map(p => ({
+    ...p,
+    total: totalProposta(p, orc.quantidade)
+  }));
+  const menorTotal = Math.min(...comTotal.map(p => p.total));
+  const prazos = comTotal.map(p => num(p.prazoEntregaDias)).filter(n => n > 0);
+  const menorPrazo = prazos.length ? Math.min(...prazos) : null;
+  const maiorTotal = Math.max(...comTotal.map(p => p.total));
+  const analisadas = comTotal.map(p => {
+    const economia = maiorTotal - p.total;
+    const percAcima = menorTotal > 0 ? (p.total - menorTotal) / menorTotal * 100 : 0;
+    const vantagens = [];
+    if (p.total === menorTotal) vantagens.push('menor preço total');
+    if (menorPrazo !== null && num(p.prazoEntregaDias) === menorPrazo) vantagens.push('entrega mais rápida');
+    if (num(p.frete) === 0) vantagens.push('sem frete');
+    return {
+      ...p,
+      economia,
+      percAcima,
+      vantagens
+    };
+  });
+
+  // recomendação: menor preço; em empate de preço, menor prazo
+  const recomendada = analisadas.slice().sort((a, b) => a.total === b.total ? num(a.prazoEntregaDias) - num(b.prazoEntregaDias) : a.total - b.total)[0];
+  return {
+    props: analisadas,
+    menorTotal,
+    menorPrazo,
+    recomendada
+  };
+}
+function Orcamentos({
+  db,
+  update
+}) {
+  const [modal, setModal] = useState(null);
+  const [abertoId, setAbertoId] = useState(null);
+  const orcamentos = db.orcamentos || [];
+  const aberto = orcamentos.find(o => o.id === abertoId);
+  function save(o) {
+    update(d => {
+      if (o.id) {
+        d.orcamentos = d.orcamentos.map(x => x.id === o.id ? o : x);
+      } else {
+        const numero = d.seq.orcamento = (d.seq.orcamento || 100) + 1;
+        d.orcamentos = [...(d.orcamentos || []), {
+          ...o,
+          id: uid(),
+          numero,
+          propostas: []
+        }];
+      }
+      return d;
+    });
+    setModal(null);
+  }
+  function remove(id) {
+    if (!confirm('Excluir este orçamento e todas as suas propostas?')) return;
+    update(d => {
+      d.orcamentos = d.orcamentos.filter(o => o.id !== id);
+      return d;
+    });
+    if (abertoId === id) setAbertoId(null);
+  }
+  function salvarPropostas(orcId, propostas) {
+    update(d => {
+      d.orcamentos = d.orcamentos.map(o => o.id === orcId ? {
+        ...o,
+        propostas
+      } : o);
+      return d;
+    });
+  }
+  function gerarCompra(orc, proposta) {
+    if (!confirm(`Gerar pedido de compra com a proposta de ${proposta.fornecedor}?`)) return;
+    update(d => {
+      const numero = d.seq.compra++;
+      d.compras.push({
+        id: uid(),
+        numero,
+        materialId: orc.materialId,
+        quantidade: orc.quantidade,
+        fornecedor: proposta.fornecedor,
+        valor: totalProposta(proposta, orc.quantidade),
+        dataPedido: todayISO(),
+        previsaoChegada: '',
+        status: 'Solicitado'
+      });
+      d.orcamentos = d.orcamentos.map(o => o.id === orc.id ? {
+        ...o,
+        status: 'Fechado',
+        propostaEscolhidaId: proposta.id
+      } : o);
+      return d;
+    });
+    alert('Pedido de compra gerado na aba Compras.');
+  }
+  return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    className: "page-head"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "eyebrow"
+  }, "Orçamentos e cotações"), /*#__PURE__*/React.createElement("button", {
+    className: "btn accent",
+    onClick: () => setModal({}),
+    disabled: db.materiais.length === 0
+  }, "+ Novo orçamento")), /*#__PURE__*/React.createElement("div", {
+    className: "panel",
+    style: {
+      padding: 0
+    }
+  }, orcamentos.length === 0 ? /*#__PURE__*/React.createElement("div", {
+    style: {
+      padding: 20
+    }
+  }, /*#__PURE__*/React.createElement(Empty, {
+    text: "Nenhum orçamento aberto. Crie um orçamento e cadastre as propostas dos fornecedores para comparar."
+  })) : /*#__PURE__*/React.createElement("table", null, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("th", null, "Nº"), /*#__PURE__*/React.createElement("th", null, "Material"), /*#__PURE__*/React.createElement("th", {
+    className: "num"
+  }, "Qtd."), /*#__PURE__*/React.createElement("th", null, "Data"), /*#__PURE__*/React.createElement("th", {
+    className: "num"
+  }, "Propostas"), /*#__PURE__*/React.createElement("th", {
+    className: "num"
+  }, "Melhor preço"), /*#__PURE__*/React.createElement("th", null, "Status"), /*#__PURE__*/React.createElement("th", null))), /*#__PURE__*/React.createElement("tbody", null, orcamentos.slice().sort((a, b) => b.numero - a.numero).map(o => {
+    const mat = db.materiais.find(m => m.id === o.materialId);
+    const an = analisarPropostas(o);
+    return /*#__PURE__*/React.createElement("tr", {
+      key: o.id
+    }, /*#__PURE__*/React.createElement("td", {
+      className: "small muted"
+    }, "#", o.numero), /*#__PURE__*/React.createElement("td", null, mat ? mat.nome : '—'), /*#__PURE__*/React.createElement("td", {
+      className: "num"
+    }, o.quantidade), /*#__PURE__*/React.createElement("td", {
+      className: "small"
+    }, fmtDate(o.data)), /*#__PURE__*/React.createElement("td", {
+      className: "num"
+    }, (o.propostas || []).length), /*#__PURE__*/React.createElement("td", {
+      className: "num"
+    }, an.recomendada ? money(an.recomendada.total) : /*#__PURE__*/React.createElement("span", {
+      className: "muted"
+    }, "—")), /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement(Badge, {
+      tone: o.status === 'Fechado' ? 'ok' : 'warn'
+    }, o.status || 'Em cotação')), /*#__PURE__*/React.createElement("td", {
+      className: "row-actions"
+    }, /*#__PURE__*/React.createElement("button", {
+      className: "btn ghost sm",
+      onClick: () => setAbertoId(o.id)
+    }, "Propostas"), /*#__PURE__*/React.createElement("button", {
+      className: "btn danger sm",
+      onClick: () => remove(o.id)
+    }, "Excluir")));
+  })))), orcamentos.length > 0 && /*#__PURE__*/React.createElement(RelatorioMelhorCompra, {
+    db: db,
+    orcamentos: orcamentos
+  }), modal !== null && /*#__PURE__*/React.createElement(OrcamentoModal, {
+    orc: modal,
+    db: db,
+    onClose: () => setModal(null),
+    onSave: save
+  }), aberto && /*#__PURE__*/React.createElement(PropostasModal, {
+    orc: aberto,
+    db: db,
+    onClose: () => setAbertoId(null),
+    onSave: salvarPropostas,
+    onGerarCompra: gerarCompra
+  }));
+}
+function OrcamentoModal({
+  orc,
+  db,
+  onClose,
+  onSave
+}) {
+  const [f, setF] = useState({
+    materialId: db.materiais[0]?.id || '',
+    quantidade: 1,
+    data: todayISO(),
+    observacao: '',
+    status: 'Em cotação',
+    ...orc
+  });
+  const set = (k, v) => setF(prev => ({
+    ...prev,
+    [k]: v
+  }));
+  return /*#__PURE__*/React.createElement(Modal, {
+    title: orc.id ? 'Editar orçamento' : 'Novo orçamento',
+    onClose: onClose
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "grid2"
+  }, /*#__PURE__*/React.createElement(Field, {
+    label: "Material"
+  }, /*#__PURE__*/React.createElement("select", {
+    value: f.materialId,
+    onChange: e => set('materialId', e.target.value)
+  }, db.materiais.map(m => /*#__PURE__*/React.createElement("option", {
+    key: m.id,
+    value: m.id
+  }, m.codigo, " · ", m.nome)))), /*#__PURE__*/React.createElement(Field, {
+    label: "Quantidade a cotar"
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "number",
+    step: "0.01",
+    value: f.quantidade,
+    onChange: e => set('quantidade', e.target.value)
+  })), /*#__PURE__*/React.createElement(Field, {
+    label: "Data"
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "date",
+    value: f.data,
+    onChange: e => set('data', e.target.value)
+  })), /*#__PURE__*/React.createElement(Field, {
+    label: "Status"
+  }, /*#__PURE__*/React.createElement("select", {
+    value: f.status,
+    onChange: e => set('status', e.target.value)
+  }, /*#__PURE__*/React.createElement("option", {
+    value: "Em cotação"
+  }, "Em cotação"), /*#__PURE__*/React.createElement("option", {
+    value: "Fechado"
+  }, "Fechado")))), /*#__PURE__*/React.createElement(Field, {
+    label: "Observação"
+  }, /*#__PURE__*/React.createElement("textarea", {
+    rows: "2",
+    value: f.observacao,
+    onChange: e => set('observacao', e.target.value)
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "modal-actions"
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "btn ghost",
+    onClick: onClose
+  }, "Cancelar"), /*#__PURE__*/React.createElement("button", {
+    className: "btn accent",
+    onClick: () => onSave(f),
+    disabled: !f.materialId
+  }, "Salvar")));
+}
+function PropostasModal({
+  orc,
+  db,
+  onClose,
+  onSave,
+  onGerarCompra
+}) {
+  const [props, setProps] = useState(() => JSON.parse(JSON.stringify(orc.propostas || [])));
+  const [dirty, setDirty] = useState(false);
+  const mat = db.materiais.find(m => m.id === orc.materialId);
+  const an = analisarPropostas({
+    ...orc,
+    propostas: props
+  });
+  function add() {
+    setProps(p => [...p, {
+      id: uid(),
+      fornecedor: '',
+      valorUnitario: 0,
+      frete: 0,
+      prazoEntregaDias: 0,
+      condicaoPagamento: '',
+      observacao: ''
+    }]);
+    setDirty(true);
+  }
+  function upd(i, patch) {
+    setProps(p => {
+      const a = p.slice();
+      a[i] = {
+        ...a[i],
+        ...patch
+      };
+      return a;
+    });
+    setDirty(true);
+  }
+  function rm(i) {
+    if (!confirm('Remover esta proposta?')) return;
+    setProps(p => p.filter((_, x) => x !== i));
+    setDirty(true);
+  }
+  function salvar() {
+    onSave(orc.id, props);
+    setDirty(false);
+  }
+  return /*#__PURE__*/React.createElement(Modal, {
+    title: `Orçamento #${orc.numero} — ${mat ? mat.nome : ''}`,
+    onClose: onClose,
+    wide: true
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "small muted",
+    style: {
+      marginBottom: 14
+    }
+  }, "Quantidade cotada: ", /*#__PURE__*/React.createElement("strong", null, orc.quantidade, " ", mat ? mat.unidade : ''), mat && num(mat.custo) > 0 && /*#__PURE__*/React.createElement(React.Fragment, null, " · Custo atual cadastrado: ", /*#__PURE__*/React.createElement("strong", null, money(num(mat.custo) * num(orc.quantidade))), " no total")), props.length === 0 && /*#__PURE__*/React.createElement(Empty, {
+    text: "Nenhuma proposta cadastrada. Adicione as propostas recebidas dos fornecedores para comparar."
+  }), props.map((p, i) => {
+    const analise = an.props.find(x => x.id === p.id) || {};
+    const melhor = an.recomendada && an.recomendada.id === p.id;
+    return /*#__PURE__*/React.createElement("div", {
+      key: p.id,
+      className: "panel",
+      style: {
+        marginBottom: 10,
+        borderColor: melhor ? 'var(--ok)' : 'var(--line)',
+        background: melhor ? 'var(--ok-bg)' : 'var(--canvas-panel)'
+      }
+    }, /*#__PURE__*/React.createElement("h3", null, "Proposta ", i + 1, melhor && /*#__PURE__*/React.createElement("span", {
+      className: "badge ok"
+    }, /*#__PURE__*/React.createElement("span", {
+      className: "dot"
+    }), "Melhor opção")), /*#__PURE__*/React.createElement("div", {
+      className: "grid3"
+    }, /*#__PURE__*/React.createElement(Field, {
+      label: "Fornecedor"
+    }, /*#__PURE__*/React.createElement("select", {
+      value: p.fornecedor,
+      onChange: e => upd(i, {
+        fornecedor: e.target.value
+      })
+    }, /*#__PURE__*/React.createElement("option", {
+      value: ""
+    }, "Selecione…"), db.fornecedores.map(x => /*#__PURE__*/React.createElement("option", {
+      key: x.id,
+      value: x.nome
+    }, x.nome)), p.fornecedor && !db.fornecedores.some(x => x.nome === p.fornecedor) && /*#__PURE__*/React.createElement("option", {
+      value: p.fornecedor
+    }, p.fornecedor))), /*#__PURE__*/React.createElement(Field, {
+      label: "Valor unitário (R$)"
+    }, /*#__PURE__*/React.createElement("input", {
+      type: "number",
+      step: "0.01",
+      value: p.valorUnitario,
+      onChange: e => upd(i, {
+        valorUnitario: e.target.value
+      })
+    })), /*#__PURE__*/React.createElement(Field, {
+      label: "Frete (R$)"
+    }, /*#__PURE__*/React.createElement("input", {
+      type: "number",
+      step: "0.01",
+      value: p.frete,
+      onChange: e => upd(i, {
+        frete: e.target.value
+      })
+    })), /*#__PURE__*/React.createElement(Field, {
+      label: "Prazo de entrega (dias)"
+    }, /*#__PURE__*/React.createElement("input", {
+      type: "number",
+      value: p.prazoEntregaDias,
+      onChange: e => upd(i, {
+        prazoEntregaDias: e.target.value
+      })
+    })), /*#__PURE__*/React.createElement(Field, {
+      label: "Condição de pagamento"
+    }, /*#__PURE__*/React.createElement("input", {
+      value: p.condicaoPagamento,
+      onChange: e => upd(i, {
+        condicaoPagamento: e.target.value
+      }),
+      placeholder: "30/60 dias"
+    })), /*#__PURE__*/React.createElement(Field, {
+      label: "Observação"
+    }, /*#__PURE__*/React.createElement("input", {
+      value: p.observacao,
+      onChange: e => upd(i, {
+        observacao: e.target.value
+      })
+    }))), /*#__PURE__*/React.createElement("div", {
+      className: "small",
+      style: {
+        marginBottom: 8
+      }
+    }, "Total: ", /*#__PURE__*/React.createElement("strong", null, money(analise.total || 0)), analise.percAcima > 0 && /*#__PURE__*/React.createElement("span", {
+      style: {
+        color: 'var(--bad)'
+      }
+    }, " · ", analise.percAcima.toFixed(1), "% acima da melhor"), analise.vantagens && analise.vantagens.length > 0 && /*#__PURE__*/React.createElement("span", {
+      style: {
+        color: 'var(--ok)'
+      }
+    }, " · Vantagens: ", analise.vantagens.join(', '))), /*#__PURE__*/React.createElement("div", {
+      className: "row-actions"
+    }, /*#__PURE__*/React.createElement("button", {
+      className: "btn danger sm",
+      onClick: () => rm(i)
+    }, "Remover proposta"), !dirty && p.fornecedor && /*#__PURE__*/React.createElement("button", {
+      className: "btn accent sm",
+      onClick: () => onGerarCompra(orc, {
+        ...p,
+        total: analise.total
+      })
+    }, "Fechar compra com este")));
+  }), /*#__PURE__*/React.createElement("button", {
+    className: "btn ghost sm",
+    onClick: add
+  }, "+ Adicionar proposta"), an.props.length > 1 && /*#__PURE__*/React.createElement("div", {
+    className: "panel",
+    style: {
+      marginTop: 14
+    }
+  }, /*#__PURE__*/React.createElement("h3", null, "Comparativo"), /*#__PURE__*/React.createElement("table", null, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("th", null, "Fornecedor"), /*#__PURE__*/React.createElement("th", {
+    className: "num"
+  }, "Unitário"), /*#__PURE__*/React.createElement("th", {
+    className: "num"
+  }, "Frete"), /*#__PURE__*/React.createElement("th", {
+    className: "num"
+  }, "Total"), /*#__PURE__*/React.createElement("th", {
+    className: "num"
+  }, "Prazo"), /*#__PURE__*/React.createElement("th", null, "Vantagens"))), /*#__PURE__*/React.createElement("tbody", null, an.props.slice().sort((a, b) => a.total - b.total).map(p => /*#__PURE__*/React.createElement("tr", {
+    key: p.id
+  }, /*#__PURE__*/React.createElement("td", null, p.fornecedor || '—', " ", an.recomendada.id === p.id && /*#__PURE__*/React.createElement(Badge, {
+    tone: "ok"
+  }, "melhor")), /*#__PURE__*/React.createElement("td", {
+    className: "num"
+  }, money(p.valorUnitario)), /*#__PURE__*/React.createElement("td", {
+    className: "num"
+  }, money(p.frete)), /*#__PURE__*/React.createElement("td", {
+    className: "num"
+  }, /*#__PURE__*/React.createElement("strong", null, money(p.total))), /*#__PURE__*/React.createElement("td", {
+    className: "num"
+  }, num(p.prazoEntregaDias) || '—', " d"), /*#__PURE__*/React.createElement("td", {
+    className: "small muted"
+  }, p.vantagens.join(', ') || '—')))))), /*#__PURE__*/React.createElement("div", {
+    className: "modal-actions"
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "btn ghost",
+    onClick: onClose
+  }, "Fechar"), /*#__PURE__*/React.createElement("button", {
+    className: "btn accent",
+    onClick: salvar,
+    disabled: !dirty
+  }, "Salvar propostas")));
+}
+function RelatorioMelhorCompra({
+  db,
+  orcamentos
+}) {
+  const linhas = orcamentos.map(o => {
+    const an = analisarPropostas(o);
+    const mat = db.materiais.find(m => m.id === o.materialId);
+    if (!an.recomendada) return null;
+    const maior = Math.max(...an.props.map(p => p.total));
+    return {
+      orc: o,
+      mat,
+      melhor: an.recomendada,
+      economia: maior - an.recomendada.total,
+      qtdPropostas: an.props.length
+    };
+  }).filter(Boolean);
+  const economiaTotal = linhas.reduce((s, l) => s + l.economia, 0);
+  return /*#__PURE__*/React.createElement("div", {
+    className: "panel"
+  }, /*#__PURE__*/React.createElement("h3", null, "Relatório de melhor compra"), linhas.length === 0 ? /*#__PURE__*/React.createElement(Empty, {
+    text: "Cadastre propostas nos orçamentos para gerar o comparativo de melhor compra."
+  }) : /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("table", null, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("th", null, "Orç."), /*#__PURE__*/React.createElement("th", null, "Material"), /*#__PURE__*/React.createElement("th", {
+    className: "num"
+  }, "Qtd."), /*#__PURE__*/React.createElement("th", {
+    className: "num"
+  }, "Propostas"), /*#__PURE__*/React.createElement("th", null, "Melhor fornecedor"), /*#__PURE__*/React.createElement("th", {
+    className: "num"
+  }, "Total"), /*#__PURE__*/React.createElement("th", {
+    className: "num"
+  }, "Prazo"), /*#__PURE__*/React.createElement("th", {
+    className: "num"
+  }, "Economia"))), /*#__PURE__*/React.createElement("tbody", null, linhas.map(l => /*#__PURE__*/React.createElement("tr", {
+    key: l.orc.id
+  }, /*#__PURE__*/React.createElement("td", {
+    className: "small muted"
+  }, "#", l.orc.numero), /*#__PURE__*/React.createElement("td", null, l.mat ? l.mat.nome : '—'), /*#__PURE__*/React.createElement("td", {
+    className: "num"
+  }, l.orc.quantidade), /*#__PURE__*/React.createElement("td", {
+    className: "num"
+  }, l.qtdPropostas), /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement("strong", null, l.melhor.fornecedor || '—')), /*#__PURE__*/React.createElement("td", {
+    className: "num"
+  }, money(l.melhor.total)), /*#__PURE__*/React.createElement("td", {
+    className: "num"
+  }, num(l.melhor.prazoEntregaDias) || '—', " d"), /*#__PURE__*/React.createElement("td", {
+    className: "num",
+    style: {
+      color: 'var(--ok)'
+    }
+  }, l.economia > 0 ? money(l.economia) : '—'))))), /*#__PURE__*/React.createElement("div", {
+    className: "small muted",
+    style: {
+      marginTop: 10
+    }
+  }, "Economia potencial somada (comparando a melhor proposta com a mais cara de cada orçamento): ", /*#__PURE__*/React.createElement("strong", {
+    style: {
+      color: 'var(--ok)'
+    }
+  }, money(economiaTotal)))));
+}
+
+/* ==========================================================
+   7. COMPRAS
+========================================================== */
+function Compras({
+  db,
+  update
+}) {
+  const [modal, setModal] = useState(null);
+  function save(c) {
+    update(d => {
+      if (c.id) {
+        d.compras = d.compras.map(x => x.id === c.id ? c : x);
+      } else {
+        const numero = d.seq.compra++;
+        d.compras.push({
+          ...c,
+          id: uid(),
+          numero
+        });
+      }
+      return d;
+    });
+    setModal(null);
+  }
+  function remove(id) {
+    if (!confirm('Excluir esta compra?')) return;
+    update(d => {
+      d.compras = d.compras.filter(c => c.id !== id);
+      return d;
+    });
+  }
+  function avancarStatus(c) {
+    const idx = STATUS_COMPRA.indexOf(c.status);
+    const novo = STATUS_COMPRA[Math.min(idx + 1, STATUS_COMPRA.length - 1)];
+    update(d => {
+      d.compras = d.compras.map(x => x.id === c.id ? {
+        ...x,
+        status: novo
+      } : x);
+      if (novo === 'Recebido') {
+        const mat = d.materiais.find(m => m.id === c.materialId);
+        if (mat) {
+          mat.estoqueAtual = num(mat.estoqueAtual) + num(c.quantidade);
+        }
+        d.movimentacoes.push({
+          id: uid(),
+          tipo: 'Entrada',
+          materialId: c.materialId,
+          quantidade: c.quantidade,
+          opId: null,
+          data: todayISO(),
+          origem: `Compra #${c.numero}`
+        });
+      }
+      return d;
+    });
+  }
+  return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    className: "page-head"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "eyebrow"
+  }, "Compras de materiais"), /*#__PURE__*/React.createElement("button", {
+    className: "btn accent",
+    onClick: () => setModal({}),
+    disabled: db.materiais.length === 0
+  }, "+ Nova compra")), /*#__PURE__*/React.createElement("div", {
+    className: "panel",
+    style: {
+      padding: 0
+    }
+  }, db.compras.length === 0 ? /*#__PURE__*/React.createElement("div", {
+    style: {
+      padding: 20
+    }
+  }, /*#__PURE__*/React.createElement(Empty, {
+    text: "Nenhuma compra registrada."
+  })) : /*#__PURE__*/React.createElement("table", null, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("th", null, "Nº"), /*#__PURE__*/React.createElement("th", null, "Material"), /*#__PURE__*/React.createElement("th", {
+    className: "num"
+  }, "Qtd."), /*#__PURE__*/React.createElement("th", null, "Fornecedor"), /*#__PURE__*/React.createElement("th", {
+    className: "num"
+  }, "Valor"), /*#__PURE__*/React.createElement("th", null, "Data pedido"), /*#__PURE__*/React.createElement("th", null, "Previsão"), /*#__PURE__*/React.createElement("th", null, "Status"), /*#__PURE__*/React.createElement("th", null))), /*#__PURE__*/React.createElement("tbody", null, db.compras.slice().sort((a, b) => b.numero - a.numero).map(c => {
+    const mat = db.materiais.find(m => m.id === c.materialId);
+    return /*#__PURE__*/React.createElement("tr", {
+      key: c.id
+    }, /*#__PURE__*/React.createElement("td", {
+      className: "small muted"
+    }, "#", c.numero), /*#__PURE__*/React.createElement("td", null, mat ? mat.nome : '—'), /*#__PURE__*/React.createElement("td", {
+      className: "num"
+    }, c.quantidade), /*#__PURE__*/React.createElement("td", {
+      className: "small"
+    }, c.fornecedor), /*#__PURE__*/React.createElement("td", {
+      className: "num"
+    }, money(c.valor)), /*#__PURE__*/React.createElement("td", {
+      className: "small"
+    }, fmtDate(c.dataPedido)), /*#__PURE__*/React.createElement("td", {
+      className: "small"
+    }, fmtDate(c.previsaoChegada)), /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement(StatusCompraBadge, {
+      status: c.status
+    })), /*#__PURE__*/React.createElement("td", {
+      className: "row-actions"
+    }, /*#__PURE__*/React.createElement("button", {
+      className: "btn ghost sm",
+      onClick: () => setModal(c)
+    }, "Editar"), c.status !== 'Recebido' && /*#__PURE__*/React.createElement("button", {
+      className: "btn accent sm",
+      onClick: () => avancarStatus(c)
+    }, "Avançar"), /*#__PURE__*/React.createElement("button", {
+      className: "btn danger sm",
+      onClick: () => remove(c.id)
+    }, "Excluir")));
+  })))), modal !== null && /*#__PURE__*/React.createElement(CompraModal, {
+    compra: modal,
+    db: db,
+    onClose: () => setModal(null),
+    onSave: save
+  }));
+}
+function StatusCompraBadge({
+  status
+}) {
+  const tone = status === 'Recebido' ? 'ok' : status === 'Comprado' ? 'info' : 'warn';
+  return /*#__PURE__*/React.createElement(Badge, {
+    tone: tone
+  }, status);
+}
+function CompraModal({
+  compra,
+  db,
+  onClose,
+  onSave
+}) {
+  const [f, setF] = useState({
+    materialId: db.materiais[0]?.id || '',
+    quantidade: 1,
+    fornecedor: '',
+    fornecedorId: '',
+    valor: 0,
+    dataPedido: todayISO(),
+    previsaoChegada: '',
+    status: 'Solicitado',
+    ...compra
+  });
+  const set = (k, v) => setF(prev => ({
+    ...prev,
+    [k]: v
+  }));
+  return /*#__PURE__*/React.createElement(Modal, {
+    title: compra.id ? 'Editar compra' : 'Nova compra',
+    onClose: onClose
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "grid2"
+  }, /*#__PURE__*/React.createElement(Field, {
+    label: "Material"
+  }, /*#__PURE__*/React.createElement("select", {
+    value: f.materialId,
+    onChange: e => set('materialId', e.target.value)
+  }, db.materiais.map(m => /*#__PURE__*/React.createElement("option", {
+    key: m.id,
+    value: m.id
+  }, m.nome)))), /*#__PURE__*/React.createElement(Field, {
+    label: "Quantidade"
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "number",
+    value: f.quantidade,
+    onChange: e => set('quantidade', e.target.value)
+  })), /*#__PURE__*/React.createElement(Field, {
+    label: "Fornecedor"
+  }, /*#__PURE__*/React.createElement("select", {
+    value: f.fornecedorId || '',
+    onChange: e => {
+      const forn = db.fornecedores.find(x => x.id === e.target.value);
+      setF(prev => ({
+        ...prev,
+        fornecedorId: e.target.value,
+        fornecedor: forn ? forn.nome : ''
+      }));
+    }
+  }, /*#__PURE__*/React.createElement("option", {
+    value: ""
+  }, f.fornecedor && !f.fornecedorId ? f.fornecedor : '— selecione —'), db.fornecedores.map(x => /*#__PURE__*/React.createElement("option", {
+    key: x.id,
+    value: x.id
+  }, x.nome)))), /*#__PURE__*/React.createElement(Field, {
+    label: "Valor total (R$)"
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "number",
+    step: "0.01",
+    value: f.valor,
+    onChange: e => set('valor', e.target.value)
+  })), /*#__PURE__*/React.createElement(Field, {
+    label: "Data do pedido"
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "date",
+    value: f.dataPedido,
+    onChange: e => set('dataPedido', e.target.value)
+  })), /*#__PURE__*/React.createElement(Field, {
+    label: "Previsão de chegada"
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "date",
+    value: f.previsaoChegada,
+    onChange: e => set('previsaoChegada', e.target.value)
+  })), /*#__PURE__*/React.createElement(Field, {
+    label: "Status"
+  }, /*#__PURE__*/React.createElement("select", {
+    value: f.status,
+    onChange: e => set('status', e.target.value)
+  }, STATUS_COMPRA.map(s => /*#__PURE__*/React.createElement("option", {
+    key: s,
+    value: s
+  }, s))))), /*#__PURE__*/React.createElement("div", {
+    className: "modal-actions"
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "btn ghost",
+    onClick: onClose
+  }, "Cancelar"), /*#__PURE__*/React.createElement("button", {
+    className: "btn accent",
+    onClick: () => onSave(f),
+    disabled: !f.materialId
+  }, "Salvar")));
+}
+
+/* ==========================================================
+   8. ESTOQUE
+========================================================== */
+function Estoque({
+  db,
+  update
+}) {
+  const [modal, setModal] = useState(false);
+  const [fMat, setFMat] = useState('');
+  const [fCat, setFCat] = useState('');
+  const [fSit, setFSit] = useState('');
+  const [fTipo, setFTipo] = useState('');
+  const [fIni, setFIni] = useState('');
+  const [fFim, setFFim] = useState('');
+  const [fOp, setFOp] = useState('');
+  const [q, setQ] = useState('');
+  const materiaisFiltrados = db.materiais.filter(m => {
+    if (fCat && m.categoriaId !== fCat) return false;
+    if (q) {
+      const s = q.toLowerCase();
+      if (!(m.nome || '').toLowerCase().includes(s) && !(m.codigo || '').toLowerCase().includes(s)) return false;
+    }
+    const baixo = num(m.estoqueAtual) <= num(m.estoqueMinimo);
+    if (fSit === 'baixo' && !baixo) return false;
+    if (fSit === 'normal' && baixo) return false;
+    return true;
+  });
+  const movsFiltradas = db.movimentacoes.filter(mv => {
+    if (fMat && mv.materialId !== fMat) return false;
+    if (fTipo && mv.tipo !== fTipo) return false;
+    if (fIni && mv.data < fIni) return false;
+    if (fFim && mv.data > fFim) return false;
+    if (fOp === 'com' && !mv.opId) return false;
+    if (fOp === 'sem' && mv.opId) return false;
+    return true;
+  });
+  function limpar() {
+    setFMat('');
+    setFCat('');
+    setFSit('');
+    setFTipo('');
+    setFIni('');
+    setFFim('');
+    setFOp('');
+    setQ('');
+  }
+  function excluirMov(mv) {
+    if (!confirm('Excluir esta movimentação? O estoque do material será estornado.')) return;
+    update(d => {
+      const mat = d.materiais.find(m => m.id === mv.materialId);
+      if (mat) {
+        if (mv.tipo === 'Entrada' || mv.tipo === 'Devolução') mat.estoqueAtual = num(mat.estoqueAtual) - num(mv.quantidade);
+        if (mv.tipo === 'Saída') mat.estoqueAtual = num(mat.estoqueAtual) + num(mv.quantidade);
+      }
+      d.movimentacoes = d.movimentacoes.filter(x => x.id !== mv.id);
+      return d;
+    });
+  }
+  function registrar(mv) {
+    update(d => {
+      const mat = d.materiais.find(m => m.id === mv.materialId);
+      if (mat) {
+        if (mv.tipo === 'Entrada' || mv.tipo === 'Devolução') mat.estoqueAtual = num(mat.estoqueAtual) + num(mv.quantidade);
+        if (mv.tipo === 'Saída') mat.estoqueAtual = num(mat.estoqueAtual) - num(mv.quantidade);
+      }
+      d.movimentacoes.push({
+        ...mv,
+        id: uid(),
+        origem: mv.opId ? `OP vinculada` : 'Manual'
+      });
+      return d;
+    });
+    setModal(false);
+  }
+  return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    className: "page-head"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "eyebrow"
+  }, "Estoque & movimentações"), /*#__PURE__*/React.createElement("button", {
+    className: "btn accent",
+    onClick: () => setModal(true),
+    disabled: db.materiais.length === 0
+  }, "+ Nova movimentação")), /*#__PURE__*/React.createElement("div", {
+    className: "panel"
+  }, /*#__PURE__*/React.createElement("h3", null, "Filtros"), /*#__PURE__*/React.createElement("div", {
+    className: "grid3"
+  }, /*#__PURE__*/React.createElement(Field, {
+    label: "Buscar material"
+  }, /*#__PURE__*/React.createElement("input", {
+    placeholder: "Nome ou código…",
+    value: q,
+    onChange: e => setQ(e.target.value)
+  })), /*#__PURE__*/React.createElement(Field, {
+    label: "Categoria"
+  }, /*#__PURE__*/React.createElement("select", {
+    value: fCat,
+    onChange: e => setFCat(e.target.value)
+  }, /*#__PURE__*/React.createElement("option", {
+    value: ""
+  }, "Todas"), (db.categoriasMaterial || []).map(c => /*#__PURE__*/React.createElement("option", {
+    key: c.id,
+    value: c.id
+  }, c.nome)))), /*#__PURE__*/React.createElement(Field, {
+    label: "Situação do estoque"
+  }, /*#__PURE__*/React.createElement("select", {
+    value: fSit,
+    onChange: e => setFSit(e.target.value)
+  }, /*#__PURE__*/React.createElement("option", {
+    value: ""
+  }, "Todas"), /*#__PURE__*/React.createElement("option", {
+    value: "baixo"
+  }, "Abaixo do mínimo"), /*#__PURE__*/React.createElement("option", {
+    value: "normal"
+  }, "Normal"))), /*#__PURE__*/React.createElement(Field, {
+    label: "Movimentação — material"
+  }, /*#__PURE__*/React.createElement("select", {
+    value: fMat,
+    onChange: e => setFMat(e.target.value)
+  }, /*#__PURE__*/React.createElement("option", {
+    value: ""
+  }, "Todos"), db.materiais.map(m => /*#__PURE__*/React.createElement("option", {
+    key: m.id,
+    value: m.id
+  }, m.nome)))), /*#__PURE__*/React.createElement(Field, {
+    label: "Movimentação — tipo"
+  }, /*#__PURE__*/React.createElement("select", {
+    value: fTipo,
+    onChange: e => setFTipo(e.target.value)
+  }, /*#__PURE__*/React.createElement("option", {
+    value: ""
+  }, "Todos"), /*#__PURE__*/React.createElement("option", {
+    value: "Entrada"
+  }, "Entrada"), /*#__PURE__*/React.createElement("option", {
+    value: "Saída"
+  }, "Saída"), /*#__PURE__*/React.createElement("option", {
+    value: "Devolução"
+  }, "Devolução"))), /*#__PURE__*/React.createElement(Field, {
+    label: "Vínculo com OP"
+  }, /*#__PURE__*/React.createElement("select", {
+    value: fOp,
+    onChange: e => setFOp(e.target.value)
+  }, /*#__PURE__*/React.createElement("option", {
+    value: ""
+  }, "Todas"), /*#__PURE__*/React.createElement("option", {
+    value: "com"
+  }, "Somente com OP"), /*#__PURE__*/React.createElement("option", {
+    value: "sem"
+  }, "Somente sem OP"))), /*#__PURE__*/React.createElement(Field, {
+    label: "Data início"
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "date",
+    value: fIni,
+    onChange: e => setFIni(e.target.value)
+  })), /*#__PURE__*/React.createElement(Field, {
+    label: "Data fim"
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "date",
+    value: fFim,
+    onChange: e => setFFim(e.target.value)
+  })), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'flex-end'
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "btn ghost sm",
+    onClick: limpar
+  }, "Limpar filtros")))), /*#__PURE__*/React.createElement("div", {
+    className: "panel"
+  }, /*#__PURE__*/React.createElement("h3", null, "Estoque atual ", /*#__PURE__*/React.createElement("span", {
+    className: "chip"
+  }, materiaisFiltrados.length)), materiaisFiltrados.length === 0 ? /*#__PURE__*/React.createElement(Empty, {
+    text: "Nenhum material no filtro."
+  }) : /*#__PURE__*/React.createElement("table", null, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("th", null, "Material"), /*#__PURE__*/React.createElement("th", {
+    className: "num"
+  }, "Estoque"), /*#__PURE__*/React.createElement("th", {
+    className: "num"
+  }, "Mínimo"), /*#__PURE__*/React.createElement("th", null, "Situação"))), /*#__PURE__*/React.createElement("tbody", null, materiaisFiltrados.map(m => {
+    const baixo = num(m.estoqueAtual) <= num(m.estoqueMinimo);
+    return /*#__PURE__*/React.createElement("tr", {
+      key: m.id
+    }, /*#__PURE__*/React.createElement("td", null, m.nome), /*#__PURE__*/React.createElement("td", {
+      className: "num"
+    }, num(m.estoqueAtual), " ", m.unidade), /*#__PURE__*/React.createElement("td", {
+      className: "num muted"
+    }, num(m.estoqueMinimo), " ", m.unidade), /*#__PURE__*/React.createElement("td", null, baixo ? /*#__PURE__*/React.createElement(Badge, {
+      tone: "bad"
+    }, "Abaixo do mínimo") : /*#__PURE__*/React.createElement(Badge, {
+      tone: "ok"
+    }, "Normal")));
+  })))), /*#__PURE__*/React.createElement("div", {
+    className: "panel",
+    style: {
+      padding: 0
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      padding: '16px 20px 0 20px'
+    }
+  }, /*#__PURE__*/React.createElement("h3", null, "Movimentações ", /*#__PURE__*/React.createElement("span", {
+    className: "chip"
+  }, movsFiltradas.length))), movsFiltradas.length === 0 ? /*#__PURE__*/React.createElement("div", {
+    style: {
+      padding: 20
+    }
+  }, /*#__PURE__*/React.createElement(Empty, {
+    text: "Nenhuma movimentação no filtro."
+  })) : /*#__PURE__*/React.createElement("table", null, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("th", null, "Data"), /*#__PURE__*/React.createElement("th", null, "Tipo"), /*#__PURE__*/React.createElement("th", null, "Material"), /*#__PURE__*/React.createElement("th", {
+    className: "num"
+  }, "Qtd."), /*#__PURE__*/React.createElement("th", null, "OP"), /*#__PURE__*/React.createElement("th", null, "Origem"), /*#__PURE__*/React.createElement("th", null))), /*#__PURE__*/React.createElement("tbody", null, movsFiltradas.slice().reverse().map(mv => {
+    const mat = db.materiais.find(m => m.id === mv.materialId);
+    const op = db.ops.find(o => o.id === mv.opId);
+    const tone = mv.tipo === 'Entrada' ? 'ok' : mv.tipo === 'Saída' ? 'bad' : 'info';
+    return /*#__PURE__*/React.createElement("tr", {
+      key: mv.id
+    }, /*#__PURE__*/React.createElement("td", {
+      className: "small"
+    }, fmtDate(mv.data)), /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement(Badge, {
+      tone: tone
+    }, mv.tipo)), /*#__PURE__*/React.createElement("td", {
+      className: "small"
+    }, mat ? mat.nome : '—'), /*#__PURE__*/React.createElement("td", {
+      className: "num"
+    }, num(mv.quantidade)), /*#__PURE__*/React.createElement("td", {
+      className: "small muted"
+    }, op ? rotuloOP(op) : '—'), /*#__PURE__*/React.createElement("td", {
+      className: "small muted"
+    }, mv.origem), /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement("button", {
+      className: "btn danger sm",
+      onClick: () => excluirMov(mv)
+    }, "Excluir")));
+  })))), modal && /*#__PURE__*/React.createElement(MovimentacaoModal, {
+    db: db,
+    onClose: () => setModal(false),
+    onSave: registrar
+  }));
+}
+function MovimentacaoModal({
+  db,
+  onClose,
+  onSave
+}) {
+  const [f, setF] = useState({
+    tipo: 'Entrada',
+    materialId: db.materiais[0]?.id || '',
+    quantidade: 1,
+    opId: '',
+    data: todayISO()
+  });
+  const set = (k, v) => setF(prev => ({
+    ...prev,
+    [k]: v
+  }));
+  return /*#__PURE__*/React.createElement(Modal, {
+    title: "Nova movimentação de estoque",
+    onClose: onClose
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "grid2"
+  }, /*#__PURE__*/React.createElement(Field, {
+    label: "Tipo"
+  }, /*#__PURE__*/React.createElement("select", {
+    value: f.tipo,
+    onChange: e => set('tipo', e.target.value)
+  }, /*#__PURE__*/React.createElement("option", {
+    value: "Entrada"
+  }, "Entrada (compra de material)"), /*#__PURE__*/React.createElement("option", {
+    value: "Saída"
+  }, "Saída (enviado para OP)"), /*#__PURE__*/React.createElement("option", {
+    value: "Devolução"
+  }, "Devolução (sobra volta ao estoque)"))), /*#__PURE__*/React.createElement(Field, {
+    label: "Material"
+  }, /*#__PURE__*/React.createElement("select", {
+    value: f.materialId,
+    onChange: e => set('materialId', e.target.value)
+  }, db.materiais.map(m => /*#__PURE__*/React.createElement("option", {
+    key: m.id,
+    value: m.id
+  }, m.nome)))), /*#__PURE__*/React.createElement(Field, {
+    label: "Quantidade"
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "number",
+    step: "0.01",
+    value: f.quantidade,
+    onChange: e => set('quantidade', e.target.value)
+  })), /*#__PURE__*/React.createElement(Field, {
+    label: "Data"
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "date",
+    value: f.data,
+    onChange: e => set('data', e.target.value)
+  })), /*#__PURE__*/React.createElement(Field, {
+    label: "OP vinculada (opcional)"
+  }, /*#__PURE__*/React.createElement("select", {
+    value: f.opId,
+    onChange: e => set('opId', e.target.value)
+  }, /*#__PURE__*/React.createElement("option", {
+    value: ""
+  }, "— nenhuma —"), db.ops.map(op => /*#__PURE__*/React.createElement("option", {
+    key: op.id,
+    value: op.id
+  }, rotuloOP(op)))))), /*#__PURE__*/React.createElement("div", {
+    className: "modal-actions"
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "btn ghost",
+    onClick: onClose
+  }, "Cancelar"), /*#__PURE__*/React.createElement("button", {
+    className: "btn accent",
+    onClick: () => onSave(f),
+    disabled: !f.materialId
+  }, "Registrar")));
+}
+
+/* ==========================================================
+   Dados de teste — linha completa da camiseta
+========================================================== */
+function criarDadosTesteCamiseta(d) {
+  // --- Departamentos ---
+  const depCorte = {
+    id: uid(),
+    nome: 'Corte',
+    responsavel: 'Supervisor de Corte',
+    descricao: 'Enfesto, risco e corte do tecido'
+  };
+  const depSilk = {
+    id: uid(),
+    nome: 'Silk',
+    responsavel: 'Supervisor de Gravação',
+    descricao: 'Gravação silk/DTF das estampas'
+  };
+  const depPrep = {
+    id: uid(),
+    nome: 'Preparação',
+    responsavel: 'Supervisor de Preparação',
+    descricao: 'Separação de kits e aviamentos'
+  };
+  const depCostura = {
+    id: uid(),
+    nome: 'Costura',
+    responsavel: 'Supervisora de Costura',
+    descricao: 'Overlock, galoneira e reta'
+  };
+  const depAcab = {
+    id: uid(),
+    nome: 'Acabamento',
+    responsavel: 'Supervisor de Acabamento',
+    descricao: 'Revisão, limpeza e embalagem'
+  };
+  d.departamentos.push(depCorte, depSilk, depPrep, depCostura, depAcab);
+
+  // --- Colaboradores (base para a média salarial de cada departamento) ---
+  const colabs = [{
+    nome: 'Ana Souza',
+    funcoes: ['Cortadora', 'Supervisora de Corte'],
+    departamentoId: depCorte.id,
+    salario: 2400,
+    perfil: 'Gestor'
+  }, {
+    nome: 'Marcos Vieira',
+    funcoes: ['Vendedor'],
+    departamentoId: '',
+    salario: 2800
+  }, {
+    nome: 'Bruno Lima',
+    cargo: 'Enfestador',
+    departamentoId: depCorte.id,
+    salario: 2200
+  }, {
+    nome: 'Carla Dias',
+    cargo: 'Gravadora',
+    departamentoId: depSilk.id,
+    salario: 2300
+  }, {
+    nome: 'Diego Alves',
+    cargo: 'Auxiliar Silk',
+    departamentoId: depSilk.id,
+    salario: 2000
+  }, {
+    nome: 'Eliane Costa',
+    cargo: 'Auxiliar',
+    departamentoId: depPrep.id,
+    salario: 1900
+  }, {
+    nome: 'Fábio Ramos',
+    funcoes: ['Costureiro', 'Mecânico de máquinas'],
+    departamentoId: depCostura.id,
+    salario: 2600
+  }, {
+    nome: 'Gabriela Nunes',
+    cargo: 'Costureira',
+    departamentoId: depCostura.id,
+    salario: 2500
+  }, {
+    nome: 'Helena Prado',
+    cargo: 'Costureira',
+    departamentoId: depCostura.id,
+    salario: 2450
+  }, {
+    nome: 'Igor Martins',
+    cargo: 'Revisor',
+    departamentoId: depAcab.id,
+    salario: 2100
+  }, {
+    nome: 'Julia Freitas',
+    cargo: 'Embaladora',
+    departamentoId: depAcab.id,
+    salario: 1950
+  }];
+  colabs.forEach((c, i) => {
+    d.colaboradores.push({
+      id: uid(),
+      nome: c.nome,
+      cpf: '',
+      rg: '',
+      dataNascimento: '',
+      telefone: '',
+      celular: '',
+      email: '',
+      cargo: '',
+      funcoes: c.funcoes || (c.cargo ? [c.cargo] : []),
+      departamentoId: c.departamentoId,
+      dataAdmissao: '2025-03-01',
+      salario: c.salario,
+      status: 'Ativo',
+      perfil: c.perfil || 'Colaborador',
+      precisaTrocarSenha: true,
+      // cada um define a senha no 1º acesso
+      cep: '',
+      endereco: '',
+      numero: '',
+      complemento: '',
+      bairro: '',
+      cidade: '',
+      uf: '',
+      observacoes: ''
+    });
+  });
+  garantirAdminPadrao(d);
+
+  // --- Materiais ---
+  // --- Classificações ---
+  const catTecido = {
+    id: uid(),
+    codigo: 'TEC',
+    nome: 'Tecidos'
+  };
+  const catAviamento = {
+    id: uid(),
+    codigo: 'AVI',
+    nome: 'Aviamentos'
+  };
+  const catInsumo = {
+    id: uid(),
+    codigo: 'INS',
+    nome: 'Insumos'
+  };
+  const catEmbal = {
+    id: uid(),
+    codigo: 'EMB',
+    nome: 'Embalagens'
+  };
+  d.categoriasMaterial.push(catTecido, catAviamento, catInsumo, catEmbal);
+  const catProdCam = {
+    id: uid(),
+    codigo: 'AVE',
+    nome: 'Aventais'
+  };
+  const grpMalha = {
+    id: uid(),
+    codigo: 'OXF',
+    nome: 'Oxford'
+  };
+  const sgPV = {
+    id: uid(),
+    codigo: 'PAD',
+    nome: 'Padrão',
+    grupoId: grpMalha.id
+  };
+  d.categoriasProduto.push(catProdCam);
+  d.gruposProduto.push(grpMalha);
+  d.subgruposProduto.push(sgPV);
+  const mMalha = {
+    id: uid(),
+    categoriaId: catTecido.id,
+    codigo: 'TEC-0001',
+    nome: 'Tecido Oxford Royal',
+    categoria: 'Tecido',
+    cor: 'Royal',
+    unidade: 'kg',
+    estoqueAtual: 500,
+    estoqueMinimo: 80,
+    custo: 38.00,
+    fornecedor: 'Malharia Central',
+    localizacao: 'Prateleira A1'
+  };
+  const mGola = {
+    id: uid(),
+    categoriaId: catAviamento.id,
+    codigo: 'AVI-0001',
+    nome: 'Viés Preto',
+    categoria: 'Aviamento',
+    cor: 'Preto',
+    unidade: 'm',
+    estoqueAtual: 1600,
+    estoqueMinimo: 300,
+    custo: 4.50,
+    fornecedor: 'Aviamentos SP',
+    localizacao: 'Prateleira B2'
+  };
+  const mLinha = {
+    id: uid(),
+    categoriaId: catAviamento.id,
+    codigo: 'AVI-0002',
+    nome: 'Linha de Costura 120',
+    categoria: 'Aviamento',
+    cor: 'Branco',
+    unidade: 'm',
+    estoqueAtual: 15000,
+    estoqueMinimo: 3000,
+    custo: 0.02,
+    fornecedor: 'Aviamentos SP',
+    localizacao: 'Prateleira B3'
+  };
+  const mTinta = {
+    id: uid(),
+    categoriaId: catInsumo.id,
+    codigo: 'INS-0001',
+    nome: 'Tinta Plastisol Preta',
+    categoria: 'Insumo',
+    cor: 'Preto',
+    unidade: 'kg',
+    estoqueAtual: 12,
+    estoqueMinimo: 4,
+    custo: 95.00,
+    fornecedor: 'Silk Supply',
+    localizacao: 'Prateleira C1'
+  };
+  const mEtiqueta = {
+    id: uid(),
+    categoriaId: catAviamento.id,
+    codigo: 'AVI-0003',
+    nome: 'Etiqueta de Composição',
+    categoria: 'Aviamento',
+    cor: '—',
+    unidade: 'un',
+    estoqueAtual: 380,
+    estoqueMinimo: 500,
+    custo: 0.12,
+    fornecedor: 'Etiquetas Brasil',
+    localizacao: 'Gaveta D1'
+  };
+  const mEmbalagem = {
+    id: uid(),
+    categoriaId: catEmbal.id,
+    codigo: 'EMB-0001',
+    nome: 'Saco Plástico 30x40',
+    categoria: 'Embalagem',
+    cor: '—',
+    unidade: 'un',
+    estoqueAtual: 1500,
+    estoqueMinimo: 400,
+    custo: 0.18,
+    fornecedor: 'Embala Mais',
+    localizacao: 'Prateleira E1'
+  };
+  d.materiais.push(mMalha, mGola, mLinha, mTinta, mEtiqueta, mEmbalagem);
+
+  // --- Equipamentos / máquinas ---
+  const equipamentos = [{
+    codigo: 'EQ-001',
+    nome: 'Enfestadeira',
+    tipo: 'Enfesto',
+    departamentoId: depCorte.id
+  }, {
+    codigo: 'EQ-002',
+    nome: 'Máquina de Corte',
+    tipo: 'Corte',
+    departamentoId: depCorte.id
+  }, {
+    codigo: 'EQ-003',
+    nome: 'Carrossel Silk',
+    tipo: 'Silk',
+    departamentoId: depSilk.id
+  }, {
+    codigo: 'EQ-004',
+    nome: 'Lavadora de Telas',
+    tipo: 'Revelação',
+    departamentoId: depSilk.id
+  }, {
+    codigo: 'EQ-005',
+    nome: 'Overloque 1',
+    tipo: 'Overloque',
+    departamentoId: depCostura.id
+  }, {
+    codigo: 'EQ-006',
+    nome: 'Overloque 2',
+    tipo: 'Overloque',
+    departamentoId: depCostura.id
+  }, {
+    codigo: 'EQ-007',
+    nome: 'Reta 1',
+    tipo: 'Reta',
+    departamentoId: depCostura.id
+  }, {
+    codigo: 'EQ-008',
+    nome: 'Reta 2',
+    tipo: 'Reta',
+    departamentoId: depCostura.id
+  }, {
+    codigo: 'EQ-009',
+    nome: 'Reta 3',
+    tipo: 'Reta',
+    departamentoId: depCostura.id
+  }, {
+    codigo: 'EQ-010',
+    nome: 'Mesa de Revisão',
+    tipo: 'Revisão',
+    departamentoId: depAcab.id
+  }];
+  equipamentos.forEach(eq => {
+    d.equipamentos.push({
+      id: uid(),
+      ...eq,
+      marca: '',
+      modelo: '',
+      numeroSerie: '',
+      patrimonio: '',
+      dataAquisicao: '',
+      valorAquisicao: 0,
+      fornecedorId: '',
+      fornecedor: '',
+      localizacao: '',
+      ultimaManutencao: '',
+      proximaManutencao: '',
+      status: 'Operando',
+      observacoes: '',
+      manutencoes: []
+    });
+  });
+  // histórico de manutenção de exemplo em duas máquinas
+  const eqOver1 = d.equipamentos.find(x => x.codigo === 'EQ-005');
+  const eqReta1 = d.equipamentos.find(x => x.codigo === 'EQ-007');
+  if (eqOver1) {
+    eqOver1.manutencoes = [{
+      id: uid(),
+      data: '2026-05-14',
+      tipo: 'Preventiva',
+      pecas: 'Agulhas, óleo lubrificante',
+      servico: 'Limpeza geral e troca de agulhas.',
+      responsavel: 'Técnico externo',
+      custo: 180,
+      horasParada: 2
+    }, {
+      id: uid(),
+      data: '2026-07-02',
+      tipo: 'Corretiva',
+      pecas: 'Lançadeira',
+      servico: 'Substituição da lançadeira por desgaste.',
+      responsavel: 'Técnico externo',
+      custo: 420,
+      horasParada: 6
+    }];
+    eqOver1.ultimaManutencao = '2026-07-02';
+    eqOver1.proximaManutencao = '2026-10-02';
+  }
+  if (eqReta1) {
+    eqReta1.manutencoes = [{
+      id: uid(),
+      data: '2026-06-20',
+      tipo: 'Ajuste / Regulagem',
+      pecas: '',
+      servico: 'Regulagem de tensão da linha.',
+      responsavel: 'Fábio Ramos',
+      custo: 0,
+      horasParada: 1
+    }];
+    eqReta1.ultimaManutencao = '2026-06-20';
+  }
+
+  // --- Etapas de produção, por departamento e tipo de máquina ---
+  const E = (nome, depId, seg) => ({
+    id: uid(),
+    nome,
+    departamentoId: depId,
+    modoTempo: 'peca',
+    tempoProducao: seg,
+    unidadeTempo: 'seg',
+    tamanhoEquipe: ''
+  });
+
+  // Corte
+  const eRisco = E('Risco', depCorte.id, 20, 'Enfesto');
+  const eEnfesto = E('Enfesto', depCorte.id, 25, 'Enfesto');
+  const eCorte = E('Corte', depCorte.id, 45, 'Corte');
+  const eAmarracao = E('Amarração', depCorte.id, 15, '');
+  // Silk screen
+  const eRevelacao = E('Revelação de Tela', depSilk.id, 10, 'Revelação');
+  const eMistura = E('Mistura de Tinta', depSilk.id, 8, '');
+  const eAmostra = E('Amostra e Aprovação', depSilk.id, 6, 'Silk');
+  const eProdSilk = E('Produção Silk', depSilk.id, 55, 'Silk');
+  // Separação
+  const eSeparacao = E('Separação de Materiais', depPrep.id, 35, '');
+  // Costura (conforme sequência operacional do avental)
+  const eChulearBolso = E('Chulear bolso', depCostura.id, 5, 'Overloque');
+  const eDobraBolso = E('Dobra do bolso', depCostura.id, 5, 'Reta');
+  const eFixarBolso = E('Fixação do bolso', depCostura.id, 45, 'Reta');
+  const eViesBarra = E('Viés de barra', depCostura.id, 45, 'Reta');
+  const eViesPescoco = E('Viés do pescoço', depCostura.id, 30, 'Reta');
+  const ePresponto = E('Presponto', depCostura.id, 20, 'Reta');
+  // Acabamento
+  const eRevisao = E('Revisão', depAcab.id, 40, 'Revisão');
+  const eEmbalar = E('Embalagem', depAcab.id, 35, '');
+  d.etapasProducao.push(eRisco, eEnfesto, eCorte, eAmarracao, eRevelacao, eMistura, eAmostra, eProdSilk, eSeparacao, eChulearBolso, eDobraBolso, eFixarBolso, eViesBarra, eViesPescoco, ePresponto, eRevisao, eEmbalar);
+
+  // --- Produto: avental ---
+  const prod = {
+    id: uid(),
+    codigo: 'AVE.OXF.PAD-0001',
+    nome: 'Aventais Oxford Padrão Tecido Oxford Royal Único — com bolso frontal e viés contrastante',
+    categoriaId: catProdCam.id,
+    grupoId: grpMalha.id,
+    subgrupoId: sgPV.id,
+    categoria: 'Aventais',
+    medidas: 'Único',
+    tecidoId: mMalha.id,
+    arquivos: [],
+    observacoes: 'Com bolso frontal e viés contrastante',
+    etapas: [eRisco, eEnfesto, eCorte, eAmarracao, eRevelacao, eMistura, eAmostra, eProdSilk, eSeparacao, eChulearBolso, eDobraBolso, eFixarBolso, eViesBarra, eViesPescoco, ePresponto, eRevisao, eEmbalar].map((et, i) => {
+      // já deixa uma máquina do tipo alocada, alternando entre as iguais
+      const doDep = d.equipamentos.filter(q => q.departamentoId === et.departamentoId);
+      return {
+        id: uid(),
+        etapaId: et.id,
+        equipamentoId: doDep.length ? doDep[i % doDep.length].id : ''
+      };
+    }),
+    fichaTecnica: [{
+      materialId: mMalha.id,
+      quantidade: 0.75
+    }, {
+      materialId: mGola.id,
+      quantidade: 2.30
+    }, {
+      materialId: mLinha.id,
+      quantidade: 18
+    }, {
+      materialId: mTinta.id,
+      quantidade: 0.010
+    }, {
+      materialId: mEtiqueta.id,
+      quantidade: 1
+    }, {
+      materialId: mEmbalagem.id,
+      quantidade: 1
+    }]
+  };
+  d.produtos.push(prod);
+
+  // --- Cliente ---
+  const cliente = {
+    id: uid(),
+    tipo: 'PJ',
+    nome: 'Uniformes Delta Ltda',
+    nomeFantasia: 'Delta Uniformes',
+    documento: '12.345.678/0001-90',
+    ie: '110.042.490.114',
+    indicadorIE: 'Contribuinte',
+    telefone: '(11) 4002-8922',
+    celular: '(11) 98877-6655',
+    responsavel: 'Marcos Pereira',
+    email: 'compras@deltauniformes.com.br',
+    cep: '01310-000',
+    endereco: 'Av. Paulista',
+    numero: '1000',
+    complemento: 'Sala 42',
+    bairro: 'Bela Vista',
+    cidade: 'São Paulo',
+    uf: 'SP',
+    observacoes: 'Cliente recorrente.'
+  };
+  d.clientes.push(cliente);
+
+  // --- Fornecedor ---
+  d.fornecedores.push({
+    id: uid(),
+    nome: 'Malharia Central Ltda',
+    nomeFantasia: 'Malharia Central',
+    documento: '98.765.432/0001-10',
+    ie: '',
+    telefone: '(11) 3322-1100',
+    celular: '(11) 97766-5544',
+    contato: 'Roberto Silva',
+    email: 'vendas@malhariacentral.com.br',
+    categoria: 'Tecidos e malhas',
+    condicaoPagamento: '30/60 dias',
+    cep: '03015-000',
+    endereco: 'Rua do Tecido',
+    numero: '250',
+    complemento: '',
+    bairro: 'Brás',
+    cidade: 'São Paulo',
+    uf: 'SP',
+    observacoes: ''
+  });
+
+  // --- Pedido ---
+  const hoje = new Date();
+  const entrega = new Date(hoje);
+  entrega.setDate(entrega.getDate() + 12);
+  const entregaISO = entrega.toISOString().slice(0, 10);
+  const numeroPedido = d.seq.pedido++;
+  const pedido = {
+    id: uid(),
+    numero: numeroPedido,
+    cliente: cliente.nome,
+    clienteId: cliente.id,
+    vendedor: 'Marcos Vieira',
+    dataPedido: todayISO(),
+    prazoEntrega: entregaISO,
+    anexos: [],
+    itens: [{
+      id: uid(),
+      produtoId: prod.id,
+      quantidade: 500,
+      observacao: 'Estampa frente peito, 1 cor. Grade: 100 P, 200 M, 150 G, 50 GG.'
+    }],
+    observacoes: 'Entregar em caixas de 25 peças.',
+    status: 'Em produção'
+  };
+  d.pedidos.push(pedido);
+
+  // --- Ordem de Produção (com etapas em andamento) ---
+  const d1 = new Date(hoje);
+  const d2 = new Date(hoje);
+  d2.setDate(d2.getDate() + 1);
+  const d3 = new Date(hoje);
+  d3.setDate(d3.getDate() + 2);
+  const iso = x => x.toISOString().slice(0, 10);
+  const numeroOP = numeroPedido; // a OP herda o número do pedido
+  const defs = [eRisco, eEnfesto, eCorte, eAmarracao, eRevelacao, eMistura, eAmostra, eProdSilk, eSeparacao, eChulearBolso, eDobraBolso, eFixarBolso, eViesBarra, eViesPescoco, ePresponto, eRevisao, eEmbalar];
+  // progresso por índice de defs (17 etapas)
+  const P = (status, rec, conc, resp, ini2, fim2, obs) => ({
+    status,
+    qtdRecebida: rec,
+    qtdConcluida: conc,
+    responsaveis: resp,
+    dataInicio: ini2,
+    dataConclusao: fim2,
+    observacao: obs || ''
+  });
+  const progresso = [P('Concluída', 500, 500, ['Bruno Lima'], iso(d1), iso(d1), 'Risco conferido.'), P('Concluída', 500, 500, ['Bruno Lima'], iso(d1), iso(d1), 'Enfesto sem perdas.'), P('Concluída', 500, 500, ['Ana Souza'], iso(d1), iso(d1), ''), P('Concluída', 500, 500, ['Ana Souza'], iso(d1), iso(d1), ''), P('Concluída', 500, 500, ['Carla Dias'], iso(d2), iso(d2), ''), P('Concluída', 500, 500, ['Diego Alves'], iso(d2), iso(d2), ''), P('Concluída', 500, 500, ['Carla Dias'], iso(d2), iso(d2), 'Amostra aprovada pelo cliente.'), P('Concluída', 500, 498, ['Carla Dias', 'Diego Alves'], iso(d2), iso(d2), '2 peças com falha de gravação.'), P('Concluída', 498, 498, ['Eliane Costa'], iso(d2), iso(d2), ''), P('Em andamento', 498, 400, ['Gabriela Nunes'], iso(d3), '', ''), P('Em andamento', 498, 380, ['Helena Prado'], iso(d3), '', ''), P('Em andamento', 498, 310, ['Fábio Ramos'], iso(d3), '', 'Em produção.'), P('Não iniciada', 0, 0, ['Gabriela Nunes'], '', '', ''), P('Não iniciada', 0, 0, ['Helena Prado'], '', '', ''), P('Não iniciada', 0, 0, ['Fábio Ramos'], '', '', ''), P('Não iniciada', 0, 0, ['Igor Martins'], '', '', ''), P('Não iniciada', 0, 0, ['Julia Freitas'], '', '', '')];
+  const etapasOP = defs.map((def, i) => {
+    // aloca a primeira máquina disponível do tipo, distribuindo entre as iguais
+    const doDep = d.equipamentos.filter(eq => eq.departamentoId === def.departamentoId);
+    const maquina = doDep.length ? doDep[i % doDep.length] : null;
+    return {
+      etapaProducaoId: def.id,
+      departamentoId: def.departamentoId,
+      nome: def.nome,
+      modoTempo: def.modoTempo,
+      tempoProducao: def.tempoProducao,
+      unidadeTempo: def.unidadeTempo,
+      tamanhoEquipe: def.tamanhoEquipe,
+      tamanhoLote: def.tamanhoLote || '',
+      equipamentoId: maquina ? maquina.id : '',
+      ...progresso[i]
+    };
+  });
+  const op = {
+    id: uid(),
+    numero: numeroOP,
+    sufixo: '',
+    pedidoId: pedido.id,
+    produtoId: prod.id,
+    quantidade: 500,
+    entrega: entregaISO,
+    etapas: etapasOP,
+    anexos: []
+  };
+  d.ops.push(op);
+
+  // --- Movimentações de estoque ligadas à OP (saída de material para produção) ---
+  const saidas = [{
+    materialId: mMalha.id,
+    quantidade: 90
+  }, {
+    materialId: mGola.id,
+    quantidade: 275
+  }, {
+    materialId: mLinha.id,
+    quantidade: 6000
+  }, {
+    materialId: mTinta.id,
+    quantidade: 4
+  }];
+  saidas.forEach(s => {
+    const mat = d.materiais.find(m => m.id === s.materialId);
+    if (mat) mat.estoqueAtual = num(mat.estoqueAtual) - s.quantidade;
+    d.movimentacoes.push({
+      id: uid(),
+      tipo: 'Saída',
+      materialId: s.materialId,
+      quantidade: s.quantidade,
+      opId: op.id,
+      data: iso(d1),
+      origem: rotuloOP(op)
+    });
+  });
+
+  // --- Compra pendente (etiqueta está abaixo do necessário para a OP) ---
+  const numeroCompra = d.seq.compra++;
+  d.compras.push({
+    id: uid(),
+    numero: numeroCompra,
+    materialId: mEtiqueta.id,
+    quantidade: 1000,
+    fornecedor: 'Etiquetas Brasil',
+    valor: 120.00,
+    dataPedido: todayISO(),
+    previsaoChegada: iso(d3),
+    status: 'Comprado'
+  });
+  return d;
+}
+
+/* --- responsáveis de uma etapa: sempre como array, aceitando o formato antigo (string) --- */
+/* Etapas do produto — aceita o formato antigo (lista de ids) e o novo
+   (lista de objetos com etapa + equipamento definido no cadastro do produto). */
+function etapasDoProduto(produto) {
+  const lista = produto && produto.etapas || [];
+  return lista.map(x => typeof x === 'string' ? {
+    id: x,
+    etapaId: x,
+    equipamentoId: ''
+  } : {
+    id: x.id || x.etapaId,
+    etapaId: x.etapaId,
+    equipamentoId: x.equipamentoId || ''
+  });
+}
+
+// rótulo da OP: número do pedido + sufixo sequencial (a, b, c…) quando o pedido tem vários produtos
+function rotuloOP(op) {
+  if (!op) return '—';
+  return `OP ${String(op.numero).padStart(5, '0')}${op.sufixo || ''}`;
+}
+function sufixoPorIndice(i) {
+  return '/' + String.fromCharCode(65 + i);
+} // 0->/A, 1->/B …
+
+/* Funções do colaborador — aceita o formato antigo (campo `cargo` em texto)
+   e o novo (`funcoes`, lista com uma ou mais funções). */
+function funcoesColaborador(c) {
+  if (!c) return [];
+  if (Array.isArray(c.funcoes) && c.funcoes.length) return c.funcoes;
+  if (c.cargo && String(c.cargo).trim()) return String(c.cargo).split(/[,;/]+/).map(x => x.trim()).filter(Boolean);
+  return [];
+}
+function ehVendedor(c) {
+  return funcoesColaborador(c).some(f => normaliza(f).includes('vended'));
+}
+function responsaveisEtapa(et) {
+  if (Array.isArray(et.responsaveis)) return et.responsaveis;
+  if (et.responsavel && String(et.responsavel).trim()) return [String(et.responsavel).trim()];
+  return [];
+}
+
+/* --- custo unitário de produção do produto (materiais + mão de obra) --- */
+function custoUnitarioProduto(produto, db) {
+  let custoMat = 0;
+  (produto.fichaTecnica || []).forEach(it => {
+    const mat = db.materiais.find(m => m.id === it.materialId);
+    if (mat) custoMat += num(it.quantidade) * num(mat.custo);
+  });
+  let custoMO = 0,
+    moVariavel = false,
+    moSemBase = false;
+  const doProduto = etapasDoProduto(produto);
+  const listaEtapas = doProduto.length ? doProduto.map(x => (db.etapasProducao || []).find(e => e.id === x.etapaId)).filter(Boolean) : db.etapasProducao || [];
+  listaEtapas.forEach(def => {
+    if (def.modoTempo !== 'peca') {
+      moVariavel = true;
+      return;
+    }
+    const c = custoMaoDeObraPorPeca(def, db);
+    if (c === null) {
+      moSemBase = true;
+      return;
+    }
+    custoMO += c;
+  });
+  return {
+    custoMat,
+    custoMO,
+    total: custoMat + custoMO,
+    moVariavel,
+    moSemBase
+  };
+}
+
+/* ==========================================================
+   RELATÓRIOS
+========================================================== */
+function RelatoriosPessoas({
+  db
+}) {
+  const [ini, setIni] = useState('');
+  const [fim, setFim] = useState('');
+  const [grupo, setGrupo] = useState('todos'); // todos | clientes | fornecedores | colaboradores
+
+  // filtro de período aplicado à data de cadastro/admissão disponível em cada grupo
+  const noPeriodo = dataISO => {
+    if (!ini && !fim) return true;
+    if (!dataISO) return false;
+    if (ini && dataISO < ini) return false;
+    if (fim && dataISO > fim) return false;
+    return true;
+  };
+  const colaboradores = db.colaboradores.filter(c => noPeriodo(c.dataAdmissao));
+  const clientes = db.clientes; // cadastro de cliente não tem data — só é filtrado quando o período está vazio
+  const fornecedores = db.fornecedores;
+  const filtroDataAtivo = !!(ini || fim);
+  const mostra = g => grupo === 'todos' || grupo === g;
+  const porDep = db.departamentos.map(dep => {
+    const g = colaboradores.filter(c => c.departamentoId === dep.id && c.status !== 'Inativo');
+    const folha = g.reduce((s, c) => s + num(c.salario), 0);
+    return {
+      dep,
+      qtd: g.length,
+      folha,
+      media: g.length ? folha / g.length : 0
+    };
+  });
+  const semDep = colaboradores.filter(c => !c.departamentoId && c.status !== 'Inativo');
+  const ativos = colaboradores.filter(c => c.status !== 'Inativo');
+  const folhaTotal = ativos.reduce((s, c) => s + num(c.salario), 0);
+  return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    className: "panel"
+  }, /*#__PURE__*/React.createElement("h3", null, "Filtros"), /*#__PURE__*/React.createElement("div", {
+    className: "grid3"
+  }, /*#__PURE__*/React.createElement(Field, {
+    label: "Data início"
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "date",
+    value: ini,
+    onChange: e => setIni(e.target.value)
+  })), /*#__PURE__*/React.createElement(Field, {
+    label: "Data fim"
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "date",
+    value: fim,
+    onChange: e => setFim(e.target.value)
+  })), /*#__PURE__*/React.createElement(Field, {
+    label: "Grupo de cadastro"
+  }, /*#__PURE__*/React.createElement("select", {
+    value: grupo,
+    onChange: e => setGrupo(e.target.value)
+  }, /*#__PURE__*/React.createElement("option", {
+    value: "todos"
+  }, "Todos os grupos"), /*#__PURE__*/React.createElement("option", {
+    value: "clientes"
+  }, "Clientes"), /*#__PURE__*/React.createElement("option", {
+    value: "fornecedores"
+  }, "Fornecedores"), /*#__PURE__*/React.createElement("option", {
+    value: "colaboradores"
+  }, "Colaboradores"), /*#__PURE__*/React.createElement("option", {
+    value: "equipamentos"
+  }, "Equipamentos")))), /*#__PURE__*/React.createElement("button", {
+    className: "btn ghost sm",
+    onClick: () => {
+      setIni('');
+      setFim('');
+      setGrupo('todos');
+    }
+  }, "Limpar filtros"), filtroDataAtivo && /*#__PURE__*/React.createElement("div", {
+    className: "small muted",
+    style: {
+      marginTop: 8
+    }
+  }, "Período aplicado à data de admissão dos colaboradores. Clientes e fornecedores não têm data de cadastro registrada.")), /*#__PURE__*/React.createElement("div", {
+    className: "kpis"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "kpi accent"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "lbl"
+  }, "Colaboradores ativos"), /*#__PURE__*/React.createElement("div", {
+    className: "val"
+  }, ativos.length)), /*#__PURE__*/React.createElement("div", {
+    className: "kpi"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "lbl"
+  }, "Folha mensal"), /*#__PURE__*/React.createElement("div", {
+    className: "val",
+    style: {
+      fontSize: 22
+    }
+  }, money(folhaTotal))), /*#__PURE__*/React.createElement("div", {
+    className: "kpi"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "lbl"
+  }, "Clientes"), /*#__PURE__*/React.createElement("div", {
+    className: "val"
+  }, clientes.length)), /*#__PURE__*/React.createElement("div", {
+    className: "kpi"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "lbl"
+  }, "Equipamentos"), /*#__PURE__*/React.createElement("div", {
+    className: "val"
+  }, (db.equipamentos || []).length))), mostra('colaboradores') && /*#__PURE__*/React.createElement("div", {
+    className: "panel"
+  }, /*#__PURE__*/React.createElement("h3", null, "Quadro por departamento"), porDep.length === 0 ? /*#__PURE__*/React.createElement(Empty, {
+    text: "Nenhum departamento cadastrado."
+  }) : /*#__PURE__*/React.createElement("table", null, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("th", null, "Departamento"), /*#__PURE__*/React.createElement("th", {
+    className: "num"
+  }, "Colaboradores"), /*#__PURE__*/React.createElement("th", {
+    className: "num"
+  }, "Folha mensal"), /*#__PURE__*/React.createElement("th", {
+    className: "num"
+  }, "Média salarial"))), /*#__PURE__*/React.createElement("tbody", null, porDep.map(r => /*#__PURE__*/React.createElement("tr", {
+    key: r.dep.id
+  }, /*#__PURE__*/React.createElement("td", null, r.dep.nome), /*#__PURE__*/React.createElement("td", {
+    className: "num"
+  }, r.qtd), /*#__PURE__*/React.createElement("td", {
+    className: "num"
+  }, money(r.folha)), /*#__PURE__*/React.createElement("td", {
+    className: "num"
+  }, r.qtd ? money(r.media) : /*#__PURE__*/React.createElement("span", {
+    className: "muted"
+  }, "—")))), semDep.length > 0 && /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("td", {
+    className: "muted"
+  }, "(sem departamento)"), /*#__PURE__*/React.createElement("td", {
+    className: "num"
+  }, semDep.length), /*#__PURE__*/React.createElement("td", {
+    className: "num"
+  }, money(semDep.reduce((s, c) => s + num(c.salario), 0))), /*#__PURE__*/React.createElement("td", {
+    className: "num"
+  }, "—"))))), mostra('colaboradores') && /*#__PURE__*/React.createElement("div", {
+    className: "panel"
+  }, /*#__PURE__*/React.createElement("h3", null, "Colaboradores ", filtroDataAtivo && /*#__PURE__*/React.createElement("span", {
+    className: "small muted"
+  }, "(admitidos no período)")), colaboradores.length === 0 ? /*#__PURE__*/React.createElement(Empty, {
+    text: "Nenhum colaborador no filtro."
+  }) : /*#__PURE__*/React.createElement("table", null, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("th", null, "Nome"), /*#__PURE__*/React.createElement("th", null, "Cargo"), /*#__PURE__*/React.createElement("th", null, "Departamento"), /*#__PURE__*/React.createElement("th", null, "Admissão"), /*#__PURE__*/React.createElement("th", null, "Perfil"), /*#__PURE__*/React.createElement("th", null, "Acesso"), /*#__PURE__*/React.createElement("th", null, "Status"))), /*#__PURE__*/React.createElement("tbody", null, colaboradores.map(c => {
+    const dep = db.departamentos.find(d => d.id === c.departamentoId);
+    const temSenha = temSenhaDefinida(c);
+    return /*#__PURE__*/React.createElement("tr", {
+      key: c.id
+    }, /*#__PURE__*/React.createElement("td", null, c.nome), /*#__PURE__*/React.createElement("td", {
+      className: "small"
+    }, funcoesColaborador(c).join(', ') || '—'), /*#__PURE__*/React.createElement("td", {
+      className: "small"
+    }, dep ? dep.nome : '—'), /*#__PURE__*/React.createElement("td", {
+      className: "small"
+    }, fmtDate(c.dataAdmissao)), /*#__PURE__*/React.createElement("td", {
+      className: "small"
+    }, c.perfil || 'Colaborador'), /*#__PURE__*/React.createElement("td", null, temSenha ? /*#__PURE__*/React.createElement(Badge, {
+      tone: "ok"
+    }, "Liberado") : /*#__PURE__*/React.createElement(Badge, {
+      tone: "bad"
+    }, "Bloqueado")), /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement(Badge, {
+      tone: c.status === 'Inativo' ? 'idle' : 'ok'
+    }, c.status || 'Ativo')));
+  })))), mostra('clientes') && /*#__PURE__*/React.createElement("div", {
+    className: "panel"
+  }, /*#__PURE__*/React.createElement("h3", null, "Clientes"), clientes.length === 0 ? /*#__PURE__*/React.createElement(Empty, {
+    text: "Nenhum cliente cadastrado."
+  }) : /*#__PURE__*/React.createElement("table", null, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("th", null, "Nome / Razão Social"), /*#__PURE__*/React.createElement("th", null, "Tipo"), /*#__PURE__*/React.createElement("th", null, "CPF/CNPJ"), /*#__PURE__*/React.createElement("th", null, "Contato"), /*#__PURE__*/React.createElement("th", null, "Cidade/UF"))), /*#__PURE__*/React.createElement("tbody", null, clientes.map(c => /*#__PURE__*/React.createElement("tr", {
+    key: c.id
+  }, /*#__PURE__*/React.createElement("td", null, c.nome), /*#__PURE__*/React.createElement("td", {
+    className: "small"
+  }, c.tipo), /*#__PURE__*/React.createElement("td", {
+    className: "small muted"
+  }, c.documento), /*#__PURE__*/React.createElement("td", {
+    className: "small"
+  }, c.celular || c.telefone), /*#__PURE__*/React.createElement("td", {
+    className: "small muted"
+  }, c.cidade, c.uf ? `/${c.uf}` : '')))))), mostra('equipamentos') && /*#__PURE__*/React.createElement("div", {
+    className: "panel"
+  }, /*#__PURE__*/React.createElement("h3", null, "Equipamentos"), (db.equipamentos || []).length === 0 ? /*#__PURE__*/React.createElement(Empty, {
+    text: "Nenhum equipamento cadastrado."
+  }) : /*#__PURE__*/React.createElement("table", null, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("th", null, "Código"), /*#__PURE__*/React.createElement("th", null, "Equipamento"), /*#__PURE__*/React.createElement("th", null, "Departamento"), /*#__PURE__*/React.createElement("th", null, "Marca/Modelo"), /*#__PURE__*/React.createElement("th", null, "Próx. manutenção"), /*#__PURE__*/React.createElement("th", null, "Situação"))), /*#__PURE__*/React.createElement("tbody", null, (db.equipamentos || []).map(eq => {
+    const dep = db.departamentos.find(d => d.id === eq.departamentoId);
+    const st = eq.status || 'Operando';
+    const tone = st === 'Operando' ? 'ok' : st === 'Em manutenção' ? 'warn' : st === 'Parado' ? 'bad' : 'idle';
+    return /*#__PURE__*/React.createElement("tr", {
+      key: eq.id
+    }, /*#__PURE__*/React.createElement("td", {
+      className: "small muted"
+    }, eq.codigo), /*#__PURE__*/React.createElement("td", null, eq.nome), /*#__PURE__*/React.createElement("td", {
+      className: "small"
+    }, dep ? dep.nome : '—'), /*#__PURE__*/React.createElement("td", {
+      className: "small"
+    }, [eq.marca, eq.modelo].filter(Boolean).join(' / ') || '—'), /*#__PURE__*/React.createElement("td", {
+      className: "small"
+    }, fmtDate(eq.proximaManutencao)), /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement(Badge, {
+      tone: tone
+    }, st)));
+  })))), mostra('fornecedores') && /*#__PURE__*/React.createElement("div", {
+    className: "panel"
+  }, /*#__PURE__*/React.createElement("h3", null, "Fornecedores"), fornecedores.length === 0 ? /*#__PURE__*/React.createElement(Empty, {
+    text: "Nenhum fornecedor cadastrado."
+  }) : /*#__PURE__*/React.createElement("table", null, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("th", null, "Nome / Razão Social"), /*#__PURE__*/React.createElement("th", null, "CNPJ/CPF"), /*#__PURE__*/React.createElement("th", null, "Categoria"), /*#__PURE__*/React.createElement("th", null, "Contato"), /*#__PURE__*/React.createElement("th", null, "Condição pgto."))), /*#__PURE__*/React.createElement("tbody", null, fornecedores.map(f => /*#__PURE__*/React.createElement("tr", {
+    key: f.id
+  }, /*#__PURE__*/React.createElement("td", null, f.nome), /*#__PURE__*/React.createElement("td", {
+    className: "small muted"
+  }, f.documento), /*#__PURE__*/React.createElement("td", {
+    className: "small"
+  }, f.categoria), /*#__PURE__*/React.createElement("td", {
+    className: "small"
+  }, f.celular || f.telefone), /*#__PURE__*/React.createElement("td", {
+    className: "small muted"
+  }, f.condicaoPagamento)))))));
+}
+function RelatoriosMateriais({
+  db,
+  podeFin = true
+}) {
+  const [fCat, setFCat] = useState('');
+  const [fCatProd, setFCatProd] = useState('');
+  const [fIni, setFIni] = useState('');
+  const [fFim, setFFim] = useState('');
+  const [fStatusCompra, setFStatusCompra] = useState('');
+  const materiais = db.materiais.filter(m => !fCat || m.categoriaId === fCat);
+  const produtos = db.produtos.filter(p => !fCatProd || p.categoriaId === fCatProd);
+  const compras = db.compras.filter(c => {
+    if (fStatusCompra && c.status !== fStatusCompra) return false;
+    if (fIni && c.dataPedido < fIni) return false;
+    if (fFim && c.dataPedido > fFim) return false;
+    return true;
+  });
+  const valorEstoque = materiais.reduce((s, m) => s + num(m.estoqueAtual) * num(m.custo), 0);
+  const abaixoMin = materiais.filter(m => num(m.estoqueAtual) <= num(m.estoqueMinimo));
+  const comprasAbertas = compras.filter(c => c.status !== 'Recebido');
+  const valorCompras = comprasAbertas.reduce((s, c) => s + num(c.valor), 0);
+  return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    className: "panel"
+  }, /*#__PURE__*/React.createElement("h3", null, "Filtros"), /*#__PURE__*/React.createElement("div", {
+    className: "grid3"
+  }, /*#__PURE__*/React.createElement(Field, {
+    label: "Categoria de material"
+  }, /*#__PURE__*/React.createElement("select", {
+    value: fCat,
+    onChange: e => setFCat(e.target.value)
+  }, /*#__PURE__*/React.createElement("option", {
+    value: ""
+  }, "Todas"), (db.categoriasMaterial || []).map(c => /*#__PURE__*/React.createElement("option", {
+    key: c.id,
+    value: c.id
+  }, c.nome)))), /*#__PURE__*/React.createElement(Field, {
+    label: "Categoria de produto"
+  }, /*#__PURE__*/React.createElement("select", {
+    value: fCatProd,
+    onChange: e => setFCatProd(e.target.value)
+  }, /*#__PURE__*/React.createElement("option", {
+    value: ""
+  }, "Todas"), (db.categoriasProduto || []).map(c => /*#__PURE__*/React.createElement("option", {
+    key: c.id,
+    value: c.id
+  }, c.nome)))), /*#__PURE__*/React.createElement(Field, {
+    label: "Status da compra"
+  }, /*#__PURE__*/React.createElement("select", {
+    value: fStatusCompra,
+    onChange: e => setFStatusCompra(e.target.value)
+  }, /*#__PURE__*/React.createElement("option", {
+    value: ""
+  }, "Todos"), STATUS_COMPRA.map(st => /*#__PURE__*/React.createElement("option", {
+    key: st,
+    value: st
+  }, st)))), /*#__PURE__*/React.createElement(Field, {
+    label: "Compras — data início"
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "date",
+    value: fIni,
+    onChange: e => setFIni(e.target.value)
+  })), /*#__PURE__*/React.createElement(Field, {
+    label: "Compras — data fim"
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "date",
+    value: fFim,
+    onChange: e => setFFim(e.target.value)
+  })), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'flex-end'
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "btn ghost sm",
+    onClick: () => {
+      setFCat('');
+      setFCatProd('');
+      setFIni('');
+      setFFim('');
+      setFStatusCompra('');
+    }
+  }, "Limpar filtros")))), /*#__PURE__*/React.createElement("div", {
+    className: "kpis"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "kpi accent"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "lbl"
+  }, "Valor em estoque"), /*#__PURE__*/React.createElement("div", {
+    className: "val",
+    style: {
+      fontSize: 22
+    }
+  }, money(valorEstoque))), /*#__PURE__*/React.createElement("div", {
+    className: "kpi"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "lbl"
+  }, "Materiais"), /*#__PURE__*/React.createElement("div", {
+    className: "val"
+  }, materiais.length)), /*#__PURE__*/React.createElement("div", {
+    className: "kpi"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "lbl"
+  }, "Abaixo do mínimo"), /*#__PURE__*/React.createElement("div", {
+    className: "val"
+  }, abaixoMin.length)), /*#__PURE__*/React.createElement("div", {
+    className: "kpi"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "lbl"
+  }, "Compras em aberto"), /*#__PURE__*/React.createElement("div", {
+    className: "val",
+    style: {
+      fontSize: 22
+    }
+  }, money(valorCompras)))), !podeFin && /*#__PURE__*/React.createElement("div", {
+    className: "panel",
+    style: {
+      borderColor: 'var(--warn)',
+      background: 'var(--warn-bg)'
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "small",
+    style: {
+      color: 'var(--warn)',
+      fontWeight: 600
+    }
+  }, "Seu perfil não tem acesso a valores financeiros (custos, preços e valor de estoque).")), podeFin && /*#__PURE__*/React.createElement("div", {
+    className: "panel"
+  }, /*#__PURE__*/React.createElement("h3", null, "Custo unitário de produção por produto"), produtos.length === 0 ? /*#__PURE__*/React.createElement(Empty, {
+    text: "Nenhum produto no filtro."
+  }) : /*#__PURE__*/React.createElement("table", null, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("th", null, "Produto"), /*#__PURE__*/React.createElement("th", {
+    className: "num"
+  }, "Materiais"), /*#__PURE__*/React.createElement("th", {
+    className: "num"
+  }, "Mão de obra"), /*#__PURE__*/React.createElement("th", {
+    className: "num"
+  }, "Custo total / peça"), /*#__PURE__*/React.createElement("th", null, "Observação"))), /*#__PURE__*/React.createElement("tbody", null, produtos.map(p => {
+    const c = custoUnitarioProduto(p, db);
+    return /*#__PURE__*/React.createElement("tr", {
+      key: p.id
+    }, /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement("strong", null, p.nome), " ", /*#__PURE__*/React.createElement("span", {
+      className: "small muted"
+    }, p.codigo)), /*#__PURE__*/React.createElement("td", {
+      className: "num"
+    }, money(c.custoMat)), /*#__PURE__*/React.createElement("td", {
+      className: "num"
+    }, money(c.custoMO)), /*#__PURE__*/React.createElement("td", {
+      className: "num"
+    }, /*#__PURE__*/React.createElement("strong", null, money(c.total))), /*#__PURE__*/React.createElement("td", {
+      className: "small muted"
+    }, c.moVariavel && 'etapa por lote/equipe (M.O. variável) ', c.moSemBase && 'depto. sem colaboradores', !c.moVariavel && !c.moSemBase && '—'));
+  })))), /*#__PURE__*/React.createElement("div", {
+    className: "panel"
+  }, /*#__PURE__*/React.createElement("h3", null, "Posição de estoque"), materiais.length === 0 ? /*#__PURE__*/React.createElement(Empty, {
+    text: "Nenhum material no filtro."
+  }) : /*#__PURE__*/React.createElement("table", null, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("th", null, "Material"), /*#__PURE__*/React.createElement("th", {
+    className: "num"
+  }, "Estoque"), /*#__PURE__*/React.createElement("th", {
+    className: "num"
+  }, "Mínimo"), /*#__PURE__*/React.createElement("th", {
+    className: "num"
+  }, "Custo unit."), /*#__PURE__*/React.createElement("th", {
+    className: "num"
+  }, "Valor total"), /*#__PURE__*/React.createElement("th", null, "Situação"))), /*#__PURE__*/React.createElement("tbody", null, materiais.map(m => {
+    const baixo = num(m.estoqueAtual) <= num(m.estoqueMinimo);
+    return /*#__PURE__*/React.createElement("tr", {
+      key: m.id
+    }, /*#__PURE__*/React.createElement("td", null, m.nome), /*#__PURE__*/React.createElement("td", {
+      className: "num"
+    }, num(m.estoqueAtual), " ", m.unidade), /*#__PURE__*/React.createElement("td", {
+      className: "num muted"
+    }, num(m.estoqueMinimo)), /*#__PURE__*/React.createElement("td", {
+      className: "num"
+    }, money(m.custo)), /*#__PURE__*/React.createElement("td", {
+      className: "num"
+    }, money(num(m.estoqueAtual) * num(m.custo))), /*#__PURE__*/React.createElement("td", null, baixo ? /*#__PURE__*/React.createElement(Badge, {
+      tone: "bad"
+    }, "Repor") : /*#__PURE__*/React.createElement(Badge, {
+      tone: "ok"
+    }, "Normal")));
+  })))), /*#__PURE__*/React.createElement("div", {
+    className: "panel"
+  }, /*#__PURE__*/React.createElement("h3", null, "Compras ", fStatusCompra || fIni || fFim ? /*#__PURE__*/React.createElement("span", {
+    className: "small muted"
+  }, "(no filtro)") : /*#__PURE__*/React.createElement("span", {
+    className: "small muted"
+  }, "em aberto")), comprasAbertas.length === 0 ? /*#__PURE__*/React.createElement(Empty, {
+    text: "Nenhuma compra no filtro."
+  }) : /*#__PURE__*/React.createElement("table", null, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("th", null, "Nº"), /*#__PURE__*/React.createElement("th", null, "Material"), /*#__PURE__*/React.createElement("th", {
+    className: "num"
+  }, "Qtd."), /*#__PURE__*/React.createElement("th", null, "Fornecedor"), /*#__PURE__*/React.createElement("th", {
+    className: "num"
+  }, "Valor"), /*#__PURE__*/React.createElement("th", null, "Previsão"), /*#__PURE__*/React.createElement("th", null, "Status"))), /*#__PURE__*/React.createElement("tbody", null, comprasAbertas.map(c => {
+    const mat = db.materiais.find(m => m.id === c.materialId);
+    return /*#__PURE__*/React.createElement("tr", {
+      key: c.id
+    }, /*#__PURE__*/React.createElement("td", {
+      className: "small muted"
+    }, "#", c.numero), /*#__PURE__*/React.createElement("td", null, mat ? mat.nome : '—'), /*#__PURE__*/React.createElement("td", {
+      className: "num"
+    }, c.quantidade), /*#__PURE__*/React.createElement("td", {
+      className: "small"
+    }, c.fornecedor), /*#__PURE__*/React.createElement("td", {
+      className: "num"
+    }, money(c.valor)), /*#__PURE__*/React.createElement("td", {
+      className: "small"
+    }, fmtDate(c.previsaoChegada)), /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement(StatusCompraBadge, {
+      status: c.status
+    })));
+  })))));
+}
+function RelatoriosProducao({
+  db
+}) {
+  const [fIni, setFIni] = useState('');
+  const [fFim, setFFim] = useState('');
+  const [fDep, setFDep] = useState('');
+  const [fCol, setFCol] = useState('');
+  const aps = (db.apontamentos || []).filter(a => {
+    if (!a.fim) return false;
+    const dia = String(a.fim).slice(0, 10);
+    if (fIni && dia < fIni) return false;
+    if (fFim && dia > fFim) return false;
+    if (fDep && (a.departamentoId || '') !== fDep) return false;
+    if (fCol && !(a.equipe || [a.colaborador]).some(n => normaliza(n) === normaliza(fCol))) return false;
+    return true;
+  });
+  const prevDe = a => {
+    const p = (a.equipe || [a.colaborador]).length || 1;
+    return num(a.minPorPeca) * num(a.qtdBoas) / p;
+  };
+  const totBoas = aps.reduce((s, a) => s + num(a.qtdBoas), 0);
+  const totDef = aps.reduce((s, a) => s + num(a.qtdDefeito), 0);
+  const totRet = aps.reduce((s, a) => s + num(a.qtdRetrabalho), 0);
+  const totReal = aps.reduce((s, a) => s + num(a.minReais), 0);
+  const totPrev = aps.reduce((s, a) => s + prevDe(a), 0);
+  const efGeral = totReal > 0 ? totPrev / totReal * 100 : 0;
+  const refugo = totBoas + totDef > 0 ? totDef / (totBoas + totDef) * 100 : 0;
+  function agrupar(chaveFn) {
+    const m = {};
+    aps.forEach(a => {
+      const chaves = chaveFn(a);
+      (Array.isArray(chaves) ? chaves : [chaves]).forEach(k => {
+        if (!k) return;
+        if (!m[k]) m[k] = {
+          k,
+          boas: 0,
+          def: 0,
+          ret: 0,
+          real: 0,
+          prev: 0,
+          n: 0
+        };
+        const p = (a.equipe || [a.colaborador]).length || 1;
+        m[k].boas += num(a.qtdBoas) / (Array.isArray(chaves) ? p : 1);
+        m[k].def += num(a.qtdDefeito) / (Array.isArray(chaves) ? p : 1);
+        m[k].ret += num(a.qtdRetrabalho) / (Array.isArray(chaves) ? p : 1);
+        m[k].real += num(a.minReais);
+        m[k].prev += prevDe(a) / (Array.isArray(chaves) ? p : 1);
+        m[k].n++;
+      });
+    });
+    return Object.values(m).map(x => ({
+      ...x,
+      ef: x.real > 0 ? x.prev / x.real * 100 : 0
+    })).sort((a, b) => b.boas - a.boas);
+  }
+  const porColab = agrupar(a => a.equipe || [a.colaborador]);
+  const porDep = agrupar(a => {
+    const d = db.departamentos.find(x => x.id === a.departamentoId);
+    return d ? d.nome : '(sem departamento)';
+  });
+  const porEtapa = agrupar(a => a.etapaNome);
+  const porOP = agrupar(a => a.opRotulo);
+  function Tabela({
+    titulo,
+    dados,
+    rotulo
+  }) {
+    return /*#__PURE__*/React.createElement("div", {
+      className: "panel"
+    }, /*#__PURE__*/React.createElement("h3", null, titulo), dados.length === 0 ? /*#__PURE__*/React.createElement(Empty, {
+      text: "Sem apontamentos no período."
+    }) : /*#__PURE__*/React.createElement("table", null, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("th", null, rotulo), /*#__PURE__*/React.createElement("th", {
+      className: "num"
+    }, "Apont."), /*#__PURE__*/React.createElement("th", {
+      className: "num"
+    }, "Boas"), /*#__PURE__*/React.createElement("th", {
+      className: "num"
+    }, "Defeito"), /*#__PURE__*/React.createElement("th", {
+      className: "num"
+    }, "Retrab."), /*#__PURE__*/React.createElement("th", {
+      className: "num"
+    }, "Previsto"), /*#__PURE__*/React.createElement("th", {
+      className: "num"
+    }, "Real"), /*#__PURE__*/React.createElement("th", {
+      className: "num"
+    }, "Pç/h"), /*#__PURE__*/React.createElement("th", {
+      className: "num"
+    }, "Eficiência"), /*#__PURE__*/React.createElement("th", null, "Nota"))), /*#__PURE__*/React.createElement("tbody", null, dados.map((r, i) => {
+      const cls = classificarEficiencia(r.ef);
+      const ph = r.real > 0 ? r.boas / (r.real / 60) : 0;
+      return /*#__PURE__*/React.createElement("tr", {
+        key: i,
+        className: 'linha-nota-' + cls.nota
+      }, /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement("strong", null, r.k)), /*#__PURE__*/React.createElement("td", {
+        className: "num"
+      }, r.n), /*#__PURE__*/React.createElement("td", {
+        className: "num"
+      }, Math.round(r.boas)), /*#__PURE__*/React.createElement("td", {
+        className: "num",
+        style: r.def > 0 ? {
+          color: 'var(--bad)'
+        } : {}
+      }, Math.round(r.def) || '—'), /*#__PURE__*/React.createElement("td", {
+        className: "num",
+        style: r.ret > 0 ? {
+          color: 'var(--warn)'
+        } : {}
+      }, Math.round(r.ret) || '—'), /*#__PURE__*/React.createElement("td", {
+        className: "num small"
+      }, minParaHHMM(r.prev)), /*#__PURE__*/React.createElement("td", {
+        className: "num small"
+      }, minParaHHMM(r.real)), /*#__PURE__*/React.createElement("td", {
+        className: "num"
+      }, ph.toFixed(0)), /*#__PURE__*/React.createElement("td", {
+        className: "num"
+      }, /*#__PURE__*/React.createElement("strong", null, r.ef.toFixed(1), "%")), /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement(Badge, {
+        tone: cls.tone
+      }, cls.nota)));
+    }))));
+  }
+  const clsGeral = classificarEficiencia(efGeral);
+  return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    className: "panel no-print"
+  }, /*#__PURE__*/React.createElement("h3", null, "Filtros"), /*#__PURE__*/React.createElement("div", {
+    className: "grid3"
+  }, /*#__PURE__*/React.createElement(Field, {
+    label: "Data início"
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "date",
+    value: fIni,
+    onChange: e => setFIni(e.target.value)
+  })), /*#__PURE__*/React.createElement(Field, {
+    label: "Data fim"
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "date",
+    value: fFim,
+    onChange: e => setFFim(e.target.value)
+  })), /*#__PURE__*/React.createElement(Field, {
+    label: "Departamento"
+  }, /*#__PURE__*/React.createElement("select", {
+    value: fDep,
+    onChange: e => setFDep(e.target.value)
+  }, /*#__PURE__*/React.createElement("option", {
+    value: ""
+  }, "Todos"), db.departamentos.map(d => /*#__PURE__*/React.createElement("option", {
+    key: d.id,
+    value: d.id
+  }, d.nome)))), /*#__PURE__*/React.createElement(Field, {
+    label: "Colaborador"
+  }, /*#__PURE__*/React.createElement("select", {
+    value: fCol,
+    onChange: e => setFCol(e.target.value)
+  }, /*#__PURE__*/React.createElement("option", {
+    value: ""
+  }, "Todos"), db.colaboradores.filter(c => c.status !== 'Inativo').map(c => /*#__PURE__*/React.createElement("option", {
+    key: c.id,
+    value: c.nome
+  }, c.nome)))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'flex-end',
+      gap: 8
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "btn ghost sm",
+    onClick: () => {
+      setFIni('');
+      setFFim('');
+      setFDep('');
+      setFCol('');
+    }
+  }, "Limpar"), /*#__PURE__*/React.createElement("button", {
+    className: "btn accent sm",
+    onClick: () => window.print()
+  }, "🖨️ Imprimir")))), aps.length === 0 ? /*#__PURE__*/React.createElement(Empty, {
+    text: "Nenhuma produção concluída no filtro. Os indicadores vêm dos lançamentos em Produção → Lançamento de produção."
+  }) : /*#__PURE__*/React.createElement("div", {
+    className: "report-doc"
+  }, /*#__PURE__*/React.createElement("h2", null, "Produção & Produtividade"), /*#__PURE__*/React.createElement("div", {
+    className: "rep-sub"
+  }, fIni || fFim ? `Período ${fIni ? fmtDate(fIni) : 'início'} a ${fFim ? fmtDate(fFim) : 'hoje'}` : 'Todos os períodos', " · Emitido em ", fmtDate(todayISO())), /*#__PURE__*/React.createElement("div", {
+    className: "rep-grid"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "rep-box"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "k"
+  }, "Peças boas"), /*#__PURE__*/React.createElement("div", {
+    className: "v"
+  }, totBoas)), /*#__PURE__*/React.createElement("div", {
+    className: "rep-box"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "k"
+  }, "Refugo"), /*#__PURE__*/React.createElement("div", {
+    className: "v"
+  }, refugo.toFixed(1), "%")), /*#__PURE__*/React.createElement("div", {
+    className: "rep-box"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "k"
+  }, "Previsto × Real"), /*#__PURE__*/React.createElement("div", {
+    className: "v",
+    style: {
+      fontSize: 13
+    }
+  }, minParaHHMM(totPrev), " × ", minParaHHMM(totReal))), /*#__PURE__*/React.createElement("div", {
+    className: "rep-box"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "k"
+  }, "Eficiência geral"), /*#__PURE__*/React.createElement("div", {
+    className: "v",
+    style: {
+      color: clsGeral.tone === 'ok' ? 'var(--ok)' : clsGeral.tone === 'warn' ? 'var(--warn)' : 'var(--bad)'
+    }
+  }, efGeral.toFixed(1), "% · ", clsGeral.nota))), /*#__PURE__*/React.createElement(Tabela, {
+    titulo: "Produtividade por colaborador",
+    dados: porColab,
+    rotulo: "Colaborador"
+  }), /*#__PURE__*/React.createElement(Tabela, {
+    titulo: "Produtividade por departamento",
+    dados: porDep,
+    rotulo: "Departamento"
+  }), /*#__PURE__*/React.createElement(Tabela, {
+    titulo: "Produtividade por etapa",
+    dados: porEtapa,
+    rotulo: "Etapa"
+  }), /*#__PURE__*/React.createElement(Tabela, {
+    titulo: "Produtividade por Ordem de Produção",
+    dados: porOP,
+    rotulo: "OP"
+  }), /*#__PURE__*/React.createElement("div", {
+    className: "rep-sign"
+  }, /*#__PURE__*/React.createElement("div", null, "Supervisão de produção"), /*#__PURE__*/React.createElement("div", null, "Conferência"))));
+}
+function RelatoriosVendas({
+  db
+}) {
+  const totalPecas = db.pedidos.reduce((s, p) => s + totalPecasPedido(p), 0);
+  const porStatus = STATUS_PEDIDO.map(st => ({
+    st,
+    qtd: db.pedidos.filter(p => p.status === st).length
+  }));
+  const porCliente = Object.entries(db.pedidos.reduce((acc, p) => {
+    acc[p.cliente] = (acc[p.cliente] || 0) + totalPecasPedido(p);
+    return acc;
+  }, {})).sort((a, b) => b[1] - a[1]);
+  const porProduto = Object.entries(db.pedidos.reduce((acc, p) => {
+    itensPedido(p).forEach(it => {
+      const prod = db.produtos.find(x => x.id === it.produtoId);
+      const k = prod ? prod.nome : '—';
+      acc[k] = (acc[k] || 0) + num(it.quantidade);
+    });
+    return acc;
+  }, {})).sort((a, b) => b[1] - a[1]);
+  return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    className: "kpis"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "kpi accent"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "lbl"
+  }, "Pedidos"), /*#__PURE__*/React.createElement("div", {
+    className: "val"
+  }, db.pedidos.length)), /*#__PURE__*/React.createElement("div", {
+    className: "kpi"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "lbl"
+  }, "Peças pedidas"), /*#__PURE__*/React.createElement("div", {
+    className: "val"
+  }, totalPecas)), /*#__PURE__*/React.createElement("div", {
+    className: "kpi"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "lbl"
+  }, "Em produção"), /*#__PURE__*/React.createElement("div", {
+    className: "val"
+  }, db.pedidos.filter(p => p.status === 'Em produção').length)), /*#__PURE__*/React.createElement("div", {
+    className: "kpi"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "lbl"
+  }, "Concluídos"), /*#__PURE__*/React.createElement("div", {
+    className: "val"
+  }, db.pedidos.filter(p => p.status === 'Concluído').length))), /*#__PURE__*/React.createElement("div", {
+    className: "panel"
+  }, /*#__PURE__*/React.createElement("h3", null, "Pedidos por status"), /*#__PURE__*/React.createElement("table", null, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("th", null, "Status"), /*#__PURE__*/React.createElement("th", {
+    className: "num"
+  }, "Pedidos"))), /*#__PURE__*/React.createElement("tbody", null, porStatus.map(r => /*#__PURE__*/React.createElement("tr", {
+    key: r.st
+  }, /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement(StatusPedidoBadge, {
+    status: r.st
+  })), /*#__PURE__*/React.createElement("td", {
+    className: "num"
+  }, r.qtd)))))), /*#__PURE__*/React.createElement("div", {
+    className: "panel"
+  }, /*#__PURE__*/React.createElement("h3", null, "Peças por cliente"), porCliente.length === 0 ? /*#__PURE__*/React.createElement(Empty, {
+    text: "Nenhum pedido lançado."
+  }) : /*#__PURE__*/React.createElement("table", null, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("th", null, "Cliente"), /*#__PURE__*/React.createElement("th", {
+    className: "num"
+  }, "Peças"))), /*#__PURE__*/React.createElement("tbody", null, porCliente.map(([k, v]) => /*#__PURE__*/React.createElement("tr", {
+    key: k
+  }, /*#__PURE__*/React.createElement("td", null, k), /*#__PURE__*/React.createElement("td", {
+    className: "num"
+  }, v)))))), /*#__PURE__*/React.createElement("div", {
+    className: "panel"
+  }, /*#__PURE__*/React.createElement("h3", null, "Peças por vendedor"), (() => {
+    const porVend = Object.entries(db.pedidos.reduce((acc, p) => {
+      const k = p.vendedor || '(sem vendedor)';
+      if (!acc[k]) acc[k] = {
+        pedidos: 0,
+        pecas: 0
+      };
+      acc[k].pedidos++;
+      acc[k].pecas += totalPecasPedido(p);
+      return acc;
+    }, {})).sort((a, b) => b[1].pecas - a[1].pecas);
+    return porVend.length === 0 ? /*#__PURE__*/React.createElement(Empty, {
+      text: "Nenhum pedido lançado."
+    }) : /*#__PURE__*/React.createElement("table", null, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("th", null, "Vendedor"), /*#__PURE__*/React.createElement("th", {
+      className: "num"
+    }, "Pedidos"), /*#__PURE__*/React.createElement("th", {
+      className: "num"
+    }, "Peças"))), /*#__PURE__*/React.createElement("tbody", null, porVend.map(([k, v]) => /*#__PURE__*/React.createElement("tr", {
+      key: k
+    }, /*#__PURE__*/React.createElement("td", null, k), /*#__PURE__*/React.createElement("td", {
+      className: "num"
+    }, v.pedidos), /*#__PURE__*/React.createElement("td", {
+      className: "num"
+    }, v.pecas)))));
+  })()), /*#__PURE__*/React.createElement("div", {
+    className: "panel"
+  }, /*#__PURE__*/React.createElement("h3", null, "Peças por produto"), porProduto.length === 0 ? /*#__PURE__*/React.createElement(Empty, {
+    text: "Nenhum pedido lançado."
+  }) : /*#__PURE__*/React.createElement("table", null, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("th", null, "Produto"), /*#__PURE__*/React.createElement("th", {
+    className: "num"
+  }, "Peças"))), /*#__PURE__*/React.createElement("tbody", null, porProduto.map(([k, v]) => /*#__PURE__*/React.createElement("tr", {
+    key: k
+  }, /*#__PURE__*/React.createElement("td", null, k), /*#__PURE__*/React.createElement("td", {
+    className: "num"
+  }, v)))))), /*#__PURE__*/React.createElement("div", {
+    className: "panel"
+  }, /*#__PURE__*/React.createElement("h3", null, "Todos os pedidos"), db.pedidos.length === 0 ? /*#__PURE__*/React.createElement(Empty, {
+    text: "Nenhum pedido lançado."
+  }) : /*#__PURE__*/React.createElement("table", null, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("th", null, "Nº"), /*#__PURE__*/React.createElement("th", null, "Cliente"), /*#__PURE__*/React.createElement("th", null, "Vendedor"), /*#__PURE__*/React.createElement("th", null, "Produto"), /*#__PURE__*/React.createElement("th", {
+    className: "num"
+  }, "Qtd."), /*#__PURE__*/React.createElement("th", null, "Pedido"), /*#__PURE__*/React.createElement("th", null, "Entrega"), /*#__PURE__*/React.createElement("th", null, "Status"))), /*#__PURE__*/React.createElement("tbody", null, db.pedidos.slice().sort((a, b) => b.numero - a.numero).map(p => {
+    const itens = itensPedido(p);
+    return /*#__PURE__*/React.createElement("tr", {
+      key: p.id
+    }, /*#__PURE__*/React.createElement("td", {
+      className: "small muted"
+    }, "#", String(p.numero).padStart(5, '0')), /*#__PURE__*/React.createElement("td", null, p.cliente), /*#__PURE__*/React.createElement("td", {
+      className: "small muted"
+    }, p.vendedor || '—'), /*#__PURE__*/React.createElement("td", {
+      className: "small"
+    }, itens.map(it => {
+      const prod = db.produtos.find(x => x.id === it.produtoId);
+      return prod ? prod.nome : '—';
+    }).join(', ')), /*#__PURE__*/React.createElement("td", {
+      className: "num"
+    }, totalPecasPedido(p)), /*#__PURE__*/React.createElement("td", {
+      className: "small"
+    }, fmtDate(p.dataPedido)), /*#__PURE__*/React.createElement("td", {
+      className: "small"
+    }, fmtDate(p.prazoEntrega)), /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement(StatusPedidoBadge, {
+      status: p.status
+    })));
+  })))));
+}
+
+/* ==========================================================
+   Pedidos para produzir (dentro do grupo Produção)
+========================================================== */
+function PedidosParaProduzir({
+  db,
+  update,
+  irParaOPs
+}) {
+  const [relatorio, setRelatorio] = useState(null);
+  function gerarOP(pedido) {
+    if (db.etapasProducao.length === 0) {
+      alert('Nenhuma etapa de produção cadastrada.');
+      return;
+    }
+    const itens = itensPedido(pedido);
+    if (itens.length === 0) {
+      alert('Este pedido não tem produtos.');
+      return;
+    }
+    if (!podeGerarOP(pedido)) {
+      alert(`Este pedido está como "${pedido.status}". Só é possível gerar OP a partir de "Aberto" ou "Liberado para produção".`);
+      return;
+    }
+    const existentes = db.ops.filter(o => o.pedidoId === pedido.id);
+    const semOP = itens.filter(it => !existentes.some(o => o.itemId === it.id));
+    if (semOP.length === 0) {
+      alert('Todos os produtos deste pedido já têm Ordem de Produção. Abra a OP existente para visualizar ou editar.');
+      irParaOPs();
+      return;
+    }
+    if (semOP.length > 1 && !confirm(`Serão geradas ${semOP.length} OPs (sufixos /A, /B, /C…). Continuar?`)) return;
+    update(d => {
+      gerarOPsDoPedido(pedido, d);
+      return d;
+    });
+    irParaOPs();
+  }
+  return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    className: "panel",
+    style: {
+      padding: 0
+    }
+  }, db.pedidos.length === 0 ? /*#__PURE__*/React.createElement("div", {
+    style: {
+      padding: 20
+    }
+  }, /*#__PURE__*/React.createElement(Empty, {
+    text: "Nenhum pedido de venda lançado. Cadastre em Pedidos."
+  })) : /*#__PURE__*/React.createElement("table", null, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("th", null, "Nº"), /*#__PURE__*/React.createElement("th", null, "Cliente"), /*#__PURE__*/React.createElement("th", null, "Produtos"), /*#__PURE__*/React.createElement("th", {
+    className: "num"
+  }, "Total peças"), /*#__PURE__*/React.createElement("th", null, "Entrega"), /*#__PURE__*/React.createElement("th", null, "Status"), /*#__PURE__*/React.createElement("th", null, "OPs"), /*#__PURE__*/React.createElement("th", null))), /*#__PURE__*/React.createElement("tbody", null, db.pedidos.slice().sort((a, b) => b.numero - a.numero).map(p => {
+    const itens = itensPedido(p);
+    const ops = db.ops.filter(o => o.pedidoId === p.id);
+    return /*#__PURE__*/React.createElement("tr", {
+      key: p.id
+    }, /*#__PURE__*/React.createElement("td", {
+      className: "small muted"
+    }, "#", String(p.numero).padStart(5, '0')), /*#__PURE__*/React.createElement("td", null, p.cliente), /*#__PURE__*/React.createElement("td", {
+      className: "small"
+    }, itens.map((it, i) => {
+      const prod = db.produtos.find(x => x.id === it.produtoId);
+      return /*#__PURE__*/React.createElement("div", {
+        key: i
+      }, prod ? prod.nome : '—', " ", /*#__PURE__*/React.createElement("span", {
+        className: "muted"
+      }, "(", num(it.quantidade), ")"));
+    })), /*#__PURE__*/React.createElement("td", {
+      className: "num"
+    }, totalPecasPedido(p)), /*#__PURE__*/React.createElement("td", {
+      className: "small"
+    }, fmtDate(p.prazoEntrega)), /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement(StatusPedidoBadge, {
+      status: p.status
+    })), /*#__PURE__*/React.createElement("td", {
+      className: "small muted"
+    }, ops.length === 0 ? '—' : ops.map(o => rotuloOP(o)).join(', ')), /*#__PURE__*/React.createElement("td", {
+      className: "row-actions"
+    }, (() => {
+      const semOP = itens.filter(it => !ops.some(o => o.itemId === it.id));
+      if (semOP.length === 0) return /*#__PURE__*/React.createElement("button", {
+        className: "btn accent sm",
+        onClick: () => setRelatorio(p)
+      }, "Andamento");
+      if (!podeGerarOP(p)) return /*#__PURE__*/React.createElement("span", {
+        className: "small muted"
+      }, "libere o pedido para produzir");
+      return /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("button", {
+        className: "btn accent sm",
+        onClick: () => gerarOP(p)
+      }, "Gerar ", semOP.length > 1 ? `${semOP.length} OPs` : 'OP'), ops.length > 0 && /*#__PURE__*/React.createElement("button", {
+        className: "btn ghost sm",
+        onClick: () => setRelatorio(p)
+      }, "Andamento"));
+    })()));
+  })))), relatorio && /*#__PURE__*/React.createElement(RelatorioAndamentoPedido, {
+    pedido: relatorio,
+    db: db,
+    onClose: () => setRelatorio(null)
+  }));
+}
+
+/* ==========================================================
+   RELATÓRIO DE ANDAMENTO — todas as etapas do pedido
+========================================================== */
+function RelatorioAndamentoPedido({
+  pedido,
+  db,
+  onClose
+}) {
+  const ops = db.ops.filter(o => o.pedidoId === pedido.id);
+  const cliente = db.clientes.find(c => c.id === pedido.clienteId);
+
+  // consolida os números do pedido inteiro
+  let totEtapas = 0,
+    totConcluidas = 0,
+    totAndamento = 0,
+    totMin = 0,
+    minConcluido = 0;
+  ops.forEach(op => {
+    op.etapas.forEach(et => {
+      const qtdBase = num(et.qtdRecebida) > 0 ? num(et.qtdRecebida) : num(op.quantidade);
+      const carga = cargaEtapaOP(et, qtdBase, op.quantidade, db);
+      totEtapas++;
+      totMin += carga;
+      if (et.status === 'Concluída') {
+        totConcluidas++;
+        minConcluido += carga;
+      } else if (et.status === 'Em andamento') {
+        totAndamento++;
+        const prog = num(op.quantidade) > 0 ? num(et.qtdConcluida) / num(op.quantidade) : 0;
+        minConcluido += carga * Math.min(prog, 1);
+      }
+    });
+  });
+  const pctEtapas = totEtapas > 0 ? Math.round(totConcluidas / totEtapas * 100) : 0;
+  const pctTempo = totMin > 0 ? Math.round(minConcluido / totMin * 100) : 0;
+  return /*#__PURE__*/React.createElement(Modal, {
+    title: `Andamento da produção — Pedido #${String(pedido.numero).padStart(5, '0')}`,
+    onClose: onClose,
+    wide: true
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginBottom: 12
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "btn accent sm",
+    onClick: () => window.print()
+  }, "🖨️ Imprimir / salvar como PDF")), /*#__PURE__*/React.createElement("div", {
+    className: "report-doc"
+  }, /*#__PURE__*/React.createElement("h2", null, "Andamento da Produção"), /*#__PURE__*/React.createElement("div", {
+    className: "rep-sub"
+  }, "Pedido nº ", String(pedido.numero).padStart(5, '0'), " · Emitido em ", fmtDate(todayISO())), /*#__PURE__*/React.createElement("div", {
+    className: "rep-grid"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "rep-box"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "k"
+  }, "Cliente"), /*#__PURE__*/React.createElement("div", {
+    className: "v"
+  }, pedido.cliente || '—')), /*#__PURE__*/React.createElement("div", {
+    className: "rep-box"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "k"
+  }, "Entrega"), /*#__PURE__*/React.createElement("div", {
+    className: "v"
+  }, fmtDate(pedido.prazoEntrega))), /*#__PURE__*/React.createElement("div", {
+    className: "rep-box"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "k"
+  }, "Etapas concluídas"), /*#__PURE__*/React.createElement("div", {
+    className: "v"
+  }, totConcluidas, "/", totEtapas, " · ", pctEtapas, "%")), /*#__PURE__*/React.createElement("div", {
+    className: "rep-box"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "k"
+  }, "Avanço por tempo"), /*#__PURE__*/React.createElement("div", {
+    className: "v"
+  }, pctTempo, "%"))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      margin: '6px 0 4px 0'
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      height: 12,
+      background: '#e6e2d8',
+      borderRadius: 6,
+      overflow: 'hidden'
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      width: `${pctTempo}%`,
+      height: '100%',
+      background: 'var(--ok)'
+    }
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "small muted",
+    style: {
+      marginTop: 4
+    }
+  }, minParaHHMM(minConcluido), " de ", minParaHHMM(totMin), " de produção realizados · ", totAndamento, " etapa(s) em andamento")), cliente && /*#__PURE__*/React.createElement("div", {
+    className: "small muted",
+    style: {
+      marginTop: 8
+    }
+  }, [cliente.documento, cliente.responsavel, cliente.celular || cliente.telefone].filter(Boolean).join(' · ')), ops.length === 0 ? /*#__PURE__*/React.createElement(Empty, {
+    text: "Nenhuma OP gerada para este pedido."
+  }) : ops.map(op => {
+    const produto = db.produtos.find(p => p.id === op.produtoId);
+    const info = opStatusInfo(op);
+    const concl = op.etapas.filter(e => e.status === 'Concluída').length;
+
+    // agrupa as etapas por departamento, preservando a ordem
+    const grupos = [];
+    const porDep = {};
+    op.etapas.forEach((et, idx) => {
+      const k = et.departamentoId || '_sem';
+      if (!porDep[k]) {
+        porDep[k] = {
+          dep: db.departamentos.find(d => d.id === et.departamentoId),
+          itens: []
+        };
+        grupos.push({
+          k,
+          ...porDep[k]
+        });
+      }
+      porDep[k].itens.push({
+        et,
+        idx
+      });
+    });
+    return /*#__PURE__*/React.createElement("div", {
+      key: op.id,
+      style: {
+        marginTop: 18
+      }
+    }, /*#__PURE__*/React.createElement("h4", null, rotuloOP(op), " — ", produto ? produto.nome : '—', " · ", op.quantidade, " peças"), /*#__PURE__*/React.createElement("div", {
+      className: "small muted",
+      style: {
+        marginBottom: 8
+      }
+    }, "Situação: ", /*#__PURE__*/React.createElement("strong", null, info.label), " · Etapa atual: ", /*#__PURE__*/React.createElement("strong", null, info.etapaAtual), " ·", ' ', concl, "/", op.etapas.length, " etapas concluídas · Entrega ", fmtDate(op.entrega)), grupos.map(g => /*#__PURE__*/React.createElement("div", {
+      key: g.k,
+      style: {
+        marginBottom: 10
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 8,
+        margin: '8px 0 4px 0'
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        width: 5,
+        height: 14,
+        background: 'var(--thread)',
+        borderRadius: 3
+      }
+    }), /*#__PURE__*/React.createElement("strong", {
+      style: {
+        fontFamily: 'var(--display)',
+        fontSize: 13
+      }
+    }, g.dep ? g.dep.nome : 'Sem departamento')), /*#__PURE__*/React.createElement("table", null, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("th", null, "#"), /*#__PURE__*/React.createElement("th", null, "Etapa"), /*#__PURE__*/React.createElement("th", null, "Equipamento"), /*#__PURE__*/React.createElement("th", null, "Responsável"), /*#__PURE__*/React.createElement("th", {
+      className: "num"
+    }, "Recebido"), /*#__PURE__*/React.createElement("th", {
+      className: "num"
+    }, "Concluído"), /*#__PURE__*/React.createElement("th", {
+      className: "num"
+    }, "%"), /*#__PURE__*/React.createElement("th", null, "Início"), /*#__PURE__*/React.createElement("th", null, "Conclusão"), /*#__PURE__*/React.createElement("th", {
+      className: "num"
+    }, "Tempo"), /*#__PURE__*/React.createElement("th", null, "Situação"))), /*#__PURE__*/React.createElement("tbody", null, porDep[g.k].itens.map(({
+      et,
+      idx
+    }) => {
+      const qtdBase = num(et.qtdRecebida) > 0 ? num(et.qtdRecebida) : num(op.quantidade);
+      const carga = cargaEtapaOP(et, qtdBase, op.quantidade, db);
+      const base = num(et.qtdRecebida) > 0 ? num(et.qtdRecebida) : num(op.quantidade);
+      const pct = base > 0 ? Math.round(num(et.qtdConcluida) / base * 100) : 0;
+      const maq = (db.equipamentos || []).find(q => q.id === et.equipamentoId);
+      const tone = et.status === 'Concluída' ? 'ok' : et.status === 'Em andamento' ? 'warn' : 'idle';
+      return /*#__PURE__*/React.createElement("tr", {
+        key: idx
+      }, /*#__PURE__*/React.createElement("td", {
+        className: "small muted"
+      }, idx + 1), /*#__PURE__*/React.createElement("td", null, et.nome), /*#__PURE__*/React.createElement("td", {
+        className: "small muted"
+      }, maq ? maq.codigo : '—'), /*#__PURE__*/React.createElement("td", {
+        className: "small"
+      }, responsaveisEtapa(et).join(', ') || '—'), /*#__PURE__*/React.createElement("td", {
+        className: "num"
+      }, num(et.qtdRecebida) || '—'), /*#__PURE__*/React.createElement("td", {
+        className: "num"
+      }, num(et.qtdConcluida) || '—'), /*#__PURE__*/React.createElement("td", {
+        className: "num",
+        style: pct >= 100 ? {
+          color: 'var(--ok)',
+          fontWeight: 600
+        } : {}
+      }, pct, "%"), /*#__PURE__*/React.createElement("td", {
+        className: "small"
+      }, fmtDate(et.dataInicio)), /*#__PURE__*/React.createElement("td", {
+        className: "small"
+      }, fmtDate(et.dataConclusao)), /*#__PURE__*/React.createElement("td", {
+        className: "num small"
+      }, minParaHHMM(carga)), /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement(Badge, {
+        tone: tone
+      }, et.status)));
+    }))))));
+  }), /*#__PURE__*/React.createElement("div", {
+    className: "rep-sign"
+  }, /*#__PURE__*/React.createElement("div", null, "Responsável pela produção"), /*#__PURE__*/React.createElement("div", null, "Conferência final"))), /*#__PURE__*/React.createElement("div", {
+    className: "modal-actions"
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "btn ghost",
+    onClick: onClose
+  }, "Fechar")));
+}
+
+/* ==========================================================
+   9. PAINEL DE PRODUÇÃO
+========================================================== */
+function Painel({
+  db,
+  update,
+  setTab
+}) {
+  const opsAtivas = db.ops.filter(op => !op.etapas.every(e => e.status === 'Concluída'));
+  const opsConcluidas = db.ops.length - opsAtivas.length;
+  const kpi = useMemo(() => {
+    let atrasado = 0,
+      atencao = 0,
+      noprazo = 0,
+      naoiniciado = 0,
+      concluida = 0;
+    opsAtivas.forEach(op => {
+      const info = opStatusInfo(op);
+      if (info.label === 'Atrasado') atrasado++;else if (info.label === 'Atenção') atencao++;else if (info.label === 'No prazo') noprazo++;else if (info.label === 'Não iniciado') naoiniciado++;else concluida++;
+    });
+    return {
+      atrasado,
+      atencao,
+      noprazo,
+      naoiniciado,
+      concluida,
+      total: opsAtivas.length
+    };
+  }, [opsAtivas]);
+  const materiaisBaixos = db.materiais.filter(m => num(m.estoqueAtual) <= num(m.estoqueMinimo)).length;
+  const vazio = db.produtos.length === 0 && db.ops.length === 0 && db.materiais.length === 0;
+  function carregarTeste() {
+    if (!confirm('Carregar a linha de teste completa (avental)? Serão criados departamentos, colaboradores, equipamentos, materiais, etapas, produto, cliente, fornecedor, pedido e uma OP em andamento.')) return;
+    update(d => criarDadosTesteCamiseta(d));
+  }
+  function baixarBackup() {
+    try {
+      const json = JSON.stringify(db, null, 2);
+      const blob = new Blob([json], {
+        type: 'application/json'
+      });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `backup-confeccao-erp-${todayISO()}.json`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      alert('Não foi possível gerar o backup: ' + (e && e.message));
+    }
+  }
+  function restaurarBackup(e) {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = '';
+    if (!file) return;
+    if (!confirm('Restaurar este backup? Todos os dados atuais serão substituídos.')) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const dados = JSON.parse(reader.result);
+        if (!dados || typeof dados !== 'object' || !Array.isArray(dados.colaboradores)) {
+          alert('Arquivo inválido — não parece um backup deste sistema.');
+          return;
+        }
+        update(() => garantirAdminPadrao({
+          ...emptyDb(),
+          ...dados
+        }));
+        alert('Backup restaurado.');
+      } catch (err) {
+        alert('Arquivo inválido ou corrompido.');
+      }
+    };
+    reader.readAsText(file);
+  }
+  function limparTudo() {
+    if (!confirm('Apagar TODOS os dados do sistema (departamentos, colaboradores, materiais, produtos, pedidos, OPs, compras e estoque)? Esta ação não pode ser desfeita.')) return;
+    if (!confirm('Confirma definitivamente? Tudo será apagado.')) return;
+    update(() => garantirAdminPadrao(emptyDb()));
+  }
+  return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    className: "page-head"
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    className: "eyebrow"
+  }, "Módulo 9"), /*#__PURE__*/React.createElement("h2", null, "Painel de Produção")), /*#__PURE__*/React.createElement("div", {
+    className: "row-actions"
+  }, vazio ? /*#__PURE__*/React.createElement("button", {
+    className: "btn accent",
+    onClick: carregarTeste
+  }, "Carregar linha de teste (avental)") : /*#__PURE__*/React.createElement("button", {
+    className: "btn danger sm",
+    onClick: limparTudo
+  }, "Limpar todos os dados"))), /*#__PURE__*/React.createElement("div", {
+    className: "kpis"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "kpi accent"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "lbl"
+  }, "OPs ativas"), /*#__PURE__*/React.createElement("div", {
+    className: "val"
+  }, kpi.total)), /*#__PURE__*/React.createElement("div", {
+    className: "kpi"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "lbl"
+  }, "No prazo"), /*#__PURE__*/React.createElement("div", {
+    className: "val"
+  }, kpi.noprazo)), /*#__PURE__*/React.createElement("div", {
+    className: "kpi"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "lbl"
+  }, "Atenção"), /*#__PURE__*/React.createElement("div", {
+    className: "val"
+  }, kpi.atencao)), /*#__PURE__*/React.createElement("div", {
+    className: "kpi"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "lbl"
+  }, "Atrasadas"), /*#__PURE__*/React.createElement("div", {
+    className: "val"
+  }, kpi.atrasado)), /*#__PURE__*/React.createElement("div", {
+    className: "kpi"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "lbl"
+  }, "Concluídas"), /*#__PURE__*/React.createElement("div", {
+    className: "val"
+  }, opsConcluidas))), /*#__PURE__*/React.createElement("div", {
+    className: "panel"
+  }, /*#__PURE__*/React.createElement("h3", null, "Backup dos dados"), /*#__PURE__*/React.createElement("div", {
+    className: "small muted",
+    style: {
+      marginTop: -6,
+      marginBottom: 10
+    }
+  }, "Os dados ficam salvos no banco de dados compartilhado (Supabase) — todos os dispositivos veem as mesmas informações. Baixe um backup periodicamente por segurança.", ' ', "Base atual: ", /*#__PURE__*/React.createElement("strong", null, (tamanhoBase(db) / 1024 / 1024).toFixed(2), " MB")), /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginBottom: 10
+    }
+  }, /*#__PURE__*/React.createElement(Badge, {
+    tone: rotuloArmazenamento().tone
+  }, rotuloArmazenamento().texto)), /*#__PURE__*/React.createElement("div", {
+    className: "row-actions",
+    style: {
+      alignItems: 'center',
+      flexWrap: 'wrap',
+      gap: 10
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "btn accent sm",
+    onClick: baixarBackup
+  }, "⬇ Baixar backup (.json)"), /*#__PURE__*/React.createElement("label", {
+    className: "btn ghost sm",
+    style: {
+      cursor: 'pointer'
+    }
+  }, "⬆ Restaurar backup", /*#__PURE__*/React.createElement("input", {
+    type: "file",
+    accept: "application/json,.json",
+    style: {
+      display: 'none'
+    },
+    onChange: restaurarBackup
+  })))), materiaisBaixos > 0 && /*#__PURE__*/React.createElement("div", {
+    className: "panel",
+    style: {
+      borderColor: 'var(--bad)',
+      background: 'var(--bad-bg)'
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "small",
+    style: {
+      color: 'var(--bad)',
+      fontWeight: 600
+    }
+  }, "⚠ ", materiaisBaixos, " material(is) abaixo do estoque mínimo."), ' ', /*#__PURE__*/React.createElement("button", {
+    className: "link-btn",
+    onClick: () => setTab('estoque')
+  }, "Ver estoque")), /*#__PURE__*/React.createElement("div", {
+    className: "legend"
+  }, /*#__PURE__*/React.createElement("span", null, /*#__PURE__*/React.createElement("span", {
+    className: "dot",
+    style: {
+      background: 'var(--ok)'
+    }
+  }), "Dentro do prazo"), /*#__PURE__*/React.createElement("span", null, /*#__PURE__*/React.createElement("span", {
+    className: "dot",
+    style: {
+      background: 'var(--warn)'
+    }
+  }), "Atenção"), /*#__PURE__*/React.createElement("span", null, /*#__PURE__*/React.createElement("span", {
+    className: "dot",
+    style: {
+      background: 'var(--bad)'
+    }
+  }), "Atrasado"), /*#__PURE__*/React.createElement("span", null, /*#__PURE__*/React.createElement("span", {
+    className: "dot",
+    style: {
+      background: 'var(--idle)'
+    }
+  }), "Não iniciado")), /*#__PURE__*/React.createElement("div", {
+    className: "panel",
+    style: {
+      padding: 0
+    }
+  }, opsAtivas.length === 0 ? /*#__PURE__*/React.createElement("div", {
+    style: {
+      padding: 20
+    }
+  }, /*#__PURE__*/React.createElement(Empty, {
+    text: opsConcluidas > 0 ? `Nenhuma OP em andamento — ${opsConcluidas} concluída(s).` : "Nenhuma OP em andamento. Gere uma OP a partir de um pedido."
+  })) : /*#__PURE__*/React.createElement("table", null, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("th", null, "OP"), /*#__PURE__*/React.createElement("th", null, "Cliente"), /*#__PURE__*/React.createElement("th", null, "Produto"), /*#__PURE__*/React.createElement("th", {
+    className: "num"
+  }, "Qtd."), /*#__PURE__*/React.createElement("th", null, "Etapa atual"), /*#__PURE__*/React.createElement("th", {
+    className: "num"
+  }, "Produzido"), /*#__PURE__*/React.createElement("th", null, "Entrega"), /*#__PURE__*/React.createElement("th", null))), /*#__PURE__*/React.createElement("tbody", null, opsAtivas.slice().sort((a, b) => b.numero - a.numero).map(op => {
+    const pedido = db.pedidos.find(p => p.id === op.pedidoId);
+    const produto = db.produtos.find(p => p.id === op.produtoId);
+    const info = opStatusInfo(op);
+    const dotColor = info.tone === 'ok' ? 'var(--ok)' : info.tone === 'warn' ? 'var(--warn)' : info.tone === 'bad' ? 'var(--bad)' : 'var(--idle)';
+    return /*#__PURE__*/React.createElement("tr", {
+      key: op.id
+    }, /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement("span", {
+      className: "dot",
+      style: {
+        background: dotColor,
+        marginRight: 8
+      }
+    }), rotuloOP(op)), /*#__PURE__*/React.createElement("td", null, pedido ? pedido.cliente : '—'), /*#__PURE__*/React.createElement("td", {
+      className: "small"
+    }, produto ? produto.nome : '—'), /*#__PURE__*/React.createElement("td", {
+      className: "num"
+    }, op.quantidade), /*#__PURE__*/React.createElement("td", {
+      className: "small"
+    }, info.etapaAtual), /*#__PURE__*/React.createElement("td", {
+      className: "num"
+    }, info.produzido, "/", op.quantidade), /*#__PURE__*/React.createElement("td", {
+      className: "small"
+    }, fmtDate(op.entrega)), /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement("button", {
+      className: "btn ghost sm",
+      onClick: () => setTab('producao')
+    }, "Ver OP")));
+  })))));
+}
+
+export default App;
