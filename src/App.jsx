@@ -7,18 +7,50 @@ const money = v => num(v).toLocaleString('pt-BR', {
   style: 'currency',
   currency: 'BRL'
 });
-/* hora legível para o cronômetro da aferição */
+/* ---------------- data e hora ----------------
+   Um formato só no sistema inteiro: dia/mês/ano e hora:minuto:segundo.
+   O armazenamento continua em ISO (2026-09-07T14:30:00) porque é o que
+   ordena e compara certo; estas funções são só para a tela. */
+const doisDig = n => String(n).padStart(2, '0');
+
+/* hora com segundos: 14:30:05 */
 const fmtHora = iso => {
+  if (!iso) return '—';
+  /* aceita tanto ISO completo quanto "HH:MM" solto */
+  const curta = /^\d{2}:\d{2}(:\d{2})?$/.exec(String(iso));
+  if (curta) return curta[1] ? String(iso) : String(iso) + ':00';
   const d = new Date(iso);
   if (isNaN(d.getTime())) return '—';
-  const p = n => String(n).padStart(2, '0');
-  return `${p(d.getHours())}:${p(d.getMinutes())}`;
+  return `${doisDig(d.getHours())}:${doisDig(d.getMinutes())}:` +
+    `${doisDig(d.getSeconds())}`;
 };
+
+/* hora sem segundos, para campos de digitação e grades apertadas */
+const fmtHoraCurta = iso => {
+  const h = fmtHora(iso);
+  return h === '—' ? h : h.slice(0, 5);
+};
+
+/* data: 07/09/2026 */
 const fmtDate = iso => {
   if (!iso) return '—';
-  const [y, m, d] = String(iso).split('-');
-  if (!y || !m || !d) return String(iso); /* não inventa formato para lixo */
+  const texto = String(iso);
+  /* aceita ISO com hora junto */
+  const soData = texto.length > 10 && texto.includes('T')
+    ? texto.slice(0, 10) : texto;
+  const [y, m, d] = soData.split('-');
+  if (!y || !m || !d) return texto; /* não inventa formato para lixo */
   return `${d}/${m}/${y}`;
+};
+
+/* data e hora juntas: 07/09/2026 14:30:05 */
+const fmtDataHora = iso => {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return String(iso);
+  return `${doisDig(d.getDate())}/${doisDig(d.getMonth() + 1)}/` +
+    `${d.getFullYear()} ${doisDig(d.getHours())}:` +
+    `${doisDig(d.getMinutes())}:${doisDig(d.getSeconds())}`;
 };
 /* ==========================================================
    BANCO — apenas os cadastros preservados na reestruturação
@@ -49,11 +81,14 @@ const emptyDb = () => ({
   reservas: [],
   // material comprometido com uma origem
   centrosCusto: [],
-  materiaisFornecedor: [],
   // preço, código e prazo de cada fornecedor
-  historicoPrecos: [],
   parametrosMateriais: null,
   parametrosMaoDeObra: null,
+  programacoes: [],             // a programação oficial de cada dia
+  ocorrencias: [],              // o que interrompeu a produção e como foi resolvido
+  custosFixos: [],              // aluguel, energia, manutenção — o custo da fábrica
+  parametrosCustoIndireto: null,
+  parametrosFila: null,          // espera entre setores, em horas
   /* ---- Corte ---- */
   riscos: [],
   // riscos lidos de arquivos PLT
@@ -81,6 +116,13 @@ const emptyDb = () => ({
   // a meta que nasceu de uma aferição
   objetivosMelhoria: [],
   // onde se quer chegar — separado da meta
+  conversas: [],
+  mensagens: [],
+  notas: [],
+  vagas: [],
+  // vagas abertas divulgadas no canal
+  indicacoes: [],
+  // quem o pessoal indicou para as vagas
   manifestacoes: [],
   // Conversa Aberta: sugestões, problemas, riscos, relatos
   pesquisasClima: [],
@@ -837,20 +879,31 @@ function materiaisDaEtapa(passo, produto, db) {
 const BLOCOS_LIMPEZA = [{
   id: 'producao',
   nome: 'Produção',
-  ajuda: 'ordens, apontamentos e avaliações',
-  colecoes: ['ordens', 'apontamentos', 'avaliacoes'],
+  ajuda: 'ordens, apontamentos, avaliações e programações',
+  /* A programação aponta para ordens e etapas: sem apagar junto,
+     sobrariam dias programados para operações que não existem mais. */
+  colecoes: ['ordens', 'apontamentos', 'avaliacoes', 'programacoes', 'ocorrencias'],
+  precisa: []
+}, {
+  id: 'afericoes',
+  nome: 'Aferição e metas',
+  ajuda: 'aferições, metas validadas e assinaturas',
+  /* Meta é sempre de uma etapa e de um produto. Apagar produtos sem
+     apagar as metas deixava número validado apontando para operação
+     que não existe — e o planejamento seguia usando esse número. */
+  colecoes: ['afericoes', 'metasOperacionais'],
   precisa: []
 }, {
   id: 'produtos',
   nome: 'Produtos',
-  ajuda: 'produtos, subprodutos e modelagens',
-  colecoes: ['produtos', 'subprodutos', 'riscos'],
-  precisa: ['producao']
+  ajuda: 'produtos, subprodutos, modelagens e versões congeladas',
+  colecoes: ['produtos', 'subprodutos', 'riscos', 'versoesProduto'],
+  precisa: ['producao', 'afericoes']
 }, {
   id: 'materiais',
   nome: 'Materiais e estoque',
   ajuda: 'materiais, movimentações, saldos, lotes e reservas',
-  colecoes: ['materiais', 'movimentacoes', 'saldos', 'lotes', 'reservas', 'materiaisFornecedor', 'historicoPrecos'],
+  colecoes: ['materiais', 'movimentacoes', 'saldos', 'lotes', 'reservas'],
   precisa: ['produtos']
 }, {
   id: 'cadastros',
@@ -863,7 +916,7 @@ const BLOCOS_LIMPEZA = [{
   nome: 'Engenharia',
   ajuda: 'departamentos, etapas e equipamentos',
   colecoes: ['departamentos', 'etapas', 'equipamentos'],
-  precisa: ['produtos']
+  precisa: ['produtos', 'afericoes']
 }];
 function contarBloco(bloco, db) {
   return bloco.colecoes.reduce((a, k) => a + (db[k] || []).length, 0);
@@ -2981,6 +3034,48 @@ function minutosDecorridos(inicioISO, fimISO) {
   if (isNaN(a.getTime()) || isNaN(b.getTime())) return 0;
   return Math.max(0, Number(((b - a) / 60000).toFixed(2)));
 }
+/* Este setor mede por aferição ou pela jornada? */
+function exigeAfericao(db, departamentoId){
+  const d = (db.departamentos||[]).find(x=>x.id === departamentoId);
+  return !!(d && d.exigeAfericao);
+}
+
+function etapaExigeAfericao(db, etapaId){
+  const e = (db.etapas||[]).find(x=>x.id === etapaId);
+  if(!e) return false;
+  return exigeAfericao(db, e.departamentoId);
+}
+
+/* A meta de quem não afere: o que a jornada entrega. Sai dos
+   apontamentos — peças boas sobre o tempo trabalhado — sem
+   cronômetro, sem prova, sem assinatura. */
+function metaPelaJornada(db, etapaId, opcoes){
+  const op = opcoes || {};
+  const aps = (db.apontamentos||[]).filter(a=>
+    a.etapaId === etapaId && num(a.minutosGastos) > 0 &&
+    (!op.colaboradorId || a.colaboradorId === op.colaboradorId));
+
+  if(aps.length === 0)
+    return {semDados:true, porHora:null, origem:'jornada',
+      motivo:'nenhum apontamento nesta operação'};
+
+  const boas = aps.reduce((s,a)=>s + num(a.pecasBoas), 0);
+  const minutos = aps.reduce((s,a)=>s + num(a.minutosGastos), 0);
+  const dias = new Set(aps.map(a=>String(a.data||'').slice(0,10))).size;
+
+  return {
+    semDados:false, origem:'jornada',
+    porHora: minutos > 0 ? Number((boas / (minutos/60)).toFixed(1)) : 0,
+    boas, minutos, dias,
+    apontamentos: aps.length,
+    /* a jornada inteira: quanto sai num dia cheio */
+    porDia: minutos > 0
+      ? Math.round((boas / minutos) * jornadaDe(db).produtivo) : 0,
+    /* poucos dias não fazem média */
+    confiavel: dias >= 3,
+  };
+}
+
 function novaAfericao(d, dados, usuario) {
   if (!dados.colaboradorId) return {
     erro: 'Escolha quem vai ser aferido.'
@@ -3666,32 +3761,6 @@ function capacidadePlanejavel(db, etapaId, horasDia) {
   };
 }
 
-/* Gargalo é comparação, não sentença: mostra o número e deixa a
-   leitura do fluxo para quem conhece a fábrica. */
-function possiveisGargalos(db, produtoId) {
-  const produto = (db.produtos || []).find(p => p.id === produtoId);
-  if (!produto) return [];
-  const linhas = (produto.processo || []).map(p => {
-    const et = (db.etapas || []).find(e => e.id === p.etapaId);
-    const cap = capacidadePlanejavel(db, p.etapaId);
-    return {
-      passo: p,
-      etapa: et ? et.nome : 'etapa removida',
-      porHora: cap ? cap.porHora : null,
-      temMeta: !!cap
-    };
-  });
-  const comMeta = linhas.filter(l => l.temMeta);
-  if (comMeta.length < 2) return linhas.map(l => ({
-    ...l,
-    gargalo: false
-  }));
-  const menor = Math.min(...comMeta.map(l => l.porHora));
-  return linhas.map(l => ({
-    ...l,
-    gargalo: l.temMeta && l.porHora === menor
-  }));
-}
 function indicadoresAfericao(db, opcoes) {
   const op = opcoes || {};
   let afs = (db.afericoes || []).slice();
@@ -4602,6 +4671,9 @@ function apontarProducao(d, dados, usuario) {
     erro: 'Quantidade inválida.'
   };
   const minutos = num(dados.minutosGastos);
+  if(dados.inicioReal && dados.fimReal &&
+     new Date(dados.fimReal) < new Date(dados.inicioReal))
+    return {erro:'O fim da etapa está antes do início.'};
   if (minutos <= 0) return {
     erro: 'Informe quanto tempo levou.'
   };
@@ -4634,6 +4706,11 @@ function apontarProducao(d, dados, usuario) {
     etapa: et ? et.nome : String(dados.etapa || '').trim(),
     minutosPrevistos: num(dados.minutosPrevistos),
     minutosGastos: minutos,
+    /* quando de fato começou e terminou. O tempo gasto pode vir daqui
+       ou ser digitado direto; guardar as duas pontas permite reconstruir
+       o dia e cruzar com a jornada. */
+    inicioReal: dados.inicioReal || '',
+    fimReal: dados.fimReal || '',
     pecasBoas: boas,
     pecasDefeito: def,
     retrabalho: num(dados.retrabalho),
@@ -4729,7 +4806,21 @@ function fechamentoDaOrdem(ordem, db, opcoes) {
    Regra que guia o módulo: registro entra fácil e não sai mais —
    ninguém apaga, tudo tem situação, dono e prazo.
 ========================================================== */
-const CATEGORIAS_CANAL = [{
+const CATEGORIAS_CANAL = [
+/* Elogio vem primeiro de propósito: canal que só recebe reclamação
+   acaba lido como caixa de problema, e quem tem coisa boa a dizer não
+   se dá ao trabalho de abrir. */
+{
+  id: 'elogio',
+  nome: 'Reconhecer alguém',
+  icone: '👏',
+  frase: 'Quero registrar algo que foi bem feito.',
+  destino: 'rh',
+  sensivel: false,
+  prioridade: 'baixa',
+  /* reconhecimento não se "resolve": não tem prazo nem plano de ação */
+  reconhecimento: true
+}, {
   id: 'sugestao',
   nome: 'Dar uma sugestão',
   icone: '💡',
@@ -5122,6 +5213,15 @@ function dataValida(v) {
 }
 function prazoManifestacao(m) {
   const reg = m || {};
+  /* Reconhecimento não tem prazo para "resolver" — cobrar prazo de um
+     elogio o transformaria em pendência atrasada, que é o oposto do
+     que ele é. */
+  if (categoriaCanal(reg.categoria).reconhecimento) return {
+    limite: '',
+    dias: null,
+    atrasada: false,
+    semPrazo: true
+  };
   const dias = prioridadeCanal(reg.prioridade).prazoDias;
   const base = dataValida(reg.criadaEm) || new Date();
   base.setDate(base.getDate() + dias);
@@ -5130,8 +5230,15 @@ function prazoManifestacao(m) {
   return {
     limite,
     dias,
-    atrasada: !fechada && todayISO() > limite
+    atrasada: !fechada && todayISO() > limite,
+    semPrazo: false
   };
+}
+
+/* Elogio não é problema em aberto. Separar os dois evita que o painel
+   diga "12 manifestações pendentes" quando 5 são agradecimentos. */
+function ehReconhecimento(m) {
+  return !!categoriaCanal((m || {}).categoria).reconhecimento;
 }
 function indicadoresCanal(db, opcoes) {
   const op = opcoes || {};
@@ -5155,7 +5262,9 @@ function indicadoresCanal(db, opcoes) {
   }));
   return {
     total: lista.length,
-    abertas: lista.filter(m => ABERTOS_CANAL.includes(m.status)).length,
+    abertas: lista.filter(m => ABERTOS_CANAL.includes(m.status) && !ehReconhecimento(m)).length,
+    /* contados à parte: são coisa boa, não fila de trabalho */
+    reconhecimentos: lista.filter(m => ehReconhecimento(m)).length,
     novas: lista.filter(m => m.status === 'recebido').length,
     emTratamento: lista.filter(m => m.status === 'tratamento' || m.status === 'aguardando').length,
     resolvidas: lista.filter(m => m.status === 'resolvido').length,
@@ -5306,6 +5415,534 @@ function climaResumo(db, dias) {
    Papel com denúncia dentro circula. Por isso o relatório completo é
    só do administrador, e o teor dos relatos sensíveis só entra se
    alguém marcar que quer — com o aviso do que isso significa. */
+/* ==========================================================
+   VAGAS E INDICAÇÃO
+   Quem trabalha na fábrica conhece gente que serviria para a
+   fábrica. Falta o caminho — e um caminho que respeite quem é
+   indicado: o contato é de outra pessoa, não de quem indica.
+========================================================== */
+/* ==========================================================
+   RECADOS — comunicação interna
+   Conversa de um para um e grupos. Duas honestidades embutidas:
+   sem servidor a mensagem não sai deste navegador, e conversa
+   dentro do sistema da empresa não é conversa privada.
+========================================================== */
+const LIMITE_MENSAGEM = 2000;
+/* Sem servidor, o arquivo vira base64 dentro do banco do navegador —
+   e o banco inteiro é relido a cada tela. Arquivo grande deixa o
+   sistema lento para todo mundo, não só para quem mandou. */
+const LIMITE_ARQUIVO_CHAT = 900 * 1024;
+const LIMITE_NOTA = 20000;
+
+/* Quem participa de quê. Uma conversa individual é um grupo de dois
+   sem nome — mesma estrutura, menos código para manter. */
+function conversasDe(db, colaboradorId){
+  if(!colaboradorId) return [];
+  return (db.conversas||[])
+    .filter(c=>(c.participantes||[]).includes(colaboradorId) && !c.arquivada)
+    .map(c=>({...c, ...resumoConversa(db, c, colaboradorId)}))
+    .sort((a,b)=>{
+      const porTempo = String(b.ultimaEm||'').localeCompare(String(a.ultimaEm||''));
+      return porTempo !== 0 ? porTempo : (b.ordem - a.ordem);
+    });
+}
+
+function mensagensDa(db, conversaId){
+  return (db.mensagens||[]).filter(m=>m.conversaId===conversaId)
+    .sort((a,b)=>String(a.quando||'').localeCompare(String(b.quando||'')));
+}
+
+function resumoConversa(db, conversa, euId){
+  const msgs = mensagensDa(db, conversa.id);
+  const ultima = msgs[msgs.length-1] || null;
+  /* duas mensagens podem cair no mesmo instante; a ordem de chegada
+     desempata */
+  const ordem = ultima
+    ? (db.mensagens||[]).findIndex(m=>m.id===ultima.id) : -1;
+  const naoLidas = msgs.filter(m=>m.autorId !== euId &&
+    !(m.lidaPor||[]).includes(euId)).length;
+  return {
+    ultima,
+    ultimaEm: ultima ? ultima.quando : conversa.criadaEm,
+    ordem,
+    naoLidas,
+    total: msgs.length,
+  };
+}
+
+/* O nome que aparece na lista. Num grupo é o nome dado; num diálogo
+   é a outra pessoa — e "outra pessoa" depende de quem está olhando. */
+function nomeConversa(db, conversa, euId){
+  if(conversa.grupo) return conversa.nome || 'Grupo sem nome';
+  const outro = (conversa.participantes||[]).find(id=>id!==euId);
+  const c = (db.colaboradores||[]).find(x=>x.id===outro);
+  return c ? c.nome : 'colaborador removido';
+}
+
+function participantesDa(db, conversa){
+  return (conversa.participantes||[])
+    .map(id=>(db.colaboradores||[]).find(c=>c.id===id))
+    .filter(Boolean);
+}
+
+/* Abrir conversa com alguém. Se já existe, devolve a mesma — duas
+   conversas com a mesma pessoa espalham o histórico em dois lugares. */
+function abrirConversa(d, euId, outroId, usuario){
+  if(!euId || !outroId) return {erro:'Escolha com quem falar.'};
+  if(euId === outroId) return {erro:'Não dá para conversar consigo mesmo.'};
+  const eu = (d.colaboradores||[]).find(c=>c.id===euId);
+  const outro = (d.colaboradores||[]).find(c=>c.id===outroId);
+  if(!eu || !outro) return {erro:'Colaborador não encontrado.'};
+  if(outro.status === 'Inativo')
+    return {erro:`${outro.nome} não está mais ativo no cadastro.`};
+
+  const existente = (d.conversas||[]).find(c=>!c.grupo &&
+    (c.participantes||[]).length===2 &&
+    c.participantes.includes(euId) && c.participantes.includes(outroId));
+  if(existente){
+    if(existente.arquivada) existente.arquivada = false;
+    return {conversa: existente, jaExistia:true};
+  }
+
+  const reg = {
+    id: uid(), grupo:false, nome:'',
+    participantes:[euId, outroId],
+    criadaPor: euId, criadaEm: agoraISO(), arquivada:false,
+  };
+  d.conversas = [...(d.conversas||[]), reg];
+  return {conversa: reg};
+}
+
+function criarGrupo(d, dados, usuario){
+  const nome = String(dados.nome||'').trim();
+  if(!nome) return {erro:'Dê um nome ao grupo.'};
+  const membros = [...new Set((dados.participantes||[]).filter(Boolean))];
+  if(membros.length < 2)
+    return {erro:'Um grupo precisa de pelo menos duas pessoas.'};
+  const validos = membros.filter(id=>
+    (d.colaboradores||[]).some(c=>c.id===id));
+  if(validos.length !== membros.length)
+    return {erro:'Algum participante não está no cadastro.'};
+
+  const reg = {
+    id: uid(), grupo:true, nome,
+    descricao: String(dados.descricao||'').trim(),
+    participantes: validos,
+    administradores: [dados.criadorId].filter(Boolean),
+    criadaPor: dados.criadorId || '', criadaEm: agoraISO(), arquivada:false,
+  };
+  d.conversas = [...(d.conversas||[]), reg];
+  registrarLog(d, usuario, 'chat.grupo', `Grupo "${nome}" criado`);
+  return {conversa: reg};
+}
+
+function mudarParticipantes(d, conversaId, ids, usuario){
+  const c = (d.conversas||[]).find(x=>x.id===conversaId);
+  if(!c) return {erro:'Conversa não encontrada.'};
+  if(!c.grupo) return {erro:'Só grupos têm participantes editáveis.'};
+  const membros = [...new Set((ids||[]).filter(Boolean))];
+  if(membros.length < 2)
+    return {erro:'Um grupo precisa de pelo menos duas pessoas.'};
+
+  /* quem sai não perde o que já leu, mas para de receber */
+  const saindo = (c.participantes||[]).filter(x=>!membros.includes(x));
+  c.participantes = membros;
+  if(saindo.length)
+    registrarLog(d, usuario, 'chat.grupo',
+      `${saindo.length} pessoa(s) saíram de "${c.nome}"`);
+  return {conversa: c};
+}
+
+function enviarMensagem(d, conversaId, autorId, texto, usuario, anexos){
+  const c = (d.conversas||[]).find(x=>x.id===conversaId);
+  if(!c) return {erro:'Conversa não encontrada.'};
+  if(!(c.participantes||[]).includes(autorId))
+    return {erro:'Você não participa desta conversa.'};
+  const t = String(texto||'').trim();
+  const arqs = (anexos||[]).filter(Boolean);
+  /* mensagem só com arquivo é legítima: mandar a foto da peça sem
+     precisar escrever nada */
+  if(!t && arqs.length === 0) return {erro:'Escreva a mensagem ou anexe um arquivo.'};
+  if(t.length > LIMITE_MENSAGEM)
+    return {erro:`Mensagem muito longa (limite de ${LIMITE_MENSAGEM} caracteres).`};
+  const grande = arqs.find(x=>num(x.tamanho) > LIMITE_ARQUIVO_CHAT);
+  if(grande)
+    return {erro:`"${grande.nome}" tem ${Math.round(num(grande.tamanho)/1024)} KB e `+
+      `passa do limite de ${Math.round(LIMITE_ARQUIVO_CHAT/1024)} KB.`};
+
+  const reg = {
+    id: uid(), conversaId, autorId,
+    texto: t,
+    anexos: arqs.map(x=>({id:x.id||uid(), nome:x.nome, tipo:x.tipo||'',
+      tamanho:num(x.tamanho), url:x.url})),
+    /* precisão de segundos: duas mensagens no mesmo minuto precisam
+       manter a ordem em que foram ditas */
+    quando: instanteISO(),
+    /* quem escreve já leu */
+    lidaPor: [autorId],
+  };
+  d.mensagens = [...(d.mensagens||[]), reg];
+  /* o log registra que houve conversa, nunca o teor */
+  return {mensagem: reg};
+}
+
+function marcarLidas(d, conversaId, euId){
+  let mudou = 0;
+  (d.mensagens||[]).forEach(m=>{
+    if(m.conversaId===conversaId && m.autorId!==euId &&
+       !(m.lidaPor||[]).includes(euId)){
+      m.lidaPor = [...(m.lidaPor||[]), euId];
+      mudou++;
+    }
+  });
+  return {marcadas: mudou};
+}
+
+function naoLidasDe(db, colaboradorId){
+  return conversasDe(db, colaboradorId).reduce((s,c)=>s + c.naoLidas, 0);
+}
+
+/* Com quem dá para falar. O próprio usuário fora, inativos fora. */
+function pessoasDisponiveis(db, euId){
+  return (db.colaboradores||[])
+    .filter(c=>c.id!==euId && c.status!=='Inativo')
+    .sort((a,b)=>String(a.nome).localeCompare(String(b.nome)));
+}
+
+/* ---------------- Bloco de notas ----------------
+   Anotação de trabalho: o que lembrar, o que combinar, o rascunho da
+   conversa difícil. Fica só na aba de quem escreveu — mas o backup
+   contém tudo, e isso a tela precisa dizer. */
+function notasDe(db, colaboradorId){
+  if(!colaboradorId) return [];
+  const todas = (db.notas||[]);
+  return todas.filter(n=>n.colaboradorId===colaboradorId)
+    .sort((a,b)=>{
+      /* fixadas primeiro, depois a mais mexida */
+      if(!!a.fixada !== !!b.fixada) return a.fixada ? -1 : 1;
+      const porTempo = String(b.alteradaEm||'')
+        .localeCompare(String(a.alteradaEm||''));
+      /* duas notas salvas no mesmo instante: a criada depois vem antes */
+      return porTempo !== 0 ? porTempo
+        : todas.indexOf(b) - todas.indexOf(a);
+    });
+}
+
+function salvarNota(d, dados, usuario){
+  const texto = String(dados.texto||'').trim();
+  const titulo = String(dados.titulo||'').trim();
+  if(!texto && !titulo) return {erro:'Escreva alguma coisa antes de salvar.'};
+  if(texto.length > LIMITE_NOTA)
+    return {erro:`Nota muito longa (limite de ${LIMITE_NOTA} caracteres).`};
+  if(!dados.colaboradorId) return {erro:'Nota sem dono.'};
+
+  const existente = dados.id
+    ? (d.notas||[]).find(n=>n.id===dados.id) : null;
+  if(dados.id && !existente) return {erro:'Nota não encontrada.'};
+  /* nota é pessoal: ninguém edita a do outro */
+  if(existente && existente.colaboradorId !== dados.colaboradorId)
+    return {erro:'Esta nota é de outra pessoa.'};
+
+  const reg = {
+    id: existente ? existente.id : uid(),
+    colaboradorId: dados.colaboradorId,
+    titulo: titulo || (texto.split('\n')[0] || '').slice(0, 60),
+    texto,
+    fixada: !!dados.fixada,
+    criadaEm: existente ? existente.criadaEm : agoraISO(),
+    alteradaEm: instanteISO(),
+  };
+  d.notas = existente
+    ? (d.notas||[]).map(n=>n.id===reg.id ? reg : n)
+    : [...(d.notas||[]), reg];
+  /* o log registra que houve nota, nunca o teor */
+  return {nota: reg};
+}
+
+function removerNota(d, id, colaboradorId){
+  const n = (d.notas||[]).find(x=>x.id===id);
+  if(!n) return {erro:'Nota não encontrada.'};
+  if(n.colaboradorId !== colaboradorId)
+    return {erro:'Esta nota é de outra pessoa.'};
+  d.notas = (d.notas||[]).filter(x=>x.id!==id);
+  return {removida:true};
+}
+
+/* Sem servidor, a mensagem fica presa neste navegador. Melhor dizer
+   isso na tela do que deixar alguém contar com um recado que nunca
+   chegou. */
+function chatFuncionaDeVerdade(){
+  try{
+    const p = window.location.protocol;
+    return p === 'http:' || p === 'https:';
+  }catch(e){ return false; }
+}
+
+const STATUS_VAGA = [{
+  id: 'aberta',
+  nome: 'Aberta',
+  recebe: true
+}, {
+  id: 'pausada',
+  nome: 'Pausada',
+  recebe: false
+}, {
+  id: 'preenchida',
+  nome: 'Preenchida',
+  recebe: false
+}, {
+  id: 'encerrada',
+  nome: 'Encerrada',
+  recebe: false
+}];
+function statusVaga(id) {
+  return STATUS_VAGA.find(x => x.id === id) || STATUS_VAGA[0];
+}
+const TIPOS_VAGA = ['Efetivo', 'Temporário', 'Aprendiz', 'Estágio', 'Banco de talentos'];
+const TURNOS_VAGA = ['Manhã', 'Tarde', 'Comercial', 'A combinar'];
+
+/* Onde a indicação está no caminho. Recusar sem dizer nada é o que
+   faz a pessoa não indicar de novo — cada passo tem um retorno. */
+const STATUS_INDICACAO = [{
+  id: 'recebida',
+  nome: 'Recebida',
+  fim: false
+}, {
+  id: 'contato',
+  nome: 'Em contato',
+  fim: false
+}, {
+  id: 'entrevista',
+  nome: 'Entrevista marcada',
+  fim: false
+}, {
+  id: 'contratado',
+  nome: 'Contratado',
+  fim: true
+}, {
+  id: 'banco',
+  nome: 'Guardado no banco',
+  fim: true
+}, {
+  id: 'nao_seguiu',
+  nome: 'Não seguiu',
+  fim: true
+}];
+function statusIndicacao(id) {
+  return STATUS_INDICACAO.find(x => x.id === id) || STATUS_INDICACAO[0];
+}
+function salvarVaga(d, dados, usuario) {
+  const titulo = String(dados.titulo || '').trim();
+  if (!titulo) return {
+    erro: 'Informe o cargo da vaga.'
+  };
+  const existente = dados.id ? (d.vagas || []).find(v => v.id === dados.id) : null;
+  if (dados.id && !existente) return {
+    erro: 'Vaga não encontrada.'
+  };
+  const reg = {
+    id: existente ? existente.id : uid(),
+    codigo: existente ? existente.codigo : proximoCodigo(d.vagas, 'VAG'),
+    titulo,
+    departamentoId: dados.departamentoId || '',
+    tipo: dados.tipo || TIPOS_VAGA[0],
+    turno: dados.turno || TURNOS_VAGA[3],
+    vagas: Math.max(1, num(dados.vagas) || 1),
+    descricao: String(dados.descricao || '').trim(),
+    requisitos: String(dados.requisitos || '').trim(),
+    experiencia: String(dados.experiencia || '').trim(),
+    /* salário fica de fora por escolha: divulgar faixa no chão de
+       fábrica levanta comparação com quem já está lá. O RH informa
+       na conversa. */
+    status: dados.status || 'aberta',
+    aberturaEm: existente ? existente.aberturaEm : agoraISO(),
+    encerradaEm: existente ? existente.encerradaEm : '',
+    criadaPor: existente ? existente.criadaPor : usuario ? usuario.nome : '',
+    historico: existente ? existente.historico || [] : []
+  };
+  d.vagas = existente ? (d.vagas || []).map(v => v.id === reg.id ? reg : v) : [...(d.vagas || []), reg];
+  registrarLog(d, usuario, existente ? 'vaga.editada' : 'vaga.criada', `${reg.codigo} · ${reg.titulo}`);
+  return {
+    vaga: reg
+  };
+}
+function mudarStatusVaga(d, vagaId, novo, motivo, usuario) {
+  const v = (d.vagas || []).find(x => x.id === vagaId);
+  if (!v) return {
+    erro: 'Vaga não encontrada.'
+  };
+  if (!STATUS_VAGA.some(s => s.id === novo)) return {
+    erro: 'Situação inválida.'
+  };
+
+  /* fechar a vaga sem responder quem indicou é o jeito mais rápido de
+     acabar com o programa de indicação */
+  const pendentes = indicacoesDaVaga(d, vagaId).filter(i => !statusIndicacao(i.status).fim).length;
+  const antes = v.status;
+  v.status = novo;
+  if (!statusVaga(novo).recebe && !v.encerradaEm) v.encerradaEm = agoraISO();
+  if (statusVaga(novo).recebe) v.encerradaEm = '';
+  v.historico = [...(v.historico || []), {
+    id: uid(),
+    quando: agoraISO(),
+    quem: usuario ? usuario.nome : '',
+    de: antes,
+    para: novo,
+    motivo: String(motivo || '').trim()
+  }];
+  registrarLog(d, usuario, 'vaga.status', `${v.codigo} · ${statusVaga(antes).nome} → ${statusVaga(novo).nome}`);
+  return {
+    vaga: v,
+    pendentes
+  };
+}
+function vagasAbertas(db) {
+  return (db.vagas || []).filter(v => statusVaga(v.status).recebe);
+}
+function indicacoesDaVaga(db, vagaId) {
+  return (db.indicacoes || []).filter(i => i.vagaId === vagaId);
+}
+
+/* Registrar uma indicação. O dado mais delicado aqui não é de quem
+   indica — é de quem foi indicado, que não está na tela para
+   concordar. */
+function registrarIndicacao(d, dados, usuario) {
+  const vaga = (d.vagas || []).find(v => v.id === dados.vagaId);
+  if (!vaga) return {
+    erro: 'Escolha a vaga.'
+  };
+  if (!statusVaga(vaga.status).recebe) return {
+    erro: `A vaga ${vaga.titulo} não está mais recebendo indicações.`
+  };
+  const nome = String(dados.nomeCandidato || '').trim();
+  if (nome.length < 3) return {
+    erro: 'Informe o nome de quem você está indicando.'
+  };
+  const contato = String(dados.contato || '').trim();
+  if (contato.length < 8) return {
+    erro: 'Informe um telefone ou e-mail para o RH conseguir falar ' + 'com a pessoa.'
+  };
+
+  /* quem indica precisa se identificar: indicação anônima deixa o RH
+     sem saber a quem dar retorno, e a pessoa indicada sem referência */
+  const quemIndica = String(dados.nomeIndicador || '').trim() || (usuario ? usuario.nome : '');
+  if (!quemIndica) return {
+    erro: 'Informe seu nome — o RH precisa saber quem indicou para ' + 'dar retorno a você.'
+  };
+  if (!dados.avisou) return {
+    erro: 'Confirme que a pessoa sabe que está sendo indicada. ' + 'Passar o contato de alguém sem que ela saiba não é justo com ela.'
+  };
+
+  /* a mesma pessoa indicada duas vezes para a mesma vaga */
+  const repetida = (d.indicacoes || []).find(i => i.vagaId === vaga.id && textoSimples(i.nomeCandidato) === textoSimples(nome));
+  if (repetida) return {
+    erro: `${nome} já foi indicado(a) para esta vaga (protocolo ` + `${repetida.protocolo}). O RH já tem o contato.`
+  };
+  const reg = {
+    id: uid(),
+    protocolo: proximoCodigo(d.indicacoes, 'IND'),
+    vagaId: vaga.id,
+    vagaTitulo: vaga.titulo,
+    nomeCandidato: nome,
+    contato,
+    experiencia: String(dados.experiencia || '').trim(),
+    relacao: String(dados.relacao || '').trim(),
+    observacao: String(dados.observacao || '').trim(),
+    nomeIndicador: quemIndica,
+    colaboradorId: dados.colaboradorId || (usuario ? usuario.id || '' : ''),
+    avisou: true,
+    status: 'recebida',
+    historico: [{
+      id: uid(),
+      quando: agoraISO(),
+      quem: quemIndica,
+      o_que: 'Indicação registrada',
+      status: 'recebida'
+    }],
+    retornos: [],
+    criadaEm: agoraISO()
+  };
+  d.indicacoes = [...(d.indicacoes || []), reg];
+  /* o log não guarda o contato de terceiro */
+  registrarLog(d, usuario, 'indicacao.registrada', `${reg.protocolo} · ${vaga.titulo}`);
+  return {
+    indicacao: reg
+  };
+}
+function moverIndicacao(d, id, novo, nota, usuario) {
+  const i = (d.indicacoes || []).find(x => x.id === id);
+  if (!i) return {
+    erro: 'Indicação não encontrada.'
+  };
+  if (!STATUS_INDICACAO.some(s => s.id === novo)) return {
+    erro: 'Situação inválida.'
+  };
+  /* recusar sem explicar é o que faz ninguém indicar de novo */
+  if (novo === 'nao_seguiu' && !String(nota || '').trim()) return {
+    erro: 'Escreva o motivo. Quem indicou vai receber esse retorno, e ' + '"não seguiu" sem explicação desanima a próxima indicação.'
+  };
+  const antes = i.status;
+  i.status = novo;
+  i.historico = [...(i.historico || []), {
+    id: uid(),
+    quando: agoraISO(),
+    quem: usuario ? usuario.nome : '',
+    o_que: `${statusIndicacao(antes).nome} → ` + statusIndicacao(novo).nome,
+    status: novo,
+    nota: String(nota || '').trim()
+  }];
+  registrarLog(d, usuario, 'indicacao.status', `${i.protocolo} · ${statusIndicacao(novo).nome}`);
+  return {
+    indicacao: i
+  };
+}
+function responderIndicacao(d, id, texto, usuario) {
+  const i = (d.indicacoes || []).find(x => x.id === id);
+  if (!i) return {
+    erro: 'Indicação não encontrada.'
+  };
+  const t = String(texto || '').trim();
+  if (!t) return {
+    erro: 'Escreva o retorno.'
+  };
+  i.retornos = [...(i.retornos || []), {
+    id: uid(),
+    quando: agoraISO(),
+    quem: usuario ? usuario.nome : '',
+    texto: t
+  }];
+  registrarLog(d, usuario, 'indicacao.retorno', i.protocolo);
+  return {
+    indicacao: i
+  };
+}
+
+/* O que o RH precisa ver de relance. */
+function painelVagas(db) {
+  const abertas = vagasAbertas(db);
+  const inds = db.indicacoes || [];
+  const semRetorno = inds.filter(i => i.status === 'recebida');
+  /* indicação parada há mais de 7 dias sem ninguém tocar */
+  const paradas = inds.filter(i => {
+    if (statusIndicacao(i.status).fim) return false;
+    const ultimo = (i.historico || []).map(h => h.quando).sort().pop() || i.criadaEm;
+    const d0 = dataValida(ultimo);
+    return d0 ? (Date.now() - d0) / 86400000 > 7 : false;
+  });
+  return {
+    vagas: db.vagas || [],
+    abertas: abertas.length,
+    postosAbertos: abertas.reduce((s, v) => s + num(v.vagas), 0),
+    indicacoes: inds.length,
+    semRetorno: semRetorno.length,
+    paradas: paradas.length,
+    contratados: inds.filter(i => i.status === 'contratado').length,
+    porVaga: abertas.map(v => ({
+      vaga: v,
+      total: indicacoesDaVaga(db, v.id).length
+    }))
+  };
+}
 function relatorioCanalPeriodo(db, opcoes) {
   const op = opcoes || {};
   let lista = (db.manifestacoes || []).slice();
@@ -5341,7 +5978,9 @@ function relatorioCanalPeriodo(db, opcoes) {
     },
     lista,
     total: lista.length,
-    abertas: lista.filter(m => ABERTOS_CANAL.includes(m.status)).length,
+    abertas: lista.filter(m => ABERTOS_CANAL.includes(m.status) && !ehReconhecimento(m)).length,
+    /* contados à parte: são coisa boa, não fila de trabalho */
+    reconhecimentos: lista.filter(m => ehReconhecimento(m)).length,
     resolvidas: lista.filter(m => m.status === 'resolvido').length,
     encerradas: lista.filter(m => m.status === 'encerrado').length,
     anonimas: lista.filter(m => m.anonima).length,
@@ -6143,8 +6782,29 @@ function montarNomeProduto(produto, db) {
   if (!produto) return '';
   const g = (db.gruposProduto || []).find(x => x.id === produto.grupoId);
   const tp = (db.tiposProduto || []).find(x => x.id === produto.tipoId);
-  const tecidos = tecidosDoProduto(produto, db).map(t => t.material ? t.material.nome : '').filter(Boolean);
-  return [g ? g.nome : '', tp && tp.nome !== 'Liso' ? tp.nome : '', textoMedida(produto), tecidos.join(' + '), produto.complemento || ''].filter(Boolean).join(' ').toUpperCase().replace(/\s+/g, ' ').trim();
+  /* O nome identifica o produto pelo que ele é feito, não por tudo que
+     leva dentro. Um avental é "de nylon" — a linha, a fita e a etiqueta
+     estão lá, mas ninguém chama o produto por elas. Se todos os
+     materiais entrassem, dois produtos iguais com linha diferente
+     teriam nomes diferentes. */
+  const nomesUnicos = lista => [...new Set(lista)];
+  const cortaveis = tecidosDoProduto(produto, db).filter(t => t.material && ehTecido(t.material, db)).map(t => t.material.nome).filter(Boolean);
+  /* produto que não usa tecido nenhum (só aviamento montado) ainda
+     precisa de nome: aí valem os materiais que existirem */
+  const tecidos = nomesUnicos(cortaveis.length ? cortaveis : tecidosDoProduto(produto, db).map(t => t.material ? t.material.nome : '').filter(Boolean));
+  const partes = [g ? g.nome : '', tp && tp.nome !== 'Liso' ? tp.nome : '', textoMedida(produto), tecidos.join(' + '), produto.complemento || ''].filter(Boolean).map(x => String(x).toUpperCase().trim());
+
+  /* Grupo "Avental" com tipo "Avental" dava "AVENTAL AVENTAL ÚNICO".
+     Termo que já apareceu não repete — o nome existe para identificar,
+     e repetição só atrapalha a leitura. */
+  const vistos = new Set();
+  const limpas = partes.filter(x => {
+    const chave = x.replace(/\s+/g, ' ');
+    if (vistos.has(chave)) return false;
+    vistos.add(chave);
+    return true;
+  });
+  return limpas.join(' ').replace(/\s+/g, ' ').trim();
 }
 
 /* Código sequencial por grupo: olha o maior já usado, não a contagem */
@@ -6273,7 +6933,7 @@ function custearProduto(produto, db) {
           calculo: null,
           conversao: conv,
           consumo: conv.consumo,
-          custo: Number((conv.consumo * preco).toFixed(5)),
+          custo: Number((conv.consumo * preco).toFixed(8)),
           semRisco: false,
           semQuantidade: false,
           semPreco: !t.material || preco === 0
@@ -6287,7 +6947,7 @@ function custearProduto(produto, db) {
         calculo: null,
         conversaoErro: conv && conv.erro ? conv.erro : null,
         consumo: q,
-        custo: Number((q * preco).toFixed(5)),
+        custo: Number((q * preco).toFixed(8)),
         semRisco: false,
         semQuantidade: !(q > 0),
         semPreco: !t.material || preco === 0
@@ -6299,7 +6959,7 @@ function custearProduto(produto, db) {
       cortavel: true,
       calculo: c,
       consumo: c ? c.consumo : 0,
-      custo: c ? Number((c.consumo * preco).toFixed(5)) : 0,
+      custo: c ? Number((c.consumo * preco).toFixed(8)) : 0,
       semRisco: !t.risco,
       semPreco: !t.material || preco === 0
     };
@@ -6327,7 +6987,7 @@ function custearProduto(produto, db) {
       ...sp,
       tecido: t ? t.material : null,
       origem: 'risco',
-      custo: Number((num(sp.consumo) * preco).toFixed(5))
+      custo: Number((num(sp.consumo) * preco).toFixed(8))
     };
   }).concat(doAviamento);
   const avisos = [];
@@ -6376,7 +7036,10 @@ function custearProduto(produto, db) {
     aviamentos: tecidos.filter(t => !t.cortavel),
     porMaterial,
     repetidos: porMaterial.filter(g => g.usos.length > 1),
-    custoTecido: Number(total.toFixed(5)),
+    /* 8 casas no custo unitário: material barato com consumo pequeno
+       (linha, tinta) perdia precisão em 5 casas, e o erro aparecia
+       multiplicado no total da ordem */
+    custoTecido: Number(total.toFixed(8)),
     consumoTotal: Number(tecidos.reduce((a, t) => a + t.consumo, 0).toFixed(5)),
     avisos,
     completo: tecidos.length > 0 && avisos.length === 0
@@ -6388,6 +7051,12 @@ function custearProduto(produto, db) {
    O mapa da fábrica: onde se trabalha, o que se faz e com quê.
    Só cadastro — tempo e custo entram depois.
 ========================================================== */
+/* Aferir com cronômetro e validar meta faz sentido onde a operação se
+   repete peça a peça e a diferença entre pessoas é grande — na costura.
+   No corte, na embalagem ou na expedição a meta sai da conta simples:
+   o que a jornada produziu dividido pelo tempo dela. Marcar isso no
+   departamento deixa a fábrica configurar: uma segunda linha de costura
+   ou um acabamento fino entram sem mexer no sistema. */
 const DEPARTAMENTOS_PADRAO = [{
   nome: 'Corte',
   sigla: 'CT'
@@ -6402,7 +7071,8 @@ const DEPARTAMENTOS_PADRAO = [{
   sigla: 'PR'
 }, {
   nome: 'Costura',
-  sigla: 'CS'
+  sigla: 'CS',
+  exigeAfericao: true
 }, {
   nome: 'Acabamento',
   sigla: 'AC'
@@ -6648,7 +7318,17 @@ function passosDoProcesso(produto, db, lote) {
   return (produto.processo || []).slice().sort((a, b) => num(a.ordem) - num(b.ordem)).map(p => {
     const dep = (db.departamentos || []).find(d => d.id === p.departamentoId);
     const et = (db.etapas || []).find(e => e.id === p.etapaId);
-    const eq = (db.equipamentos || []).find(x => x.id === p.equipamentoId);
+    /* O roteiro pode indicar mais de uma máquina para a mesma operação:
+       "fecha no overloque ou na interlock". Guardamos as duas coisas —
+       a lista, para o planejamento escolher, e a primeira, para quem
+       lê a ficha. */
+    const idsEq = Array.isArray(p.equipamentos) && p.equipamentos.length
+      ? p.equipamentos
+      : (p.equipamentoId ? [p.equipamentoId] : []);
+    const listaEq = idsEq
+      .map(id => (db.equipamentos || []).find(x => x.id === id))
+      .filter(Boolean);
+    const eq = listaEq[0] || null;
     const pessoas = num(p.pessoas) > 0 ? num(p.pessoas) : 1;
     /* bancos antigos guardaram "45s" como texto; aqui vira número */
     const tempo = typeof p.tempo === 'string' && /[^\d.,\s]/.test(p.tempo) ? textoParaMinutos(p.tempo, {
@@ -6663,6 +7343,8 @@ function passosDoProcesso(produto, db, lote) {
       departamento: dep,
       etapa: et,
       equipamento: eq,
+      equipamentos: listaEq,
+      equipamentoIds: idsEq,
       pessoas,
       tempo,
       modo,
@@ -6830,6 +7512,2835 @@ function custoMinutoDepartamento(departamentoId, db) {
 }
 
 /* O custo de mão de obra do produto, etapa a etapa */
+/* Saber operar a máquina é pré-requisito para receber a tarefa. Uma
+   costureira de reta não vira operadora de galoneira porque o
+   planejamento precisou — e planejar como se virasse é o caminho mais
+   curto para a data não bater. */
+function equipamentosDoColaborador(colab){
+  return (colab && Array.isArray(colab.equipamentos)) ? colab.equipamentos : null;
+}
+
+function podeOperar(db, colaboradorId, equipamentoId){
+  if(!equipamentoId) return true;   /* operação sem máquina: qualquer um */
+  const c = (db.colaboradores||[]).find(x=>x.id===colaboradorId);
+  if(!c) return false;
+  const lista = equipamentosDoColaborador(c);
+  /* lista não preenchida significa "ainda não informado", não "não sabe
+     nada" — senão o cadastro antigo travaria a fábrica inteira */
+  if(lista === null || lista.length === 0) return true;
+  return lista.includes(equipamentoId);
+}
+
+/* Quais das máquinas escolhidas esta pessoa consegue usar. */
+function maquinasQueOpera(db, colaboradorId, maquinaIds){
+  return (maquinaIds||[]).filter(id=>podeOperar(db, colaboradorId, id));
+}
+
+/* Quem sabe operar alguma das máquinas do dia. */
+function habilitadosPara(db, colaboradorIds, maquinaIds){
+  if(!(maquinaIds||[]).length) return {aptos: colaboradorIds||[], semHabilitacao: []};
+  const aptos = [], sem = [];
+  (colaboradorIds||[]).forEach(id=>{
+    if(maquinasQueOpera(db, id, maquinaIds).length > 0) aptos.push(id);
+    else sem.push(id);
+  });
+  return {aptos, semHabilitacao: sem};
+}
+
+function cargaDosEquipamentos(db, programado){
+  const uso = {};
+  (programado.agenda||[]).forEach(a=>{
+    (a.tarefas||[]).forEach(tf=>{
+      /* a tarefa não guarda a máquina; o que se sabe é que a pessoa
+         ocupou uma das máquinas do dia enquanto trabalhava */
+      const chave = a.maquinaId || '_equipe';
+      if(!uso[chave]) uso[chave] = {minutos:0, pecas:0, pessoas:new Set()};
+      uso[chave].minutos += num(tf.minutos);
+      uso[chave].pecas += num(tf.pecas);
+      uso[chave].pessoas.add(a.nome);
+    });
+  });
+
+  /* sem vínculo pessoa-máquina, distribuir o uso entre as escolhidas */
+  const maquinas = (programado.maquinaIds||[]);
+  const totalMinutos = (programado.agenda||[])
+    .reduce((s,a)=>s + num(a.usado) + num(a.extraUsado), 0);
+  const totalPecas = (programado.agenda||[])
+    .reduce((s,a)=>s + num(a.pecas), 0);
+  const capacidade = num(programado.minutosDia);
+
+  return maquinas.map((id,i)=>{
+    const eq = (db.equipamentos||[]).find(e=>e.id===id);
+    /* cada máquina recebe a fatia proporcional: com N máquinas e N
+       pessoas produzindo em paralelo, o uso se divide entre elas */
+    const fatia = maquinas.length > 0 ? 1/maquinas.length : 0;
+    const minutos = totalMinutos * fatia;
+    return {
+      id, nome: eq ? eq.nome : 'máquina removida',
+      codigo: eq ? (eq.codigo||'') : '',
+      minutos: Number(minutos.toFixed(1)),
+      pecas: Math.round(totalPecas * fatia),
+      capacidade,
+      ocupacao: capacidade > 0
+        ? Number((minutos/capacidade*100).toFixed(0)) : 0,
+      livre: Number(Math.max(0, capacidade - minutos).toFixed(1)),
+    };
+  });
+}
+
+/* Dá para cumprir as entregas com o ritmo deste dia? É a pergunta que
+   o supervisor faz no fim da programação, e que ninguém respondia. */
+function indicadorDoPeriodo(db, programado, opcoes){
+  const op = opcoes || {};
+  const demanda = programado.demanda || [];
+  if(demanda.length === 0) return null;
+
+  const minutosDia = num(programado.minutosDia) || 480;
+  const pessoasDia = (programado.agenda||[]).length;
+  const capacidadeDia = (programado.agenda||[])
+    .reduce((s,a)=>s + num(a.capacidade), 0);
+  if(capacidadeDia <= 0) return null;
+
+  /* o trabalho total que a carteira exige, por data de entrega */
+  const porEntrega = {};
+  demanda.forEach(l=>{
+    const dt = l.entrega || '';
+    if(!porEntrega[dt]) porEntrega[dt] = {minutos:0, pecas:0, ordens:new Set()};
+    porEntrega[dt].minutos += num(l.quantidade) * num(l.minutosPorPeca);
+    porEntrega[dt].pecas += num(l.quantidade);
+    porEntrega[dt].ordens.add(l.ordemCodigo);
+  });
+
+  const hoje = op.data || todayISO();
+  const linhas = Object.entries(porEntrega)
+    .filter(([dt])=>!!dt)
+    .map(([dt, v])=>{
+      /* dias úteis daqui até a entrega */
+      const uteis = diasUteisEntre(hoje, dt);
+      const capacidade = uteis * capacidadeDia;
+      return {
+        entrega: dt, uteis,
+        minutos: Number(v.minutos.toFixed(1)),
+        pecas: v.pecas,
+        ordens: [...v.ordens],
+        capacidade: Number(capacidade.toFixed(1)),
+        cabe: capacidade >= v.minutos,
+        folga: Number((capacidade - v.minutos).toFixed(1)),
+        /* quantos dias faltam além dos que existem */
+        diasFaltando: capacidade < v.minutos && capacidadeDia > 0
+          ? Number(((v.minutos - capacidade)/capacidadeDia).toFixed(1)) : 0,
+      };
+    })
+    .sort((a,b)=>a.entrega.localeCompare(b.entrega));
+
+  const apertadas = linhas.filter(l=>!l.cabe);
+  const semData = demanda.filter(l=>!l.entrega).length;
+
+  return {
+    linhas, apertadas, semData,
+    pessoasDia, capacidadeDia: Number(capacidadeDia.toFixed(1)),
+    /* o veredicto */
+    situacao: apertadas.length === 0 ? 'dentro'
+      : apertadas.length === linhas.length ? 'fora' : 'parcial',
+  };
+}
+
+function diasUteisEntre(deISO, ateISO){
+  const a = new Date(deISO), b = new Date(ateISO);
+  if(isNaN(a) || isNaN(b) || b < a) return 0;
+  let n = 0, g = 0;
+  const dia = new Date(a);
+  while(dia <= b && g < 800){
+    g++;
+    const s = dia.getDay();
+    if(s !== 0 && s !== 6) n++;
+    dia.setDate(dia.getDate() + 1);
+  }
+  return n;
+}
+
+/* A escala por operação vira agenda por pessoa. São duas vistas do
+   mesmo plano: a carteira mostra por operação (o que precisa sair), o
+   supervisor precisa por pessoa (o que cada um faz hoje). */
+function agendaDaCarteira(db, balanceamento, escalas, opcoes){
+  const op = opcoes || {};
+  const minutosDia = num(op.minutosDia) || jornadaDe(db).produtivo;
+  const extra = Math.min(num(op.permitirExtra) || 0, LIMITE_EXTRA_DIA);
+  const porPessoa = {};
+
+  (balanceamento.postos||[]).forEach(p=>{
+    const esc = (escalas||{})[p.id];
+    if(!esc || !(esc.pessoas||[]).length) return;
+    const cap = capacidadeDaEquipe(db, esc.pessoas, p.id, p.unitario);
+    if(cap.vazia || !(cap.porHora > 0)) return;
+
+    const pecasTotal = p.unitario > 0 ? p.carga / p.unitario : 0;
+
+    cap.membros.forEach(m=>{
+      if(!porPessoa[m.id]) porPessoa[m.id] = {
+        id: m.id, nome: m.nome,
+        capacidade: minutosDia, extraPermitido: extra,
+        usado: 0, extraUsado: 0, tarefas: [],
+      };
+      const a = porPessoa[m.id];
+      /* a fatia desta pessoa: proporcional ao ritmo dela na equipe */
+      const fatia = cap.porHora > 0 ? m.porHora / cap.porHora : 0;
+      const pecas = pecasTotal * fatia;
+      const minutos = m.porHora > 0 ? (pecas / m.porHora) * 60 : 0;
+
+      /* o que cabe hoje; o resto fica para os próximos dias */
+      const cabeNormal = Math.max(0, a.capacidade - a.usado);
+      const cabeExtra = Math.max(0, a.extraPermitido - a.extraUsado);
+      const usar = Math.min(minutos, cabeNormal + cabeExtra);
+      const noNormal = Math.min(usar, cabeNormal);
+      const noExtra = usar - noNormal;
+      const pecasHoje = m.porHora > 0 ? (usar / 60) * m.porHora : 0;
+
+      a.usado += noNormal;
+      a.extraUsado += noExtra;
+      a.tarefas.push({
+        etapa: p.etapa, setor: p.setor,
+        ordem: (p.produtos||[]).map(x=>x.ordem).join(', '),
+        pecas: Math.round(pecasHoje),
+        pecasTotal: Math.round(pecas),
+        minutos: Number(usar.toFixed(1)),
+        emExtra: noExtra > 0 ? Number(noExtra.toFixed(1)) : 0,
+        porHora: m.porHora,
+        base: m.ritmo.origem,
+        sobrou: Math.round(pecas - pecasHoje),
+      });
+    });
+  });
+
+  const agenda = Object.values(porPessoa).map(a=>{
+    a.usado = Number(a.usado.toFixed(1));
+    a.extraUsado = Number(a.extraUsado.toFixed(1));
+    a.livre = Number(Math.max(0, a.capacidade - a.usado).toFixed(1));
+    a.ocupacao = a.capacidade > 0
+      ? Number((a.usado / a.capacidade * 100).toFixed(0)) : 0;
+    a.pecas = a.tarefas.reduce((s,t)=>s + t.pecas, 0);
+    a.temFolga = a.livre >= 30;
+    return a;
+  }).sort((x,y)=>y.usado - x.usado);
+
+  /* o que não coube no dia */
+  const sobra = [];
+  (balanceamento.postos||[]).forEach(p=>{
+    const totalSobrou = agenda.reduce((s,a)=>
+      s + a.tarefas.filter(t=>t.etapa===p.etapa)
+        .reduce((n,t)=>n + t.sobrou, 0), 0);
+    if(totalSobrou > 0)
+      sobra.push({
+        etapa: p.etapa, setor: p.setor,
+        ordemCodigo: (p.produtos||[]).map(x=>x.ordem).join(', '),
+        produtoNome: (p.produtos||[]).map(x=>x.produto).join(', '),
+        quantidade: totalSobrou,
+        minutos: Number((totalSobrou * p.unitario).toFixed(1)),
+        entrega: (p.produtos||[])[0] ? (p.produtos[0].entrega||'') : '',
+      });
+  });
+
+  const totalSobra = sobra.reduce((s,x)=>s + x.minutos, 0);
+  const folgaTotal = agenda.reduce((s,a)=>s + a.livre, 0);
+
+  return {
+    vazio: agenda.length === 0,
+    agenda, sobra, minutosDia,
+    maquinaIds: op.maquinaIds || [],
+    maquinas: (op.maquinaIds||[]).length,
+    demanda: (balanceamento.postos||[]).map(p=>({
+      etapa: p.etapa,
+      quantidade: p.unitario > 0 ? Math.round(p.carga / p.unitario) : 0,
+      minutosPorPeca: p.unitario,
+      entrega: (p.produtos||[])[0] ? (p.produtos[0].entrega||'') : '',
+      ordemCodigo: (p.produtos||[]).map(x=>x.ordem).join(', '),
+    })),
+    totalSobra: Number(totalSobra.toFixed(1)),
+    totalExtra: Number(agenda.reduce((s,a)=>s + a.extraUsado, 0).toFixed(1)),
+    folgaTotal: Number(folgaTotal.toFixed(1)),
+    pecasProgramadas: agenda.reduce((s,a)=>s + a.pecas, 0),
+    pecasSobrando: sobra.reduce((s,x)=>s + x.quantidade, 0),
+    sugestoes: sugerirDestinoDaSobra(db, {agenda, sobra, minutosDia,
+      totalSobra, folgaTotal, extra, semMaquina: [], semHabilitacao: []}),
+  };
+}
+
+/* ==========================================================
+   DISPONIBILIDADE
+   O calendário não inventa horário: ele lê a jornada cadastrada
+   em Engenharia → Jornada e mão de obra. Dia da semana, entrada,
+   saída, intervalos e sábado saem de lá. O que o calendário
+   acrescenta é o que já está comprometido — programação
+   publicada, aferição marcada, máquina parada.
+========================================================== */
+
+/* O expediente de um dia, pela jornada da fábrica. */
+function expedienteDoDia(db, dataISO){
+  const j = jornadaDe(db);
+  const d = new Date(dataISO + 'T12:00:00');
+  if(isNaN(d)) return {trabalha:false, motivo:'data inválida', minutos:0};
+  const semana = d.getDay();
+
+  if(semana === 0)
+    return {trabalha:false, motivo:'domingo', minutos:0, blocos:[]};
+
+  if(semana === 6){
+    if(!j.sabado || !j.minutosSabado)
+      return {trabalha:false, motivo:'sábado sem expediente', minutos:0, blocos:[]};
+    return {
+      trabalha:true, sabado:true,
+      inicio: j.sabado.inicio, fim: j.sabado.fim,
+      minutos: j.minutosSabado,
+      blocos: [{inicio: j.sabado.inicio, fim: j.sabado.fim,
+        minutos: j.minutosSabado}],
+      intervalos: [],
+    };
+  }
+
+  if(!(j.diasSemana||[1,2,3,4,5]).includes(semana))
+    return {trabalha:false, motivo:'fora dos dias de trabalho',
+      minutos:0, blocos:[]};
+
+  /* o dia partido pelos intervalos: cada bloco é tempo de produção */
+  const blocos = [];
+  let cursor = j.inicio;
+  (j.intervalos||[]).slice()
+    .sort((a,b)=>String(a.inicio).localeCompare(String(b.inicio)))
+    .forEach(iv=>{
+      const m = minutosEntre(cursor, iv.inicio);
+      if(m > 0) blocos.push({inicio: cursor, fim: iv.inicio, minutos: m});
+      cursor = iv.fim;
+    });
+  const ultimo = minutosEntre(cursor, j.fim);
+  if(ultimo > 0) blocos.push({inicio: cursor, fim: j.fim, minutos: ultimo});
+
+  return {
+    trabalha:true, sabado:false,
+    inicio: j.inicio, fim: j.fim,
+    minutos: j.produtivo,
+    blocos,
+    intervalos: j.intervalos || [],
+    extensao: j.extensao || null,
+    minutosExtras: j.minutosExtras || 0,
+  };
+}
+
+/* O que já está comprometido para esta pessoa ou máquina num dia. */
+function compromissosDoRecurso(db, tipo, id, dataISO){
+  const itens = [];
+
+  (db.programacoes||[]).forEach(p=>{
+    if(p.data !== dataISO || p.status === 'encerrada') return;
+    (p.itens||[]).forEach(it=>{
+      if(it.concluida) return;
+      const meu = tipo === 'pessoa'
+        ? (it.pessoas||[]).includes(id)
+        : (it.maquinas||[]).includes(id);
+      if(!meu) return;
+      /* o tempo previsto desta operação para este recurso */
+      const divisor = tipo === 'pessoa'
+        ? Math.max(1, (it.pessoas||[]).length)
+        : Math.max(1, (it.maquinas||[]).length);
+      itens.push({
+        tipo:'programacao',
+        rotulo: it.etapa || 'operação',
+        detalhe: `${it.ordemCodigo || ''} · ${p.codigo}`,
+        situacao: p.status,
+        pecas: Math.round(num(it.quantidadePrevista)/divisor),
+      });
+    });
+  });
+
+  /* aferição marcada ocupa a pessoa e a máquina */
+  (db.afericoes||[]).forEach(af=>{
+    if(af.fase === 'concluida' || af.fase === 'cancelada') return;
+    const meu = tipo === 'pessoa'
+      ? af.colaboradorId === id : af.equipamentoId === id;
+    if(!meu) return;
+    itens.push({tipo:'afericao', rotulo:'Aferição',
+      detalhe: af.codigo || '', situacao: af.fase});
+  });
+
+  return itens;
+}
+
+/* A máquina está em condição de trabalhar? */
+function situacaoDoEquipamento(db, id){
+  const e = (db.equipamentos||[]).find(x=>x.id===id);
+  if(!e) return {ok:false, motivo:'equipamento não encontrado'};
+  if(e.ativo === false) return {ok:false, motivo:'inativo no cadastro'};
+  if(e.situacao === 'parada') return {ok:false, motivo:'parada'};
+  if(e.situacao === 'manutencao') return {ok:false, motivo:'em manutenção'};
+  if(e.situacao === 'baixada') return {ok:false, motivo:'baixada'};
+  return {ok:true, situacao: e.situacao || 'operando'};
+}
+
+/* A pessoa está em condição de trabalhar? */
+function situacaoDoColaborador(db, id){
+  const c = (db.colaboradores||[]).find(x=>x.id===id);
+  if(!c) return {ok:false, motivo:'colaborador não encontrado'};
+  if(c.status === 'Inativo') return {ok:false, motivo:'inativo no cadastro'};
+  if(c.status && c.status !== 'Ativo')
+    return {ok:false, motivo: String(c.status).toLowerCase()};
+  if(c.produtivo === false) return {ok:false, motivo:'não é mão de obra direta'};
+  return {ok:true, situacao:'ativo'};
+}
+
+/* O calendário: dia a dia, o que a jornada oferece e o que já está
+   tomado. */
+function disponibilidadeDe(db, tipo, id, opcoes){
+  const op = opcoes || {};
+  const inicio = op.de || todayISO();
+  const dias = Math.max(1, Math.min(60, num(op.dias) || 14));
+
+  const cond = tipo === 'pessoa'
+    ? situacaoDoColaborador(db, id) : situacaoDoEquipamento(db, id);
+
+  const lista = [];
+  const cursor = new Date(inicio + 'T12:00:00');
+  for(let i=0; i<dias; i++){
+    const iso = cursor.toISOString().slice(0,10);
+    const exp = expedienteDoDia(db, iso);
+    const comp = compromissosDoRecurso(db, tipo, id, iso);
+    const ocupado = comp.length > 0;
+
+    lista.push({
+      data: iso,
+      semana: cursor.getDay(),
+      ...exp,
+      compromissos: comp,
+      /* livre = a jornada trabalha, o recurso está em condição e
+         ninguém reservou */
+      livre: exp.trabalha && cond.ok && !ocupado,
+      ocupado,
+      impedido: !cond.ok,
+    });
+    cursor.setDate(cursor.getDate() + 1);
+  }
+
+  const uteis = lista.filter(d=>d.trabalha);
+  const livres = lista.filter(d=>d.livre);
+
+  return {
+    tipo, id, condicao: cond,
+    dias: lista,
+    totalUteis: uteis.length,
+    totalLivres: livres.length,
+    minutosLivres: livres.reduce((s,d)=>s + d.minutos, 0),
+    minutosUteis: uteis.reduce((s,d)=>s + d.minutos, 0),
+  };
+}
+
+/* ==========================================================
+   EXECUÇÃO DA ETAPA
+   O plano diz quem faz o quê e a partir de que hora. A execução
+   diz se começou, quando começou e o que saiu. A diferença
+   entre os dois é o que faz o cronograma alertar antes do
+   prazo estourar, e não depois.
+========================================================== */
+const SITUACAO_EXECUCAO = [
+  {id:'prevista',   nome:'Prevista',    cor:'var(--line)'},
+  {id:'iniciada',   nome:'Em produção', cor:'var(--thread)'},
+  {id:'concluida',  nome:'Concluída',   cor:'var(--ok)'},
+];
+
+/* A hora prevista de uma etapa, dentro do expediente do dia. */
+function horaPrevistaDoItem(db, item){
+  if(item.horaInicio) return item.horaInicio;
+  const j = jornadaDe(db);
+  return j.inicio;
+}
+
+/* Quanto tempo esta etapa deve levar com a equipe escalada. */
+function duracaoPrevistaDoItem(db, item){
+  /* O tempo do roteiro é o piso do cálculo: sem ele, quem nunca fez a
+     operação fica com ritmo zero e a duração não sai. */
+  let minutosRoteiro = 0;
+  const ordem = (db.ordens||[]).find(o=>o.id === item.ordemId);
+  if(ordem){
+    const produto = (db.produtos||[]).find(p=>p.id === ordem.produtoId);
+    if(produto){
+      const passo = (produto.processo||[]).find(x=>x.etapaId === item.etapaId);
+      if(passo){
+        const r = resumoProcesso(produto, db);
+        const achado = (r.passos||[]).find(x=>x.passo.id === passo.id);
+        if(achado) minutosRoteiro = num(achado.minutosPorPeca) ||
+          num(achado.minutosHomem) / Math.max(1, num(passo.pessoas) || 1);
+      }
+    }
+  }
+  const cap = capacidadeDaEquipe(db, item.pessoas || [], item.etapaId,
+    minutosRoteiro);
+  if(cap.vazia || !(cap.porHora > 0)) return null;
+  const pecas = num(item.quantidadePrevista);
+  return Number(((pecas / cap.porHora) * 60).toFixed(1));
+}
+
+/* Iniciar: registra a hora real em que a etapa começou. */
+function iniciarEtapa(d, programacaoId, itemId, dados, usuario){
+  const p = (d.programacoes||[]).find(x=>x.id===programacaoId);
+  if(!p) return {erro:'Programação não encontrada.'};
+  const it = (p.itens||[]).find(x=>x.id===itemId);
+  if(!it) return {erro:'Operação não encontrada na programação.'};
+  if(it.iniciadoEm) return {erro:'Esta operação já foi iniciada.'};
+  if(it.concluida) return {erro:'Esta operação já foi concluída.'};
+
+  const op = dados || {};
+  it.iniciadoEm = op.quando || agoraISO();
+  it.iniciadoPor = usuario ? usuario.nome : '';
+  /* a hora real com segundos: numa operação curta, o minuto redondo
+     esconde a diferença entre começar às 8h00 e às 8h00m50s */
+  it.horaReal = op.hora || String(new Date().toTimeString().slice(0,8));
+  it.situacao = 'iniciada';
+
+  registrarLog(d, usuario, 'producao.inicio',
+    `${it.etapa} · ${it.ordemCodigo || ''} · ${it.horaReal}`);
+  return {item: it};
+}
+
+/* Concluir: fecha a etapa com o que saiu, e gera o apontamento. */
+function concluirEtapa(d, programacaoId, itemId, dados, usuario){
+  const p = (d.programacoes||[]).find(x=>x.id===programacaoId);
+  if(!p) return {erro:'Programação não encontrada.'};
+  const it = (p.itens||[]).find(x=>x.id===itemId);
+  if(!it) return {erro:'Operação não encontrada.'};
+  if(it.concluida) return {erro:'Esta operação já foi concluída.'};
+  if(!it.iniciadoEm)
+    return {erro:'Esta operação ainda não foi iniciada. Inicie no cronograma.'};
+
+  const boas = num(dados.pecasBoas);
+  const defeito = num(dados.pecasDefeito);
+  if(boas + defeito <= 0) return {erro:'Informe quantas peças saíram.'};
+
+  const colaboradorId = dados.colaboradorId || (it.pessoas||[])[0] || '';
+  if(!colaboradorId) return {erro:'Informe quem produziu.'};
+
+  /* o tempo vem do relógio: início registrado até agora */
+  const fim = dados.quando || agoraISO();
+  const minutos = num(dados.minutosGastos) > 0
+    ? num(dados.minutosGastos)
+    : Math.max(1, Math.round(
+        (new Date(fim) - new Date(it.iniciadoEm)) / 60000));
+
+  const ordem = (d.ordens||[]).find(o=>o.id === it.ordemId);
+  if(!ordem) return {erro:'Ordem não encontrada.'};
+  const tarefa = (ordem.tarefas||[]).find(t=>t.etapaId === it.etapaId);
+  if(!tarefa) return {erro:'Esta ordem não tem esta operação no roteiro.'};
+
+  const r = apontarProducao(d, {
+    ordemId: it.ordemId, tarefaId: tarefa.id, colaboradorId,
+    pecasBoas: boas, pecasDefeito: defeito,
+    minutosGastos: minutos,
+    /* iniciar e concluir no cronograma já marcaram as duas pontas */
+    inicioReal: it.iniciadoEm, fimReal: fim,
+    paradas: dados.paradas || [],
+    data: (it.iniciadoEm||'').slice(0,10) || p.data,
+    observacao: dados.observacao || '',
+  }, usuario);
+  if(r.erro) return {erro: r.erro};
+
+  it.concluida = true;
+  it.concluidoEm = fim;
+  it.concluidoPor = usuario ? usuario.nome : '';
+  it.situacao = 'concluida';
+  it.minutosReais = minutos;
+  it.pecasFeitas = boas;
+
+  registrarLog(d, usuario, 'producao.conclusao',
+    `${it.etapa} · ${boas} peça(s) em ${duracao(minutos)}`);
+  return {item: it, apontamento: r.apontamento};
+}
+
+/* O cronograma do dia: o que já era para ter começado, o que está
+   em produção, o que atrasou. */
+function cronogramaDoDia(db, data){
+  const p = programacaoDoDia(db, data);
+  if(!p) return {vazio:true, itens:[], data};
+
+  const agora = new Date();
+  const hoje = todayISO();
+  const j = jornadaDe(db);
+
+  const itens = (p.itens||[]).map(it=>{
+    const horaPrev = horaPrevistaDoItem(db, it);
+    const durPrev = duracaoPrevistaDoItem(db, it);
+    const situacao = it.concluida ? 'concluida'
+      : it.iniciadoEm ? 'iniciada' : 'prevista';
+
+    /* já passou da hora de começar? */
+    let atrasoInicio = 0;
+    if(situacao === 'prevista' && p.data <= hoje){
+      const alvo = new Date(`${p.data}T${horaPrev}:00`);
+      if(p.data < hoje) atrasoInicio = 999;   /* dia passado, nunca começou */
+      else if(agora > alvo)
+        atrasoInicio = Math.round((agora - alvo) / 60000);
+    }
+
+    /* já começou: está demorando mais que o previsto? */
+    let excesso = 0;
+    if(situacao === 'iniciada' && durPrev){
+      const decorrido = Math.round((agora - new Date(it.iniciadoEm)) / 60000);
+      if(decorrido > durPrev) excesso = decorrido - durPrev;
+    }
+
+    /* A etapa anterior já entregou peça para esta trabalhar? Sem isso
+       o supervisor inicia, produz e só descobre na hora de concluir
+       que não podia — com a peça já costurada. */
+    let bloqueio = null;
+    const ordem = (db.ordens||[]).find(o=>o.id === it.ordemId);
+    if(ordem && !it.concluida){
+      const av = avancoDaOrdem(ordem, db);
+      const linha = (av.etapas||[]).find(x=>x.tarefa &&
+        x.tarefa.etapaId === it.etapaId);
+      if(linha && linha.ordem > 1){
+        const disponivel = num(linha.disponivel) - num(linha.produzidas);
+        if(disponivel <= 0){
+          const ant = (av.etapas||[])[linha.ordem - 2];
+          bloqueio = ant
+            ? `${ant.etapa} ainda não entregou peça para esta operação`
+            : 'a etapa anterior ainda não entregou peça';
+        }
+      }
+    }
+
+    return {
+      ...it, situacao,
+      horaPrevista: horaPrev,
+      duracaoPrevista: durPrev,
+      atrasoInicio,
+      excesso,
+      bloqueio,
+      /* a prioridade sobe com o atraso e com a proximidade da entrega */
+      urgencia: situacao === 'concluida' ? 0
+        : bloqueio ? 0
+        : atrasoInicio > 0 ? 3 : excesso > 0 ? 2 : 1,
+      alerta: bloqueio ? bloqueio
+        : atrasoInicio >= 999 ? 'não foi iniciada no dia previsto'
+        : atrasoInicio > 0 ? `${duracao(atrasoInicio)} sem iniciar`
+        : excesso > 0 ? `${duracao(excesso)} além do previsto` : '',
+    };
+  }).sort((a,b)=>(b.urgencia - a.urgencia) ||
+    String(a.horaPrevista).localeCompare(String(b.horaPrevista)));
+
+  return {
+    vazio:false, data, programacao: p, itens,
+    previstas: itens.filter(x=>x.situacao==='prevista').length,
+    iniciadas: itens.filter(x=>x.situacao==='iniciada').length,
+    concluidas: itens.filter(x=>x.situacao==='concluida').length,
+    atrasadas: itens.filter(x=>x.atrasoInicio > 0).length,
+    excedidas: itens.filter(x=>x.excesso > 0).length,
+    /* o veredicto do dia */
+    situacao: itens.some(x=>x.atrasoInicio > 0) ? 'atrasado'
+      : itens.some(x=>x.excesso > 0) ? 'apertado' : 'no prazo',
+  };
+}
+
+/* ==========================================================
+   PROGRAMAÇÃO AUTOMÁTICA
+   A ordem entra e o sistema já monta o plano: tempo do roteiro,
+   quem está livre e habilitado, e a sequência das etapas —
+   costura não começa antes de o corte entregar.
+
+   O que ele produz é ponto de partida, não decisão. O supervisor
+   ajusta na carteira quando alguém falta, a máquina quebra ou o
+   material atrasa; é por isso que cada item nasce marcado como
+   automático, e deixa de ser assim quando alguém mexe.
+========================================================== */
+
+/* Quem pode assumir uma operação num dia: livre, habilitado e do setor. */
+function candidatosLivres(db, etapaId, departamentoId, data, maquinaIds, opcoes){
+  const op = opcoes || {};
+  return (db.colaboradores||[])
+    .filter(c=>c.departamentoId === departamentoId &&
+      situacaoDoColaborador(db, c.id).ok)
+    .filter(c=>!(maquinaIds||[]).length ||
+      maquinasQueOpera(db, c.id, maquinaIds).length > 0)
+    .map(c=>{
+      const st = colaboradorLivre(db, c.id, data);
+      const r = ritmoEsperado(db, c.id, etapaId, num(op.minutosRoteiro),
+        {produtoId: op.produtoId, equipamentoId: (maquinaIds||[])[0]});
+      const meu = desempenhoNaEtapa(db, c.id, etapaId);
+      /* aferição concluída desta pessoa nesta operação */
+      const aferido = (db.afericoes||[]).some(x=>
+        x.colaboradorId === c.id && x.etapaId === etapaId &&
+        x.fase === 'concluida');
+      const aferindo = (db.afericoes||[]).some(x=>
+        x.colaboradorId === c.id && x.etapaId === etapaId &&
+        x.fase !== 'concluida' && x.fase !== 'cancelada');
+      /* Quanto se sabe sobre esta pessoa nesta operação. É isso que
+         ordena a escolha: medido vale mais que estimado, sempre. */
+      const confianca = aferido ? 3
+        : (!meu.semDados && meu.confiavel) ? 2
+        : !meu.semDados ? 1 : 0;
+      const afere = etapaExigeAfericao(db, etapaId);
+      return {id: c.id, nome: c.nome, livre: st.livre,
+        compromissos: st.compromissos.length, porHora: r.porHora,
+        base: r.origem, aferido, aferindo,
+        /* setor isento: a confiança vem do histórico, não da aferição */
+        confianca: afere ? confianca : Math.min(confianca, 2),
+        exigeAfericao: afere,
+        apontamentos: meu.apontamentos || 0,
+        precisaAferir: afere && confianca === 0 && !aferindo};
+    })
+    /* livre primeiro; depois quem se conhece melhor; depois quem rende
+       mais. Sem isso o sistema escalaria um desconhecido rápido no
+       papel à frente de alguém que já provou o ritmo. */
+    .sort((a,b)=>(b.livre - a.livre) || (b.confianca - a.confianca) ||
+      (b.porHora - a.porHora));
+}
+
+/* Máquinas do setor que podem receber a operação. */
+function maquinasLivres(db, departamentoId, data){
+  return (db.equipamentos||[])
+    .filter(e=>e.departamentoId === departamentoId &&
+      situacaoDoEquipamento(db, e.id).ok)
+    .map(e=>({id: e.id, nome: e.nome,
+      livre: compromissosDoRecurso(db,'maquina',e.id,data).length === 0}))
+    .sort((a,b)=>b.livre - a.livre);
+}
+
+/* Monta o plano da ordem: cada etapa num dia, na sequência do roteiro. */
+function programarOrdem(d, ordemId, opcoes, usuario){
+  const op = opcoes || {};
+  const ordem = (d.ordens||[]).find(o=>o.id===ordemId);
+  if(!ordem) return {erro:'Ordem não encontrada.'};
+  const produto = (d.produtos||[]).find(p=>p.id===ordem.produtoId);
+  if(!produto) return {erro:'Produto da ordem não encontrado.'};
+
+  if(!(produto.processo||[]).length)
+    return {erro:'Este produto não tem processo definido. Monte o roteiro antes.'};
+  const r = resumoProcesso(produto, d);
+  if(!r || !r.passos || r.passos.length === 0)
+    return {erro:'Este produto não tem processo definido. Monte o roteiro antes.'};
+
+  const j = jornadaDe(d);
+  const minutosDia = num(op.minutosDia) || j.produtivo;
+  const quantidade = num(ordem.quantidade);
+
+  /* a data em que cada etapa pode começar: a anterior tem que ter
+     entregado. Sem isso o plano nasce impossível. */
+  let dataCorrente = op.inicio || todayISO();
+  if(!expedienteDoDia(d, dataCorrente).trabalha)
+    dataCorrente = proximoDiaUtil(dataCorrente);
+
+  const itens = [];
+  const avisos = [];
+  const aferidos = [];
+
+  r.passos.forEach((p, ordemEtapa)=>{
+    const etapaId = p.passo.etapaId;
+    const setor = p.passo.departamentoId;
+    const nomeEtapa = p.etapa ? p.etapa.nome : 'operação';
+
+    /* O roteiro manda: se a etapa lista máquinas, só elas servem. Sem
+       lista, qualquer uma do setor. */
+    const doRoteiro = (p.equipamentoIds||[]).filter(Boolean);
+    const disponiveis = maquinasLivres(d, setor, dataCorrente)
+      .filter(m=>!doRoteiro.length || doRoteiro.includes(m.id));
+    const maqEscolhidas = disponiveis.filter(m=>m.livre).slice(0, 1).map(m=>m.id);
+    /* nenhuma livre? usa a que existe e avisa */
+    const maquinas = maqEscolhidas.length ? maqEscolhidas
+      : disponiveis.slice(0,1).map(m=>m.id);
+    if(doRoteiro.length && disponiveis.length === 0)
+      avisos.push(`${nomeEtapa}: as máquinas do roteiro estão indisponíveis ` +
+        `em ${fmtDate(dataCorrente)}.`);
+    else if(!doRoteiro.length && disponiveis.length === 0 && !p.semTempo)
+      avisos.push(`${nomeEtapa}: nenhuma máquina no setor — tratada como manual.`);
+    else if(maqEscolhidas.length === 0 && disponiveis.length > 0)
+      avisos.push(`${nomeEtapa}: nenhuma máquina livre em ${fmtDate(dataCorrente)}.`);
+
+    const porPecaRoteiro = num(p.minutosHomem) /
+      Math.max(1, num(p.passo.pessoas) || 1);
+    /* Quem este mesmo planejamento já colocou neste dia sai da lista.
+       colaboradorLivre olha o que está salvo; as etapas que acabamos de
+       montar ainda não foram — sem isso a mesma pessoa entrava duas
+       vezes no mesmo dia e o plano nascia impossível. */
+    const jaNesteDia = new Set(
+      itens.filter(x=>x._data === dataCorrente)
+        .flatMap(x=>x.pessoas || []));
+    const cands = candidatosLivres(d, etapaId, setor, dataCorrente, maquinas,
+      {produtoId: produto.id, minutosRoteiro: porPecaRoteiro})
+      .filter(c=>!jaNesteDia.has(c.id));
+    if(cands.length === 0){
+      avisos.push(`${nomeEtapa}: ninguém disponível no setor — ` +
+        `a operação entra sem equipe e precisa de ajuste manual.`);
+    }
+
+    /* quantas pessoas o roteiro pede, entre as disponíveis */
+    const querem = Math.max(1, num(p.passo.pessoas) || 1);
+    const equipe = cands.filter(c=>c.livre).slice(0, querem);
+    const pessoas = (equipe.length ? equipe : cands.slice(0, querem))
+      .map(c=>c.id);
+    if(equipe.length < querem && cands.length > 0)
+      avisos.push(`${nomeEtapa}: o roteiro pede ${querem} pessoa(s) e ` +
+        `${equipe.length} está(ão) livre(s) em ${fmtDate(dataCorrente)}.`);
+
+    /* quanto tempo leva com quem foi escolhido. O resumo do processo
+       chama isso de minutosHomem — é o tempo de uma pessoa por peça. */
+    const porPeca = num(p.minutosHomem) / Math.max(1, num(p.passo.pessoas) || 1);
+    const cap = capacidadeDaEquipe(d, pessoas, etapaId, porPeca);
+    const porHora = (cap.vazia || !cap.porHora)
+      ? (porPeca > 0 ? 60/porPeca : 0) : cap.porHora;
+    const minutos = porHora > 0 ? (quantidade / porHora) * 60 : 0;
+    if(porPeca <= 0)
+      avisos.push(`${nomeEtapa}: sem tempo definido no roteiro — ` +
+        `a data desta operação é um chute.`);
+
+    /* Quem entra sem medição nesta operação sai daqui com aferição
+       aberta. É o que faz a fábrica ir conhecendo o próprio ritmo em
+       vez de planejar para sempre no escuro. */
+    pessoas.forEach(pid=>{
+      const c = cands.find(x=>x.id === pid);
+      if(!c || !c.precisaAferir) return;
+      /* fora dos setores que aferem, a meta vem da jornada: não há
+         cronômetro a marcar nem prova a fazer */
+      if(!exigeAfericao(d, setor)) return;
+      const ra = novaAfericao(d, {
+        colaboradorId: pid, etapaId,
+        departamentoId: setor,
+        produtoId: produto.id,
+        equipamentoId: maquinas[0] || '',
+      }, usuario);
+      if(ra.afericao){
+        aferidos.push({nome: c.nome, etapa: nomeEtapa,
+          codigo: ra.afericao.codigo});
+      }
+    });
+
+    itens.push({
+      ordemId: ordem.id, ordemCodigo: ordem.codigo,
+      etapaId, etapa: nomeEtapa, departamentoId: setor,
+      pessoas, maquinas,
+      horaInicio: j.inicio,
+      quantidadePrevista: quantidade,
+      /* nasce automático: o supervisor vê que ninguém decidiu isso */
+      automatico: true,
+      _data: dataCorrente,
+      _minutos: Number(minutos.toFixed(1)),
+    });
+
+    /* a próxima etapa começa quando esta termina */
+    const dias = minutosDia > 0 ? Math.ceil(minutos / minutosDia) : 1;
+    for(let k=0; k<Math.max(1, dias); k++)
+      dataCorrente = proximoDiaUtil(dataCorrente);
+  });
+
+  /* agrupar por dia: uma programação por data */
+  const porDia = {};
+  itens.forEach(it=>{
+    if(!porDia[it._data]) porDia[it._data] = [];
+    const {_data, _minutos, ...limpo} = it;
+    porDia[it._data].push(limpo);
+  });
+
+  const criadas = [];
+  Object.entries(porDia).forEach(([data, lista])=>{
+    const existente = programacaoDoDia(d, data);
+    if(existente){
+      /* já há programação nesse dia: acrescenta sem mexer no que existe */
+      const novos = lista.filter(nl=>
+        !(existente.itens||[]).some(x=>
+          x.ordemId === nl.ordemId && x.etapaId === nl.etapaId));
+
+      /* Quem já está escalado nesta programação não entra de novo. O
+         item novo não pode roubar a pessoa: entra sem ela e o supervisor
+         decide quem larga o quê. */
+      const ocupados = new Set((existente.itens||[])
+        .filter(x=>!x.concluida)
+        .flatMap(x=>x.pessoas || []));
+      novos.forEach(nl=>{
+        const conflito = (nl.pessoas||[]).filter(x=>ocupados.has(x));
+        if(conflito.length){
+          const nomes = conflito.map(id=>{
+            const c = (d.colaboradores||[]).find(y=>y.id===id);
+            return c ? c.nome : 'colaborador';
+          }).join(', ');
+          nl.pessoas = (nl.pessoas||[]).filter(x=>!ocupados.has(x));
+          avisos.push(`${nl.etapa} em ${fmtDate(data)}: ${nomes} já ` +
+            `está(ão) em outra operação nesse dia. A operação entra sem ` +
+            `equipe — escolha quem faz na Programação.`);
+        }
+        (nl.pessoas||[]).forEach(x=>ocupados.add(x));
+      });
+
+      if(novos.length){
+        existente.itens = [...(existente.itens||[]), ...novos.map(x=>({
+          ...x, id: uid(), concluida:false, situacao:'prevista',
+        }))];
+        existente.alteradaEm = agoraISO();
+        criadas.push({programacao: existente, nova:false, itens: novos.length});
+      }
+    } else {
+      const res = salvarProgramacao(d, {data, itens: lista, minutosDia}, usuario);
+      if(res.erro) avisos.push(`${fmtDate(data)}: ${res.erro}`);
+      else criadas.push({programacao: res.programacao, nova:true,
+        itens: lista.length});
+    }
+  });
+
+  registrarLog(d, usuario, 'pcp.automatico',
+    `${ordem.codigo} · ${itens.length} operação(ões) em ${criadas.length} dia(s)`);
+
+  if(aferidos.length)
+    avisos.push(`${aferidos.length} aferição(ões) aberta(s) para quem ainda ` +
+      `não tem medição: ` +
+      aferidos.map(x=>`${x.nome} em ${x.etapa}`).join(', ') + '.');
+
+  return {
+    ordem, itens, avisos, criadas, aferidos,
+    primeiroDia: itens.length ? itens[0]._data : null,
+    ultimoDia: itens.length ? itens[itens.length-1]._data : null,
+    /* comparação com a entrega prometida */
+    cabeNaEntrega: ordem.entrega && itens.length
+      ? itens[itens.length-1]._data <= ordem.entrega : null,
+  };
+}
+
+/* ==========================================================
+   OCORRÊNCIAS
+   O plano é do começo do dia; a fábrica é do meio dele. Máquina
+   quebra, gente falta, lote atrasa. Registrar a ocorrência não
+   é burocracia: é o que permite realocar o que estava naquele
+   recurso sem refazer a programação inteira à mão.
+========================================================== */
+const TIPOS_OCORRENCIA = [
+  {id:'maquina_parada', nome:'Máquina parada', alvo:'maquina',
+   ajuda:'quebra, manutenção ou falta de peça', realoca:true},
+  {id:'falta', nome:'Falta de colaborador', alvo:'pessoa',
+   ajuda:'falta, atestado ou saída antecipada', realoca:true},
+  {id:'falta_material', nome:'Falta de material', alvo:'nenhum',
+   ajuda:'o lote não chegou ou não passou na conferência', realoca:false},
+  {id:'qualidade', nome:'Problema de qualidade', alvo:'nenhum',
+   ajuda:'a peça voltou e a operação parou', realoca:false},
+  {id:'outro', nome:'Outro motivo', alvo:'nenhum', ajuda:'', realoca:false},
+];
+
+/* Registrar o que aconteceu e, quando for o caso, tirar o recurso da
+   programação do dia. */
+const MOTIVOS_ATRASO = ['Máquina parada', 'Falta de material', 'Retrabalho', 'Falta de pessoal', 'Troca de ordem', 'Manutenção', 'Treinamento', 'Outro'];
+
+const TIPOS_DEFEITO = ['Costura torta', 'Ponto falhado', 'Mancha', 'Furo no tecido', 'Medida fora', 'Estampa deslocada', 'Peça trocada', 'Acabamento', 'Outro'];
+
+function registrarOcorrencia(d, dados, usuario){
+  const tipo = TIPOS_OCORRENCIA.find(t=>t.id === dados.tipo);
+  if(!tipo) return {erro:'Escolha o que aconteceu.'};
+  const data = dados.data || todayISO();
+  const descricao = String(dados.descricao||'').trim();
+  if(descricao.length < 5)
+    return {erro:'Descreva em uma frase o que aconteceu.'};
+
+  if(tipo.alvo === 'maquina' && !dados.equipamentoId)
+    return {erro:'Escolha qual máquina parou.'};
+  if(tipo.alvo === 'pessoa' && !dados.colaboradorId)
+    return {erro:'Escolha quem faltou.'};
+
+  const reg = {
+    id: uid(),
+    codigo: proximoCodigo(d.ocorrencias||[], 'OCO'),
+    data, tipo: tipo.id, tipoNome: tipo.nome,
+    equipamentoId: dados.equipamentoId || '',
+    colaboradorId: dados.colaboradorId || '',
+    ordemId: dados.ordemId || '',
+    departamentoId: dados.departamentoId || '',
+    descricao,
+    minutosParado: num(dados.minutosParado),
+    previsaoRetorno: dados.previsaoRetorno || '',
+    situacao: 'aberta',
+    registradoEm: agoraISO(),
+    registradoPor: usuario ? usuario.nome : '',
+  };
+  d.ocorrencias = [...(d.ocorrencias||[]), reg];
+
+  /* a máquina parada some do planejamento até voltar */
+  if(tipo.id === 'maquina_parada' && dados.equipamentoId){
+    const eq = (d.equipamentos||[]).find(e=>e.id===dados.equipamentoId);
+    if(eq){ eq.situacao = 'manutencao'; eq.ocorrenciaId = reg.id; }
+  }
+
+  registrarLog(d, usuario, 'producao.ocorrencia',
+    `${reg.codigo} · ${tipo.nome} · ${fmtDate(data)}`);
+  return {ocorrencia: reg, tipo};
+}
+
+/* O que estava programado no recurso afetado, e portanto precisa de
+   outro lugar. */
+function itensAfetados(db, ocorrencia){
+  const prog = programacaoDoDia(db, ocorrencia.data);
+  if(!prog) return {programacao:null, itens:[]};
+
+  const itens = (prog.itens||[]).filter(it=>{
+    if(it.concluida) return false;
+    if(ocorrencia.equipamentoId)
+      return (it.maquinas||[]).includes(ocorrencia.equipamentoId);
+    if(ocorrencia.colaboradorId)
+      return (it.pessoas||[]).includes(ocorrencia.colaboradorId);
+    return false;
+  });
+
+  const real = realizadoDaProgramacao(db, prog);
+  return {
+    programacao: prog,
+    itens: itens.map(it=>{
+      const r = (real.itens||[]).find(x=>x.id===it.id) || {};
+      return {...it, feito: num(r.feito), falta: num(r.falta) || num(it.quantidadePrevista)};
+    }),
+  };
+}
+
+/* Para onde o trabalho pode ir: quem está livre e sabe fazer. */
+function alternativasPara(db, ocorrencia, item){
+  const data = ocorrencia.data;
+
+  if(ocorrencia.equipamentoId){
+    const eq = (db.equipamentos||[]).find(e=>e.id===ocorrencia.equipamentoId);
+    const setor = eq ? eq.departamentoId : item.departamentoId;
+    return (db.equipamentos||[])
+      .filter(e=>e.id !== ocorrencia.equipamentoId &&
+        e.departamentoId === setor && situacaoDoEquipamento(db, e.id).ok)
+      .map(e=>{
+        const ocupada = compromissosDoRecurso(db,'maquina',e.id,data);
+        /* quem está escalado no item consegue operar esta máquina? */
+        const operam = (item.pessoas||[]).filter(p=>podeOperar(db, p, e.id));
+        return {
+          id: e.id, nome: e.nome, tipo:'maquina',
+          livre: ocupada.length === 0,
+          ocupada: ocupada.length,
+          operam: operam.length,
+          totalPessoas: (item.pessoas||[]).length,
+          alerta: operam.length === 0
+            ? 'ninguém da equipe opera esta máquina'
+            : operam.length < (item.pessoas||[]).length
+              ? `${operam.length} de ${(item.pessoas||[]).length} operam` : '',
+        };
+      })
+      .sort((a,b)=>(b.operam - a.operam) || (b.livre - a.livre));
+  }
+
+  /* falta de pessoa: quem mais pode assumir */
+  const c = (db.colaboradores||[]).find(x=>x.id===ocorrencia.colaboradorId);
+  const setor = c ? c.departamentoId : item.departamentoId;
+  return (db.colaboradores||[])
+    .filter(x=>x.id !== ocorrencia.colaboradorId &&
+      x.departamentoId === setor && situacaoDoColaborador(db, x.id).ok)
+    .map(x=>{
+      const ocupado = compromissosDoRecurso(db,'pessoa',x.id,data);
+      const r = ritmoEsperado(db, x.id, item.etapaId, 0);
+      const opera = (item.maquinas||[]).length === 0 ||
+        (item.maquinas||[]).some(m=>podeOperar(db, x.id, m));
+      return {
+        id: x.id, nome: x.nome, tipo:'pessoa',
+        livre: ocupado.length === 0,
+        ocupada: ocupado.length,
+        porHora: r.porHora, base: r.origem,
+        opera,
+        alerta: !opera ? 'não opera a máquina desta operação'
+          : ocupado.length > 0 ? `já tem ${ocupado.length} compromisso(s)` : '',
+      };
+    })
+    .sort((a,b)=>(b.opera - a.opera) || (b.livre - a.livre) ||
+      (b.porHora - a.porHora));
+}
+
+/* Trocar o recurso nos itens escolhidos. */
+function realocar(d, ocorrenciaId, trocas, usuario){
+  const oc = (d.ocorrencias||[]).find(x=>x.id===ocorrenciaId);
+  if(!oc) return {erro:'Ocorrência não encontrada.'};
+  const prog = programacaoDoDia(d, oc.data);
+  if(!prog) return {erro:'Não há programação aberta para este dia.'};
+
+  const feitas = [];
+  (trocas||[]).forEach(tr=>{
+    const it = (prog.itens||[]).find(x=>x.id===tr.itemId);
+    if(!it || !tr.novoId) return;
+
+    if(oc.equipamentoId){
+      it.maquinas = (it.maquinas||[])
+        .map(m=>m === oc.equipamentoId ? tr.novoId : m);
+      const de = (d.equipamentos||[]).find(e=>e.id===oc.equipamentoId);
+      const para = (d.equipamentos||[]).find(e=>e.id===tr.novoId);
+      feitas.push(`${it.etapa}: ${de?de.nome:'?'} → ${para?para.nome:'?'}`);
+    } else {
+      it.pessoas = (it.pessoas||[])
+        .map(p=>p === oc.colaboradorId ? tr.novoId : p);
+      const de = (d.colaboradores||[]).find(c=>c.id===oc.colaboradorId);
+      const para = (d.colaboradores||[]).find(c=>c.id===tr.novoId);
+      feitas.push(`${it.etapa}: ${de?de.nome:'?'} → ${para?para.nome:'?'}`);
+    }
+    it.realocadoPor = oc.codigo;
+  });
+
+  if(feitas.length === 0)
+    return {erro:'Nenhuma troca foi escolhida.'};
+
+  oc.situacao = 'realocada';
+  oc.realocacoes = feitas;
+  oc.realocadoEm = agoraISO();
+  prog.alteradaEm = agoraISO();
+
+  registrarLog(d, usuario, 'producao.realocacao',
+    `${oc.codigo} · ${feitas.join(' · ')}`);
+  return {ocorrencia: oc, feitas};
+}
+
+/* A máquina voltou, a pessoa retornou. */
+function encerrarOcorrencia(d, id, usuario){
+  const oc = (d.ocorrencias||[]).find(x=>x.id===id);
+  if(!oc) return {erro:'Ocorrência não encontrada.'};
+  if(oc.situacao === 'encerrada') return {erro:'Já está encerrada.'};
+
+  oc.situacao = 'encerrada';
+  oc.encerradaEm = agoraISO();
+
+  if(oc.equipamentoId){
+    const eq = (d.equipamentos||[]).find(e=>e.id===oc.equipamentoId);
+    if(eq && eq.ocorrenciaId === oc.id){
+      eq.situacao = 'operando';
+      delete eq.ocorrenciaId;
+    }
+  }
+  registrarLog(d, usuario, 'producao.ocorrencia.fim', oc.codigo);
+  return {ocorrencia: oc};
+}
+
+function ocorrenciasAbertas(db, data){
+  return (db.ocorrencias||[]).filter(o=>
+    o.situacao !== 'encerrada' && (!data || o.data === data));
+}
+
+/* ==========================================================
+   PROGRAMAÇÃO OFICIAL
+   Simular ajuda a decidir; programar compromete. A partir do
+   momento em que a programação é publicada, cada pessoa tem
+   compromisso naquele dia — e não pode ser escalada em dois
+   lugares ao mesmo tempo.
+
+   A realidade não colabora: gente falta, máquina quebra, o
+   lote atrasa. Por isso a reprogramação é parte do desenho,
+   não conserto: no fim do dia o supervisor abre o que não
+   foi concluído e redistribui.
+========================================================== */
+const STATUS_PROGRAMACAO = [
+  {id:'rascunho',  nome:'Rascunho',  ajuda:'ainda pode mudar sem afetar ninguém'},
+  {id:'publicada', nome:'Publicada', ajuda:'a fábrica trabalha por ela'},
+  {id:'encerrada', nome:'Encerrada', ajuda:'o dia acabou; o que sobrou foi reprogramado'},
+];
+
+function programacaoDoDia(db, data){
+  return (db.programacoes||[]).find(p=>p.data === data &&
+    p.status !== 'encerrada') || null;
+}
+
+/* Quem já tem compromisso num dia, e em quê. É isso que impede
+   escalar a mesma pessoa em duas operações no mesmo horário. */
+function compromissosDoDia(db, data, exceto){
+  const mapa = {};
+  (db.programacoes||[]).forEach(p=>{
+    if(p.data !== data) return;
+    if(p.status === 'encerrada') return;
+    if(exceto && p.id === exceto) return;
+    (p.itens||[]).forEach(it=>{
+      if(it.concluida) return;
+      (it.pessoas||[]).forEach(id=>{
+        if(!mapa[id]) mapa[id] = [];
+        mapa[id].push({programacaoId: p.id, item: it});
+      });
+    });
+  });
+  return mapa;
+}
+
+/* Esta pessoa está livre neste dia? */
+function colaboradorLivre(db, colaboradorId, data, opcoes){
+  const op = opcoes || {};
+  const mapa = compromissosDoDia(db, data, op.exceto);
+  const meus = (mapa[colaboradorId] || []).filter(x=>
+    !op.exceroItem || x.item.id !== op.exceroItem);
+  if(meus.length === 0) return {livre:true, compromissos:[]};
+
+  return {
+    livre:false,
+    compromissos: meus.map(x=>({
+      etapa: x.item.etapa || 'operação',
+      ordem: x.item.ordemCodigo || '',
+      programacaoId: x.programacaoId,
+    })),
+  };
+}
+
+/* Guardar a programação. Rascunho não compromete ninguém; publicar
+   sim — e é aí que a checagem de conflito importa. */
+function salvarProgramacao(d, dados, usuario){
+  const data = dados.data || todayISO();
+  const itens = (dados.itens||[]).filter(x=>x && (x.pessoas||[]).length > 0);
+  if(itens.length === 0)
+    return {erro:'Nenhuma operação com equipe definida.'};
+
+  const existente = dados.id
+    ? (d.programacoes||[]).find(p=>p.id === dados.id) : null;
+  if(dados.id && !existente) return {erro:'Programação não encontrada.'};
+  if(existente && existente.status === 'encerrada')
+    return {erro:'Programação encerrada não pode ser alterada. Crie uma nova.'};
+
+  /* dupla alocação: a mesma pessoa em duas operações do mesmo dia */
+  const vistos = {};
+  const conflitos = [];
+  itens.forEach(it=>{
+    (it.pessoas||[]).forEach(id=>{
+      if(vistos[id]){
+        const c = (d.colaboradores||[]).find(x=>x.id===id);
+        conflitos.push({nome: c ? c.nome : 'colaborador',
+          onde:[vistos[id], it.etapa || 'operação']});
+      } else vistos[id] = it.etapa || 'operação';
+    });
+  });
+  if(conflitos.length)
+    return {erro: conflitos.map(c=>
+      `${c.nome} está em duas operações ao mesmo tempo: ${c.onde.join(' e ')}.`
+    ).join(' ')};
+
+  /* conflito com outra programação já publicada do mesmo dia */
+  const externos = [];
+  itens.forEach(it=>{
+    (it.pessoas||[]).forEach(id=>{
+      const st = colaboradorLivre(d, id, data, {exceto: existente ? existente.id : null});
+      if(!st.livre){
+        const c = (d.colaboradores||[]).find(x=>x.id===id);
+        externos.push(`${c ? c.nome : 'colaborador'} já está em ` +
+          st.compromissos.map(x=>x.etapa).join(', '));
+      }
+    });
+  });
+  if(externos.length && !dados.ignorarConflito)
+    return {erro:'Já há programação para este dia com estas pessoas. ' +
+      externos.join('; ') + '.', conflito:true};
+
+  const reg = {
+    id: existente ? existente.id : uid(),
+    codigo: existente ? existente.codigo
+      : proximoCodigo(d.programacoes||[], 'PRG'),
+    data,
+    status: dados.status || (existente ? existente.status : 'rascunho'),
+    minutosDia: num(dados.minutosDia) || jornadaDe(d).produtivo,
+    itens: itens.map(it=>({
+      id: it.id || uid(),
+      ordemId: it.ordemId || '',
+      ordemCodigo: it.ordemCodigo || '',
+      etapaId: it.etapaId || '',
+      etapa: it.etapa || '',
+      departamentoId: it.departamentoId || '',
+      pessoas: it.pessoas || [],
+      maquinas: it.maquinas || [],
+      quantidadePrevista: num(it.quantidadePrevista),
+      /* a hora em que a operação entra: o cronograma compara com o
+         relógio para saber se já era para ter começado */
+      horaInicio: it.horaInicio || '',
+      /* nasce automático quando o sistema montou; deixa de ser quando
+         alguém ajusta. É como o supervisor distingue o que ele decidiu
+         do que apenas aceitou. */
+      automatico: it.automatico === true,
+      concluida: !!it.concluida,
+      /* a execução, quando houver */
+      iniciadoEm: it.iniciadoEm || '',
+      concluidoEm: it.concluidoEm || '',
+      situacao: it.situacao || 'prevista',
+    })),
+    origemId: existente ? existente.origemId : (dados.origemId || ''),
+    criadaEm: existente ? existente.criadaEm : agoraISO(),
+    criadaPor: existente ? existente.criadaPor : (usuario ? usuario.nome : ''),
+    alteradaEm: agoraISO(),
+  };
+  d.programacoes = existente
+    ? (d.programacoes||[]).map(p=>p.id===reg.id ? reg : p)
+    : [...(d.programacoes||[]), reg];
+  registrarLog(d, usuario, 'pcp.programacao',
+    `${reg.codigo} · ${fmtDate(data)} · ${reg.itens.length} operação(ões)`);
+  return {programacao: reg};
+}
+
+function publicarProgramacao(d, id, usuario){
+  const p = (d.programacoes||[]).find(x=>x.id===id);
+  if(!p) return {erro:'Programação não encontrada.'};
+  if(p.status === 'publicada') return {erro:'Já está publicada.'};
+  if(p.status === 'encerrada') return {erro:'Programação encerrada.'};
+  p.status = 'publicada';
+  p.publicadaEm = agoraISO();
+  registrarLog(d, usuario, 'pcp.publicada', `${p.codigo} · ${fmtDate(p.data)}`);
+  return {programacao: p};
+}
+
+/* O que de fato aconteceu em cada item, pelos apontamentos do dia. */
+function realizadoDaProgramacao(db, programacao){
+  if(!programacao) return {itens:[], concluidas:0, pendentes:0};
+  const itens = (programacao.itens||[]).map(it=>{
+    const aps = (db.apontamentos||[]).filter(a=>
+      a.data === programacao.data &&
+      a.ordemId === it.ordemId && a.etapaId === it.etapaId);
+    const feito = aps.reduce((s,a)=>s + num(a.pecasBoas), 0);
+    const previsto = num(it.quantidadePrevista);
+    const falta = Math.max(0, previsto - feito);
+    return {
+      ...it, feito, previsto, falta,
+      apontamentos: aps.length,
+      cumprida: previsto > 0 && feito >= previsto,
+      percentual: previsto > 0
+        ? Number((feito/previsto*100).toFixed(0)) : null,
+      /* quem realmente apontou pode ser outro: alguém faltou e
+         outra pessoa cobriu */
+      quemApontou: [...new Set(aps.map(a=>a.colaboradorId).filter(Boolean))],
+    };
+  });
+  return {
+    itens,
+    concluidas: itens.filter(x=>x.cumprida).length,
+    pendentes: itens.filter(x=>!x.cumprida).length,
+    totalPrevisto: itens.reduce((s,x)=>s+x.previsto, 0),
+    totalFeito: itens.reduce((s,x)=>s+x.feito, 0),
+  };
+}
+
+/* Reprogramar: fecha o dia e leva o que faltou para o próximo. A
+   equipe vem sugerida, mas tudo pode ser trocado — é justamente
+   quando se descobre quem faltou. */
+function reprogramar(d, programacaoId, opcoes, usuario){
+  const op = opcoes || {};
+  const p = (d.programacoes||[]).find(x=>x.id===programacaoId);
+  if(!p) return {erro:'Programação não encontrada.'};
+  if(p.status === 'encerrada') return {erro:'Esta programação já foi encerrada.'};
+
+  const real = realizadoDaProgramacao(d, p);
+  const pendentes = real.itens.filter(x=>!x.cumprida && x.falta > 0);
+
+  /* encerra o dia com o registro do que foi feito */
+  p.status = 'encerrada';
+  p.encerradaEm = agoraISO();
+  p.resultado = {
+    previsto: real.totalPrevisto, feito: real.totalFeito,
+    cumpridas: real.concluidas, pendentes: real.pendentes,
+  };
+  (p.itens||[]).forEach(it=>{
+    const r = real.itens.find(x=>x.id===it.id);
+    if(r){ it.feito = r.feito; it.concluida = r.cumprida; }
+  });
+
+  if(pendentes.length === 0){
+    registrarLog(d, usuario, 'pcp.encerrada',
+      `${p.codigo} · tudo concluído`);
+    return {encerrada: p, nova: null,
+      aviso:'Tudo que estava programado foi concluído. Nada a reprogramar.'};
+  }
+
+  const novaData = op.data || proximoDiaUtil(p.data);
+  const nova = {
+    id: uid(),
+    codigo: proximoCodigo(d.programacoes||[], 'PRG'),
+    data: novaData,
+    status: 'rascunho',
+    minutosDia: p.minutosDia,
+    itens: pendentes.map(x=>({
+      id: uid(),
+      ordemId: x.ordemId, ordemCodigo: x.ordemCodigo,
+      etapaId: x.etapaId, etapa: x.etapa,
+      departamentoId: x.departamentoId,
+      /* a equipe anterior vem sugerida; o supervisor confirma ou troca */
+      pessoas: x.pessoas || [], maquinas: x.maquinas || [],
+      horaInicio: x.horaInicio || '',
+      quantidadePrevista: x.falta,
+      concluida: false, situacao: 'prevista',
+      veioDe: p.codigo,
+      faltouOntem: x.previsto - x.feito,
+    })),
+    origemId: p.id,
+    criadaEm: agoraISO(),
+    criadaPor: usuario ? usuario.nome : '',
+    alteradaEm: agoraISO(),
+  };
+  d.programacoes = [...(d.programacoes||[]), nova];
+  registrarLog(d, usuario, 'pcp.reprogramada',
+    `${p.codigo} → ${nova.codigo} · ${pendentes.length} operação(ões) pendente(s)`);
+
+  return {encerrada: p, nova, pendentes: pendentes.length,
+    realizado: real};
+}
+
+function proximoDiaUtil(dataISO){
+  const dia = new Date(dataISO || todayISO());
+  let g = 0;
+  do {
+    dia.setDate(dia.getDate() + 1);
+    g++;
+  } while((dia.getDay() === 0 || dia.getDay() === 6) && g < 10);
+  return dia.toISOString().slice(0,10);
+}
+
+/* ==========================================================
+   PROGRAMAÇÃO DO DIA
+   Balancear diz quantas pessoas a linha precisa. Programar diz
+   o que cada uma faz hoje, até a jornada encher. Numa confecção
+   pequena a mesma pessoa passa por várias operações no mesmo
+   dia — e é aí que a capacidade individual encontra a
+   necessidade da carteira.
+========================================================== */
+
+const LIMITE_EXTRA_DIA = 120;   /* 2h é o limite legal diário no Brasil */
+
+/* Quanto tempo cada pessoa tem, considerando a jornada e o que já
+   estiver reservado. */
+function jornadaDisponivel(db, colaboradorId, opcoes){
+  const op = opcoes || {};
+  const j = jornadaDe(db);
+  const base = num(op.minutosDia) > 0 ? num(op.minutosDia) : j.produtivo;
+  const jaOcupado = num((op.ocupados||{})[colaboradorId]);
+  return {
+    total: base,
+    ocupado: jaOcupado,
+    livre: Math.max(0, base - jaOcupado),
+    extraPermitido: num(op.permitirExtra) > 0
+      ? Math.min(num(op.permitirExtra), LIMITE_EXTRA_DIA) : 0,
+  };
+}
+
+/* O trabalho que precisa ser feito, vindo das ordens escolhidas.
+   Cada linha é uma operação com quantidade pendente. */
+function demandaDasOrdens(db, ordemIds, departamentoId){
+  const ordens = (db.ordens||[]).filter(o=>
+    (ordemIds||[]).includes(o.id) && o.situacao !== 'cancelada');
+  const linhas = [];
+
+  ordens.forEach(o=>{
+    const produto = (db.produtos||[]).find(p=>p.id===o.produtoId);
+    if(!produto) return;
+    const av = avancoDaOrdem(o, db);
+    const r = resumoProcesso(produto, db);
+
+    r.passos.forEach(p=>{
+      if(departamentoId && p.passo.departamentoId !== departamentoId) return;
+      const linha = av.etapas.find(x=>x.tarefa &&
+        x.tarefa.etapaId === p.passo.etapaId);
+      const falta = linha ? Math.max(0, num(linha.saldo)) : num(o.quantidade);
+      if(falta <= 0) return;
+      const pessoasRoteiro = Math.max(1, num(p.passo.pessoas) || 1);
+      linhas.push({
+        id: `${o.id}:${p.passo.id}`,
+        ordem: o, ordemCodigo: o.codigo,
+        produto, produtoNome: montarNomeProduto(produto, db) || produto.codigo,
+        etapaId: p.passo.etapaId,
+        etapa: p.etapa ? p.etapa.nome : 'etapa removida',
+        departamentoId: p.passo.departamentoId,
+        setor: p.departamento ? p.departamento.nome : '—',
+        quantidade: falta,
+        minutosPorPeca: num(p.minutosHomem) / pessoasRoteiro,
+        entrega: o.entrega || '',
+        prioridade: num(o.prioridade) || 5,
+      });
+    });
+  });
+
+  /* quem entrega antes vem primeiro; sem data, pela prioridade */
+  return linhas.sort((a,b)=>{
+    if(a.entrega && b.entrega) return a.entrega.localeCompare(b.entrega);
+    if(a.entrega) return -1;
+    if(b.entrega) return 1;
+    return a.prioridade - b.prioridade;
+  });
+}
+
+/* Distribui o trabalho entre as pessoas escolhidas, respeitando o
+   ritmo de cada uma e o tempo que ela tem. */
+function programarDia(db, opcoes){
+  const op = opcoes || {};
+  const j = jornadaDe(db);
+  const minutosDia = num(op.minutosDia) > 0 ? num(op.minutosDia) : j.produtivo;
+  const pessoas = (op.colaboradorIds||[]).filter(Boolean);
+  const maquinas = (op.maquinaIds||[]).filter(Boolean);
+  const extra = num(op.permitirExtra) || 0;
+
+  const demanda = op.demanda || demandaDasOrdens(db, op.ordemIds, op.departamentoId);
+
+  if(pessoas.length === 0)
+    return {vazio:true, motivo:'Escolha quem vai trabalhar.', agenda:[], sobra:[]};
+  if(demanda.length === 0)
+    return {vazio:true, motivo:'Nenhuma operação pendente nas ordens escolhidas.',
+      agenda:[], sobra:[]};
+
+  /* a agenda de cada pessoa começa vazia */
+  const agenda = pessoas.map(id=>{
+    const c = (db.colaboradores||[]).find(x=>x.id===id);
+    const jd = jornadaDisponivel(db, id, {minutosDia, permitirExtra: extra});
+    return {
+      id, nome: c ? c.nome : 'removido', colaborador: c,
+      capacidade: jd.total, extraPermitido: jd.extraPermitido,
+      usado: 0, extraUsado: 0, tarefas: [],
+    };
+  });
+
+  /* Máquina é recurso do turno inteiro, não da tarefa. Com uma reta e
+     três costureiras, uma produz o dia todo e duas ficam sem posto —
+     não é que a segunda "herda" a máquina quando a primeira enche a
+     jornada, porque as três trabalham no mesmo horário. */
+  const limiteSimultaneo = maquinas.length > 0
+    ? Math.min(pessoas.length, maquinas.length) : pessoas.length;
+
+  const semMaquina = [];
+  if(maquinas.length > 0 && agenda.length > limiteSimultaneo){
+    /* quem fica com a máquina: os habilitados vêm primeiro */
+    const ordenada = agenda.slice().sort((a,b)=>{
+      const ha = maquinasQueOpera(db, a.id, maquinas).length > 0 ? 1 : 0;
+      const hb = maquinasQueOpera(db, b.id, maquinas).length > 0 ? 1 : 0;
+      return hb - ha;
+    });
+    ordenada.slice(limiteSimultaneo).forEach(a=>{
+      a.semMaquina = true;
+      semMaquina.push({id:a.id, nome:a.nome});
+    });
+  }
+
+  const sobra = [];
+
+  demanda.forEach(linha=>{
+    let restam = linha.quantidade;
+    /* guarda contra laço infinito: se algo der errado no cálculo, é
+       melhor parar com o que foi programado que travar a tela */
+    let voltas = 0;
+
+    while(restam > 0 && voltas < 2000){
+      voltas++;
+      /* quem tem mais tempo livre pega o próximo pedaço; empate vai
+         para quem é mais rápido nesta operação */
+      const livres = agenda
+        .filter(a=>!a.cheio && !a.semMaquina)
+        /* só entra quem sabe operar alguma das máquinas do dia */
+        .filter(a=>maquinas.length === 0 ||
+          maquinasQueOpera(db, a.id, maquinas).length > 0)
+        .map(a=>{
+          const ritmo = ritmoEsperado(db, a.id, linha.etapaId,
+            linha.minutosPorPeca, {produtoId: linha.produto.id});
+          const disponivel = (a.capacidade - a.usado) +
+            (a.extraPermitido - a.extraUsado);
+          return {a, ritmo, disponivel};
+        })
+        .filter(x=>x.disponivel > 0 && x.ritmo.porHora > 0)
+        .sort((x,y)=>{
+          const d = y.disponivel - x.disponivel;
+          return d !== 0 ? d : y.ritmo.porHora - x.ritmo.porHora;
+        })
+        .slice(0, limiteSimultaneo);
+
+      if(livres.length === 0){
+        sobra.push({...linha, quantidade: restam,
+          minutos: Number((restam * linha.minutosPorPeca).toFixed(1))});
+        break;
+      }
+
+      const alvo = livres[0];
+      const minutosPorPeca = 60 / alvo.ritmo.porHora;
+      const cabeNormal = Math.max(0, alvo.a.capacidade - alvo.a.usado);
+      const cabeExtra = Math.max(0, alvo.a.extraPermitido - alvo.a.extraUsado);
+
+      /* quantas peças cabem no tempo que resta */
+      const pecasNormais = Math.floor(cabeNormal / minutosPorPeca);
+      const pecasExtra = Math.floor(cabeExtra / minutosPorPeca);
+      const cabeTudo = pecasNormais + pecasExtra;
+
+      /* Numa linha as pessoas trabalham ao mesmo tempo, não em fila.
+         Dar a operação inteira para a primeira encheria uma e deixaria
+         as outras paradas — então cada uma leva uma fatia, e a volta
+         seguinte reparte o que ficou. */
+      const fatia = Math.max(1, Math.ceil(restam / livres.length));
+      const pecas = Math.min(restam, cabeTudo, fatia);
+
+      if(pecas <= 0){
+        /* não cabe nem uma peça: essa pessoa está cheia */
+        alvo.a.cheio = true;
+        const outros = agenda.filter(a=>!a.cheio &&
+          (a.capacidade - a.usado + a.extraPermitido - a.extraUsado) > 0);
+        if(outros.length === 0){
+          sobra.push({...linha, quantidade: restam,
+            minutos: Number((restam * linha.minutosPorPeca).toFixed(1))});
+          break;
+        }
+        continue;
+      }
+
+      const minutos = pecas * minutosPorPeca;
+      const noNormal = Math.min(minutos, cabeNormal);
+      const noExtra = minutos - noNormal;
+
+      alvo.a.usado += noNormal;
+      alvo.a.extraUsado += noExtra;
+      alvo.a.tarefas.push({
+        linhaId: linha.id,
+        ordem: linha.ordemCodigo, produto: linha.produtoNome,
+        etapa: linha.etapa, setor: linha.setor,
+        pecas, minutos: Number(minutos.toFixed(1)),
+        emExtra: noExtra > 0 ? Number(noExtra.toFixed(1)) : 0,
+        porHora: alvo.ritmo.porHora,
+        base: alvo.ritmo.origem, entrega: linha.entrega,
+      });
+      restam -= pecas;
+    }
+
+    /* a marca de cheio vale só para esta operação: na próxima linha
+       a pessoa é reavaliada pelo tempo que realmente tem */
+    agenda.forEach(a=>{ delete a.cheio; });
+  });
+
+  agenda.forEach(a=>{
+    a.usado = Number(a.usado.toFixed(1));
+    a.extraUsado = Number(a.extraUsado.toFixed(1));
+    a.livre = Number(Math.max(0, a.capacidade - a.usado).toFixed(1));
+    a.ocupacao = a.capacidade > 0
+      ? Number((a.usado / a.capacidade * 100).toFixed(0)) : 0;
+    a.pecas = a.tarefas.reduce((s,t)=>s + t.pecas, 0);
+    /* quem tem folga pode receber outra coisa */
+    a.temFolga = a.livre >= 30 && !a.semMaquina;
+  });
+
+  const hab = habilitadosPara(db, pessoas, maquinas);
+  const totalSobra = sobra.reduce((s,x)=>s + x.minutos, 0);
+  const totalExtra = agenda.reduce((s,a)=>s + a.extraUsado, 0);
+  const folgaTotal = agenda.reduce((s,a)=>s + a.livre, 0);
+
+  return {
+    vazio:false, agenda, sobra, demanda, minutosDia,
+    maquinas: maquinas.length, limiteSimultaneo,
+    totalSobra: Number(totalSobra.toFixed(1)),
+    totalExtra: Number(totalExtra.toFixed(1)),
+    folgaTotal: Number(folgaTotal.toFixed(1)),
+    maquinaIds: maquinas,
+    pecasProgramadas: agenda.reduce((s,a)=>s + a.pecas, 0),
+    pecasSobrando: sobra.reduce((s,x)=>s + x.quantidade, 0),
+    /* quem foi escalado mas não opera nenhuma das máquinas do dia */
+    semHabilitacao: hab.semHabilitacao.map(id=>{
+      const c = (db.colaboradores||[]).find(x=>x.id===id);
+      return {id, nome: c ? c.nome : 'removido'};
+    }),
+    /* quem ficou sem posto por falta de máquina */
+    semMaquina,
+    sugestoes: sugerirDestinoDaSobra(db, {agenda, sobra, minutosDia,
+      totalSobra, folgaTotal, extra,
+      semMaquina,
+      semHabilitacao: hab.semHabilitacao.map(id=>{
+        const c = (db.colaboradores||[]).find(x=>x.id===id);
+        return {id, nome: c ? c.nome : 'removido'};
+      })}),
+  };
+}
+
+/* O que fazer com o que não coube — e com quem sobrou tempo. */
+function sugerirDestinoDaSobra(db, dados){
+  const {agenda, sobra, minutosDia, totalSobra, folgaTotal, extra} = dados;
+  const s = [];
+
+  if(totalSobra > 0){
+    /* cabe em hora extra? */
+    const extraDisponivel = agenda.reduce((a,x)=>
+      a + Math.max(0, LIMITE_EXTRA_DIA - x.extraUsado), 0);
+    if(extraDisponivel > 0){
+      const cabeTudo = totalSobra <= extraDisponivel;
+      const usar = Math.min(totalSobra, extraDisponivel);
+      const porPessoa = usar / Math.max(1, agenda.length) / 60;
+      s.push({
+        tipo:'extra',
+        titulo: cabeTudo
+          ? `Cabe em hora extra: ${duracao(totalSobra)} no total`
+          : `Parte cabe em hora extra: ${duracao(usar)} de ${duracao(totalSobra)}`,
+        detalhe:`Cerca de ${porPessoa.toFixed(1)}h por pessoa. ` +
+          `O limite legal é 2h por dia, e hora extra sai mais cara que ` +
+          `hora normal — vale conferir se o prazo justifica.` +
+          (cabeTudo ? '' :
+            ` O restante (${duracao(totalSobra - usar)}) fica para outro dia.`),
+      });
+    }
+    /* quantos dias até terminar tudo */
+    const capacidadeDia = agenda.reduce((a,x)=>a + x.capacidade, 0);
+    if(capacidadeDia > 0){
+      const dias = totalSobra / capacidadeDia;
+      s.push({
+        tipo:'proximoDia',
+        titulo: dias <= 1
+          ? `Continua amanhã: ${duracao(totalSobra)} de trabalho`
+          : `Continua pelos próximos ${Math.ceil(dias)} dia(s) com esta equipe`,
+        detalhe:`São ${duracao(totalSobra)} que não couberam hoje, contra ` +
+          `${duracao(capacidadeDia)} de capacidade por dia.`,
+      });
+    }
+    /* alguém de fora pode ajudar? */
+    const deFora = (db.colaboradores||[]).filter(c=>
+      c.status !== 'Inativo' && c.produtivo !== false &&
+      !agenda.some(a=>a.id===c.id));
+    if(deFora.length > 0)
+      s.push({
+        tipo:'reforco',
+        titulo:`Ou chamar reforço: ${deFora.length} pessoa(s) fora desta escala`,
+        detalhe: deFora.slice(0,4).map(c=>c.nome).join(', ') +
+          (deFora.length > 4 ? ` e mais ${deFora.length-4}` : '') +
+          '. Confira se sabem fazer a operação antes de contar com elas.',
+      });
+  }
+
+  /* gente com tempo livre e nada para fazer */
+  const comFolga = agenda.filter(a=>a.temFolga);
+  if(comFolga.length > 0 && totalSobra === 0)
+    s.push({
+      tipo:'folga',
+      titulo:`${comFolga.length} pessoa(s) com tempo livre: ${duracao(folgaTotal)}`,
+      detalhe: comFolga.map(a=>`${a.nome} (${duracao(a.livre)})`).join(', ') +
+        '. Dá para adiantar ordem seguinte, aferir quem ainda não foi medido, ' +
+        'ou treinar em outra operação.',
+    });
+
+  const semMaq = dados.semMaquina || [];
+  if(semMaq.length > 0)
+    s.push({
+      tipo:'semMaquina',
+      titulo:`${semMaq.length} pessoa(s) sem máquina disponível`,
+      detalhe: semMaq.map(x=>x.nome).join(', ') +
+        '. Há mais gente escalada que máquina para trabalhar. Elas podem ' +
+        'ir para outra operação, outro setor, ou o dia pede menos gente ' +
+        'aqui do que foi escalado.',
+    });
+
+  const semHab = dados.semHabilitacao || [];
+  if(semHab.length > 0)
+    s.push({
+      tipo:'habilitacao',
+      titulo:`${semHab.length} pessoa(s) escalada(s) não operam as máquinas do dia`,
+      detalhe: semHab.map(x=>x.nome).join(', ') +
+        '. Elas não receberam tarefa. Ou escolha máquina que saibam usar, ' +
+        'ou marque no cadastro delas o que já conseguem operar — se for o ' +
+        'caso de treinar, o dia com folga é boa hora.',
+    });
+
+  if(comFolga.length > 0 && totalSobra > 0)
+    s.push({
+      tipo:'desequilibrio',
+      titulo:'Tem gente com folga e trabalho sobrando ao mesmo tempo',
+      detalhe: comFolga.map(a=>a.nome).join(', ') +
+        ' não estão cheios, mas o que sobrou é de operação que eles não ' +
+        'pegam — por falta de máquina livre ou por não saberem fazer. ' +
+        'Treinar cruzado resolve isso melhor que hora extra.',
+    });
+
+  return s;
+}
+
+/* ==========================================================
+   BALANCEAMENTO DA CARTEIRA
+   A linha não produz um produto só. Balancear olhando uma
+   referência isolada dá a resposta certa para a pergunta
+   errada — o que a fábrica precisa saber é se dá conta de
+   tudo que está prometido, junto.
+========================================================== */
+
+/* O que a fábrica tem para trabalhar num setor: gente e máquina.
+   Alocar mais pessoas do que existem é planejar no papel. */
+function recursosDoSetor(departamentoId, db){
+  const pessoas = (db.colaboradores||[]).filter(c=>
+    c.departamentoId === departamentoId && c.status !== 'Inativo' &&
+    c.produtivo !== false);
+  const maquinas = (db.equipamentos||[]).filter(e=>
+    e.departamentoId === departamentoId && e.ativo !== false &&
+    e.situacao !== 'parada' && e.situacao !== 'baixada');
+  return {
+    pessoas: pessoas.length, maquinas: maquinas.length,
+    listaPessoas: pessoas, listaMaquinas: maquinas,
+    /* o limite real é o menor dos dois quando a operação precisa de
+       máquina — não adianta ter cinco costureiras e três máquinas */
+    limite: maquinas.length > 0
+      ? Math.min(pessoas.length, maquinas.length) : pessoas.length,
+  };
+}
+
+/* Junta a demanda de várias ordens por operação. Duas ordens que
+   passam pela mesma costura disputam a mesma costureira. */
+function balancearCarteira(db, opcoes){
+  const op = opcoes || {};
+  const j = jornadaDe(db);
+  const minutosDia = num(op.minutosDia) > 0 ? num(op.minutosDia) : j.produtivo;
+  const alocacao = op.alocacao || {};
+  const ids = op.ordemIds || [];
+
+  const ordens = (db.ordens||[]).filter(o=>
+    ids.includes(o.id) && o.situacao !== 'cancelada');
+  if(ordens.length === 0)
+    return {vazio:true, postos:[], ordens:[], gargalo:null, minutosDia};
+
+  /* cada ordem tem seu produto e sua quantidade; a mesma operação
+     pode aparecer em várias */
+  const mapa = {};
+  const detalhes = [];
+
+  ordens.forEach(o=>{
+    const produto = (db.produtos||[]).find(p=>p.id===o.produtoId);
+    if(!produto) return;
+    const r = resumoProcesso(produto, db);
+    /* o que ainda falta produzir, não o total da ordem */
+    const av = avancoDaOrdem(o, db);
+    detalhes.push({ordem:o, produto, avanco:av});
+
+    r.passos.forEach(p=>{
+      const et = p.etapa;
+      /* a chave é a operação: é ela que disputa recurso */
+      const chave = p.passo.etapaId || (et ? et.id : p.passo.id);
+      const pessoasRoteiro = Math.max(1, num(p.passo.pessoas) || 1);
+      const unitario = num(p.minutosHomem) / pessoasRoteiro;
+      const linha = av.etapas.find(x=>x.tarefa &&
+        x.tarefa.etapaId === p.passo.etapaId);
+      const falta = linha ? Math.max(0, linha.saldo) : num(o.quantidade);
+
+      if(!mapa[chave]) mapa[chave] = {
+        id: chave,
+        etapa: et ? et.nome : 'etapa removida',
+        setor: p.departamento ? p.departamento.nome : '—',
+        departamentoId: p.passo.departamentoId,
+        unitario: 0, carga: 0, produtos: [],
+        pessoasRoteiro,
+      };
+      const m = mapa[chave];
+      /* o tempo unitário pode variar entre produtos; guardamos o maior,
+         que é o que dimensiona o posto */
+      m.unitario = Math.max(m.unitario, unitario);
+      m.carga += unitario * falta;
+      m.produtos.push({
+        ordemId: o.id,
+        ordem: o.codigo,
+        entrega: o.entrega || '',
+        produto: montarNomeProduto(produto, db) || produto.codigo,
+        falta, unitario: Number(unitario.toFixed(4)),
+      });
+    });
+  });
+
+  let postos = Object.values(mapa);
+  /* operação já concluída não disputa recurso nem consome gente do
+     planejamento — sem isso, uma etapa pronta continuava "levando" uma
+     pessoa e a soma da equipe não batia com o informado */
+  postos = postos.filter(p=>p.carga > 0);
+  if(op.departamentoId)
+    postos = postos.filter(p=>p.departamentoId === op.departamentoId);
+  if(postos.length === 0)
+    return {vazio:true, postos:[], ordens:detalhes, gargalo:null, minutosDia};
+
+  const informado = op.recursosInformados || {};
+
+  /* Se o supervisor diz "tenho 5 pessoas", o sistema distribui essas 5
+     entre os postos — proporcional à carga, porque quem tem mais
+     trabalho precisa de mais gente. Antes esse número só servia de
+     aviso, e mexer nele não mudava nada: o usuário informava a equipe
+     e o prazo continuava igual. */
+  const distribuida = {};
+  let equipeDividida = null;
+  if(num(informado.pessoas) > 0 && !op.semDistribuir){
+    const total = num(informado.pessoas);
+    const soma = postos.reduce((s,p)=>s + p.carga, 0);
+    if(soma > 0 && total > 0){
+      /* Distribuição proporcional à carga, aceitando fração. Em costura
+         uma pessoa faz várias operações em sequência — forçar uma
+         pessoa por posto inventaria gente que a fábrica não tem. Se
+         você informa 4, o sistema aloca 4, nem que seja meia pessoa
+         por operação. */
+      postos.forEach(p=>{
+        distribuida[p.id] = Number((total * (p.carga / soma)).toFixed(4));
+      });
+      /* o que importa não é o total, e sim se algum posto ficou com
+         menos de uma pessoa: é aí que alguém divide o tempo entre
+         operações. Com 12 pessoas e 8 postos isso ainda acontece se a
+         carga for muito desigual. */
+      const partidos = postos.filter(p=>distribuida[p.id] < 1);
+      if(partidos.length)
+        equipeDividida = {informado: total, postos: postos.length,
+          partidos: partidos.length};
+    }
+  }
+
+  /* Escala nominal por operação: quando o usuário diz QUEM faz, o ritmo
+     vem do histórico de cada pessoa, não de uma média. É o que
+     transforma a carteira em programação de verdade. */
+  const escalas = op.escalas || {};
+
+  postos = postos.map(p=>{
+    const doCadastro = recursosDoSetor(p.departamentoId, db);
+    /* o supervisor sabe quem faltou hoje; o cadastro não */
+    const rec = (informado.pessoas !== null && informado.pessoas !== undefined) ||
+      (informado.maquinas !== null && informado.maquinas !== undefined)
+      ? (()=>{
+          const pessoas = informado.pessoas !== null && informado.pessoas !== undefined
+            ? informado.pessoas : doCadastro.pessoas;
+          const maquinas = informado.maquinas !== null && informado.maquinas !== undefined
+            ? informado.maquinas : doCadastro.maquinas;
+          return {...doCadastro, pessoas, maquinas, informado:true,
+            limite: maquinas > 0 ? Math.min(pessoas, maquinas) : pessoas};
+        })()
+      : doCadastro;
+    /* quem foi escalado nominalmente manda; depois a alocação manual;
+       depois a distribuição automática */
+    const esc = escalas[p.id];
+    const cap = (esc && (esc.pessoas||[]).length)
+      ? capacidadeDaEquipe(db, esc.pessoas, p.id, p.unitario) : null;
+    const pessoas = (cap && !cap.vazia && cap.porHora > 0) ? cap.pessoas
+      : (num(alocacao[p.id]) > 0 ? num(alocacao[p.id])
+        : (distribuida[p.id] > 0 ? distribuida[p.id]
+          : Math.max(1, p.pessoasRoteiro)));
+    /* Com equipe escalada, o tempo vem do ritmo real dela: a carga em
+       peças dividida pelo que o time entrega por hora. Sem escala,
+       a divisão simples pelo número de pessoas. */
+    const pecas = p.unitario > 0 ? p.carga / p.unitario : 0;
+    const minutos = (cap && !cap.vazia && cap.porHora > 0)
+      ? (pecas / cap.porHora) * 60
+      : p.carga / pessoas;
+    const dias = minutosDia > 0 ? minutos / minutosDia : null;
+    return {
+      ...p,
+      carga: Number(p.carga.toFixed(1)),
+      pessoas,
+      recursos: rec,
+      /* alocar mais gente do que o setor tem é planejar no papel */
+      excede: pessoas > rec.limite,
+      minutos: Number(minutos.toFixed(1)),
+      dias: dias === null ? null : Number(dias.toFixed(2)),
+      escala: (cap && !cap.vazia) ? cap : null,
+    };
+  });
+
+  /* o gargalo da carteira é a operação que demora mais para dar conta
+     de tudo que tem pela frente */
+  const gargalo = postos.slice().sort((a,b)=>b.minutos - a.minutos)[0] || null;
+  const diasLinha = gargalo ? gargalo.dias : 0;
+  const totalPessoas = postos.reduce((s,p)=>s+p.pessoas, 0);
+  const cargaTotal = postos.reduce((s,p)=>s+p.carga, 0);
+
+  /* a entrega mais apertada da carteira */
+  const entregas = detalhes.map(d=>d.ordem.entrega).filter(Boolean).sort();
+  const primeiraEntrega = entregas[0] || null;
+
+  return {
+    vazio:false, postos, ordens:detalhes, gargalo, minutosDia,
+    diasLinha: diasLinha === null ? null : Number(diasLinha.toFixed(1)),
+    totalPessoas,
+    cargaTotal: Number(cargaTotal.toFixed(1)),
+    /* quanto do tempo alocado é realmente usado */
+    ocupacaoMedia: (gargalo && gargalo.minutos > 0 && totalPessoas > 0)
+      ? Number((cargaTotal / (totalPessoas * gargalo.minutos) * 100).toFixed(1))
+      : null,
+    excedidos: postos.filter(p=>p.excede),
+    equipeDividida,
+    primeiraEntrega,
+    /* dá tempo? */
+    prazo: primeiraEntrega && diasLinha !== null
+      ? (()=>{
+          const fim = new Date(todayISO());
+          let restam = Math.ceil(diasLinha), g = 0;
+          while(restam > 0 && g < 400){
+            g++;
+            fim.setDate(fim.getDate()+1);
+            const s = fim.getDay();
+            if(s === 0 || s === 6) continue;
+            restam--;
+          }
+          const data = fim.toISOString().slice(0,10);
+          return {data, cabe: data <= primeiraEntrega};
+        })()
+      : null,
+  };
+}
+
+/* ==========================================================
+   LEAD TIME REAL
+   Somar o tempo das operações dá o tempo de trabalho, não o
+   tempo de atravessar a fábrica. A peça espera: na fila do
+   silk, o lote juntar, a terceirizada devolver. Numa confecção
+   essa espera costuma ser várias vezes maior que o processo —
+   e é ela que faz a data prometida não bater.
+========================================================== */
+
+/* Espera padrão por setor, em horas. Serve de ponto de partida:
+   a fábrica descobre o número dela comparando previsto com real. */
+const FILA_PADRAO_HORAS = 4;
+
+function filaDoSetor(departamentoId, db){
+  const p = (db.parametrosFila || {});
+  const especifico = p[departamentoId];
+  if(especifico !== undefined && especifico !== null && num(especifico) >= 0)
+    return num(especifico);
+  const geral = num(p.padrao);
+  return geral >= 0 && p.padrao !== undefined && p.padrao !== null
+    ? geral : FILA_PADRAO_HORAS;
+}
+
+function salvarFilas(d, filas, usuario){
+  const limpo = {};
+  Object.keys(filas || {}).forEach(k=>{
+    const v = num(filas[k]);
+    if(v >= 0) limpo[k] = v;
+  });
+  d.parametrosFila = limpo;
+  registrarLog(d, usuario, 'pcp.filas', 'Tempos de fila atualizados');
+  return {filas: limpo};
+}
+
+/* O caminho da peça pela fábrica: processar, esperar, processar.
+   Com lote, o tempo de processo é o do lote inteiro — a próxima
+   etapa só começa quando o lote chega. */
+function leadTimeProduto(produto, db, opcoes){
+  const op = opcoes || {};
+  const j = jornadaDe(db);
+  if(!produto) return {vazio:true, etapas:[], totalMinutos:0, totalDias:0,
+    totalProcesso:0, totalFila:0, proporcaoFila:0, eficienciaFluxo:0};
+  const minutosDia = num(op.minutosDia) > 0 ? num(op.minutosDia) : j.produtivo;
+  const quantidade = Math.max(1, num(op.quantidade) || 1);
+  const r = resumoProcesso(produto, db);
+
+  if(r.passos.length === 0)
+    return {vazio:true, etapas:[], totalMinutos:0, totalDias:0};
+
+  const etapas = r.passos.map((p, i)=>{
+    const pessoas = Math.max(1, num(p.passo.pessoas) || 1);
+    /* o lote inteiro precisa passar antes de seguir */
+    const processo = num(p.minutosHomem) / pessoas * quantidade;
+    const filaHoras = filaDoSetor(p.passo.departamentoId, db);
+    /* a primeira etapa não espera fila: o material já está lá */
+    const fila = i === 0 ? 0 : filaHoras * 60;
+    return {
+      ordem: i+1,
+      etapa: p.etapa ? p.etapa.nome : 'etapa removida',
+      setor: p.departamento ? p.departamento.nome : '—',
+      departamentoId: p.passo.departamentoId,
+      processo: Number(processo.toFixed(1)),
+      fila: Number(fila.toFixed(1)),
+      total: Number((processo + fila).toFixed(1)),
+      filaHoras,
+    };
+  });
+
+  const totalProcesso = etapas.reduce((s,e)=>s+e.processo, 0);
+  const totalFila = etapas.reduce((s,e)=>s+e.fila, 0);
+  const total = totalProcesso + totalFila;
+
+  return {
+    vazio:false, etapas, quantidade, minutosDia,
+    totalProcesso: Number(totalProcesso.toFixed(1)),
+    totalFila: Number(totalFila.toFixed(1)),
+    totalMinutos: Number(total.toFixed(1)),
+    totalDias: minutosDia > 0 ? Number((total/minutosDia).toFixed(2)) : null,
+    /* a proporção que assusta e é verdadeira */
+    proporcaoFila: total > 0 ? Number((totalFila/total*100).toFixed(1)) : 0,
+    /* quanto do tempo a peça está sendo trabalhada */
+    eficienciaFluxo: total > 0
+      ? Number((totalProcesso/total*100).toFixed(1)) : 0,
+  };
+}
+
+/* Datas de entrega prometidas com base no caminho completo. */
+function previsaoComFila(produto, db, opcoes){
+  const op = opcoes || {};
+  const lt = leadTimeProduto(produto, db, op);
+  if(lt.vazio) return {vazio:true};
+  const minutosDia = lt.minutosDia;
+  const inicio = op.inicio || todayISO();
+
+  let faltam = lt.totalMinutos;
+  const dia = new Date(inicio);
+  let uteis = 0, guarda = 0;
+  while(faltam > 0 && guarda < 600){
+    guarda++;
+    dia.setDate(dia.getDate() + 1);
+    const s = dia.getDay();
+    if(s === 0 || s === 6) continue;
+    faltam -= minutosDia;
+    uteis++;
+  }
+  const data = dia.toISOString().slice(0,10);
+
+  /* a data que sairia contando só o trabalho — a promessa otimista */
+  let f2 = lt.totalProcesso;
+  const dia2 = new Date(inicio);
+  let uteis2 = 0, g2 = 0;
+  while(f2 > 0 && g2 < 600){
+    g2++;
+    dia2.setDate(dia2.getDate() + 1);
+    const s = dia2.getDay();
+    if(s === 0 || s === 6) continue;
+    f2 -= minutosDia;
+    uteis2++;
+  }
+  const dataSemFila = dia2.toISOString().slice(0,10);
+
+  return {
+    vazio:false, lead: lt, inicio,
+    data, dias: uteis,
+    dataSemFila, diasSemFila: uteis2,
+    /* quantos dias a espera acrescenta */
+    diasDeEspera: uteis - uteis2,
+  };
+}
+
+/* Comparar o previsto com o que realmente aconteceu. É assim que a
+   fábrica descobre o tempo de fila dela, em vez de chutar. */
+function leadTimeRealizado(db, opcoes){
+  const op = opcoes || {};
+  const concluidas = (db.ordens||[]).filter(o=>{
+    if(o.situacao !== 'concluida') return false;
+    if(op.produtoId && o.produtoId !== op.produtoId) return false;
+    return !!o.criadoEm && !!o.concluidaEm;
+  });
+
+  const medidas = concluidas.map(o=>{
+    const a = dataValida(o.criadoEm), b = dataValida(o.concluidaEm);
+    if(!a || !b) return null;
+    const dias = Math.max(0, (b - a) / 86400000);
+    const aps = apontamentosDaOrdem(db, o.id);
+    const minutosTrabalhados = aps.reduce((s,x)=>s+num(x.minutosGastos), 0);
+    return {
+      ordem: o, dias: Number(dias.toFixed(1)),
+      minutosTrabalhados,
+      quantidade: num(o.quantidade),
+    };
+  }).filter(Boolean);
+
+  if(medidas.length === 0)
+    return {vazio:true, medidas:[], amostra:0,
+      aviso:'Nenhuma ordem concluída ainda. O lead time real aparece quando '+
+        'as primeiras ordens fecharem — e aí dá para calibrar a espera com '+
+        'o que aconteceu, em vez de estimar.'};
+
+  const dias = medidas.map(m=>m.dias).sort((a,b)=>a-b);
+  const media = dias.reduce((a,b)=>a+b,0) / dias.length;
+  const mediana = dias.length % 2
+    ? dias[(dias.length-1)/2]
+    : (dias[dias.length/2 - 1] + dias[dias.length/2]) / 2;
+
+  return {
+    vazio:false, medidas, amostra: medidas.length,
+    media: Number(media.toFixed(1)),
+    /* a mediana resiste melhor a uma ordem que travou por outro motivo */
+    mediana: Number(mediana.toFixed(1)),
+    menor: dias[0],
+    maior: dias[dias.length-1],
+    /* amostra pequena não sustenta conclusão */
+    confiavel: medidas.length >= 5,
+  };
+}
+
+/* O previsto bate com o real? Se não, a espera configurada está errada. */
+function calibrarFila(db, produtoId){
+  const real = leadTimeRealizado(db, {produtoId});
+  if(real.vazio) return {vazio:true, aviso: real.aviso};
+
+  const produto = (db.produtos||[]).find(p=>p.id===produtoId);
+  if(!produto) return {vazio:true, aviso:'Produto não encontrado.'};
+
+  /* usa a quantidade média das ordens medidas */
+  const qtdMedia = real.medidas.reduce((s,m)=>s+m.quantidade, 0) / real.medidas.length;
+  const previsto = previsaoComFila(produto, db, {quantidade: qtdMedia});
+  if(previsto.vazio) return {vazio:true, aviso:'Produto sem processo produtivo.'};
+
+  const diferenca = real.mediana - previsto.dias;
+  return {
+    vazio:false, real, previsto, quantidadeMedia: Math.round(qtdMedia),
+    diferenca: Number(diferenca.toFixed(1)),
+    /* a espera precisa subir ou descer? */
+    ajuste: Math.abs(diferenca) < 1 ? 'ok'
+      : diferenca > 0 ? 'aumentar' : 'diminuir',
+    confiavel: real.confiavel,
+  };
+}
+
+/* ==========================================================
+   EQUIPE POR OPERAÇÃO
+   Balancear por "quantas pessoas" supõe que todas produzem
+   igual. Não produzem: quem já fez aquela operação cem vezes
+   é mais rápido que quem nunca fez. Escolher QUEM vai para
+   cada posto dá um plano que a fábrica consegue cumprir.
+========================================================== */
+
+/* O que esta pessoa já produziu nesta operação, pelos apontamentos. */
+function desempenhoNaEtapa(db, colaboradorId, etapaId){
+  const aps = (db.apontamentos||[]).filter(a=>
+    a.colaboradorId === colaboradorId && a.etapaId === etapaId &&
+    num(a.minutosGastos) > 0);
+  const boas = aps.reduce((s,a)=>s + num(a.pecasBoas), 0);
+  const defeito = aps.reduce((s,a)=>s + num(a.pecasDefeito), 0);
+  const minutos = aps.reduce((s,a)=>s + num(a.minutosGastos), 0);
+  const total = boas + defeito;
+
+  if(aps.length === 0 || minutos <= 0)
+    return {semDados:true, apontamentos:0, porHora:null, qualidade:null};
+
+  return {
+    semDados:false,
+    apontamentos: aps.length,
+    boas, defeito, minutos,
+    porHora: Number((boas / (minutos/60)).toFixed(1)),
+    minutosPorPeca: boas > 0 ? Number((minutos / boas).toFixed(4)) : null,
+    qualidade: total > 0 ? Number((boas/total*100).toFixed(1)) : null,
+    /* poucos apontamentos não sustentam conclusão */
+    confiavel: aps.length >= 3,
+  };
+}
+
+/* A média da fábrica nesta operação — a referência para quem nunca fez. */
+function mediaDaEtapa(db, etapaId){
+  const aps = (db.apontamentos||[]).filter(a=>
+    a.etapaId === etapaId && num(a.minutosGastos) > 0);
+  const boas = aps.reduce((s,a)=>s + num(a.pecasBoas), 0);
+  const minutos = aps.reduce((s,a)=>s + num(a.minutosGastos), 0);
+  const pessoas = new Set(aps.map(a=>a.colaboradorId).filter(Boolean)).size;
+
+  if(minutos <= 0) return {semDados:true, porHora:null, pessoas:0};
+  return {
+    semDados:false,
+    porHora: Number((boas / (minutos/60)).toFixed(1)),
+    minutosPorPeca: boas > 0 ? Number((minutos / boas).toFixed(4)) : null,
+    apontamentos: aps.length, pessoas,
+  };
+}
+
+/* Quanto rende uma pessoa nesta operação: o histórico dela, a média da
+   fábrica, ou o tempo do roteiro — nessa ordem de preferência. */
+function ritmoEsperado(db, colaboradorId, etapaId, minutosRoteiro, opcoes){
+  const op = opcoes || {};
+  const meu = desempenhoNaEtapa(db, colaboradorId, etapaId);
+  if(!meu.semDados && meu.porHora > 0)
+    return {porHora: meu.porHora, origem:'historico',
+      label:'já fez esta operação', confiavel: meu.confiavel,
+      apontamentos: meu.apontamentos, qualidade: meu.qualidade};
+
+  /* Onde não se afere, a referência é a jornada do setor: o que ele
+     entregou por hora trabalhada. É menos preciso que a aferição, e é
+     o que existe — melhor isso que exigir cronômetro no corte. */
+  if(!etapaExigeAfericao(db, etapaId)){
+    const j = metaPelaJornada(db, etapaId, {});
+    if(!j.semDados && j.porHora > 0)
+      return {porHora: j.porHora, origem:'jornada',
+        label:'média do setor por hora trabalhada', confiavel: j.confiavel,
+        apontamentos: j.apontamentos};
+  }
+
+  /* Meta aferida vale mais que média de apontamento: ela foi medida com
+     método, cronometrada e assinada. A média bruta mistura dia bom com
+     dia ruim, máquina quebrada e treinamento. */
+  const meta = metaVigente(db, etapaId, op.produtoId, op.equipamentoId);
+  if(meta && num(meta.valorHora) > 0)
+    return {porHora: num(meta.valorHora), origem:'meta',
+      label:'meta aferida para a operação', confiavel:true,
+      apontamentos:0, meta};
+
+  const geral = mediaDaEtapa(db, etapaId);
+  if(!geral.semDados && geral.porHora > 0)
+    return {porHora: geral.porHora, origem:'media',
+      label:'média da fábrica nesta operação', confiavel:false,
+      apontamentos:0};
+
+  const rot = num(minutosRoteiro);
+  if(rot > 0)
+    return {porHora: Number((60/rot).toFixed(1)), origem:'roteiro',
+      label:'tempo do roteiro, sem histórico', confiavel:false,
+      apontamentos:0};
+
+  return {porHora:0, origem:'nenhum', label:'sem base para estimar',
+    confiavel:false, apontamentos:0};
+}
+
+/* Quem está disponível para uma operação, com o desempenho de cada um. */
+function candidatosDaEtapa(db, departamentoId, etapaId, minutosRoteiro, opcoes){
+  const op = opcoes || {};
+  const geral = mediaDaEtapa(db, etapaId);
+  return (db.colaboradores||[])
+    .filter(c=>c.departamentoId === departamentoId &&
+      c.status !== 'Inativo' && c.produtivo !== false)
+    .map(c=>{
+      const meu = desempenhoNaEtapa(db, c.id, etapaId);
+      const r = ritmoEsperado(db, c.id, etapaId, minutosRoteiro, op);
+      /* já existe aferição desta pessoa nesta operação? */
+      const af = (db.afericoes||[]).filter(x=>
+        x.colaboradorId === c.id && x.etapaId === etapaId);
+      const concluida = af.find(x=>x.fase === 'concluida');
+      const emAndamento = af.find(x=>x.fase !== 'concluida' && x.fase !== 'cancelada');
+      return {
+        colaborador: c, nome: c.nome,
+        desempenho: meu, ritmo: r,
+        porHora: r.porHora,
+        /* comparação com a média: acima ou abaixo, e quanto */
+        contraMedia: (!meu.semDados && !geral.semDados && geral.porHora > 0)
+          ? Number(((meu.porHora / geral.porHora - 1) * 100).toFixed(0)) : null,
+        afericao: concluida || emAndamento || null,
+        afericaoEmAndamento: !!emAndamento && !concluida,
+        /* sem histórico e sem aferição: o número dele é chute */
+        precisaAferir: meu.semDados && !concluida,
+      };
+    })
+    .sort((a,b)=>{
+      /* quem já fez vem primeiro, do mais rápido para o mais lento */
+      if(a.desempenho.semDados !== b.desempenho.semDados)
+        return a.desempenho.semDados ? 1 : -1;
+      return b.porHora - a.porHora;
+    });
+}
+
+/* A capacidade da equipe escolhida: soma do que cada um rende. */
+function capacidadeDaEquipe(db, colaboradorIds, etapaId, minutosRoteiro, opcoes){
+  const ids = (colaboradorIds||[]).filter(Boolean);
+  if(ids.length === 0) return {vazia:true, porHora:0, pessoas:0, membros:[]};
+
+  const membros = ids.map(id=>{
+    const c = (db.colaboradores||[]).find(x=>x.id===id);
+    const r = ritmoEsperado(db, id, etapaId, minutosRoteiro, opcoes);
+    return {id, nome: c ? c.nome : 'removido', ritmo:r, porHora:r.porHora,
+      /* quem entra só com estimativa merece ser aferido */
+      estimado: r.origem === 'media' || r.origem === 'roteiro'};
+  });
+  const porHora = membros.reduce((s,m)=>s + m.porHora, 0);
+  /* histórico próprio ou meta aferida contam como base medida */
+  const comHistorico = membros.filter(m=>
+    m.ritmo.origem==='historico' || m.ritmo.origem==='meta').length;
+
+  return {
+    vazia:false, membros, pessoas: membros.length,
+    porHora: Number(porHora.toFixed(1)),
+    /* o ciclo da equipe: quanto tempo por peça, somando todo mundo */
+    ciclo: porHora > 0 ? Number((60/porHora).toFixed(5)) : 0,
+    comHistorico,
+    aAferir: membros.filter(m=>m.estimado),
+    /* quanto do plano se apoia em dado real */
+    baseReal: membros.length > 0
+      ? Number((comHistorico/membros.length*100).toFixed(0)) : 0,
+  };
+}
+
+/* A meta por hora que equilibra a linha: todo posto no ritmo do gargalo
+   não adianta — o que interessa é o ritmo que a linha inteira precisa. */
+function metaHoraDaLinha(postos, opcoes){
+  const op = opcoes || {};
+  if(!postos || postos.length === 0) return null;
+  const demanda = num(op.demandaDia);
+  const minutosDia = num(op.minutosDia) > 0 ? num(op.minutosDia) : 480;
+
+  /* se há demanda, a meta é ela; senão, o ritmo do gargalo atual */
+  const alvoHora = demanda > 0
+    ? Number((demanda / (minutosDia/60)).toFixed(1))
+    : Math.min(...postos.map(p=>num(p.porHora)||Infinity));
+
+  if(!isFinite(alvoHora) || alvoHora <= 0) return null;
+
+  return {
+    alvoHora,
+    origem: demanda > 0 ? 'demanda' : 'gargalo',
+    postos: postos.map(p=>{
+      const atual = num(p.porHora);
+      return {
+        id: p.id, etapa: p.etapa,
+        atual,
+        meta: alvoHora,
+        /* sobra ou falta capacidade neste posto */
+        folga: Number((atual - alvoHora).toFixed(1)),
+        atende: atual >= alvoHora,
+        /* quantas pessoas a mais para alcançar a meta */
+        faltamPessoas: atual > 0 && atual < alvoHora
+          ? Number(((alvoHora/atual - 1) * (num(p.pessoas)||1)).toFixed(2)) : 0,
+      };
+    }),
+  };
+}
+
+/* ==========================================================
+   BALANCEAMENTO DE LINHA
+   A linha produz no ritmo da operação mais lenta. Se o
+   fechamento faz 60/h e o resto faz 90/h, a linha faz 60/h e
+   oito pessoas ficam esperando — sem que ninguém pareça
+   estar parado. É o desperdício mais caro e mais invisível
+   de uma confecção.
+========================================================== */
+
+/* Quanto tempo cada peça tem para sair, dada a demanda do dia.
+   É o compasso da linha: operação mais lenta que o takt atrasa
+   tudo; mais rápida acumula estoque na frente da próxima. */
+function taktTime(minutosDia, demandaDia){
+  const m = num(minutosDia), q = num(demandaDia);
+  if(!(m > 0) || !(q > 0)) return null;
+  return Number((m / q).toFixed(4));
+}
+
+/* O retrato da linha: quem faz o quê, em quanto tempo, com
+   quantas pessoas — e onde ela trava. */
+function balancearLinha(produto, db, opcoes){
+  const op = opcoes || {};
+  const j = jornadaDe(db);
+  if(!produto) return {vazio:true, postos:[], gargalo:null,
+    minutosDia: num(op.minutosDia) || j.produtivo};
+  const minutosDia = num(op.minutosDia) > 0 ? num(op.minutosDia) : j.produtivo;
+  const r = resumoProcesso(produto, db);
+  const alocacao = op.alocacao || {};
+
+  if(r.passos.length === 0)
+    return {vazio:true, postos:[], gargalo:null, minutosDia};
+
+  let postos = r.passos.map((p, i) => {
+    const et = p.etapa;
+    /* quantas pessoas nesta operação: o que foi simulado, o que o
+       roteiro pede, ou uma */
+    const pessoas = Math.max(1,
+      num(alocacao[p.passo.id]) || num(p.passo.pessoas) || 1);
+    /* o tempo de uma peça nesta operação, com uma pessoa */
+    const tempoUnitario = num(p.minutosHomem) / Math.max(1, num(p.passo.pessoas) || 1);
+    /* com N pessoas, o ciclo cai proporcionalmente */
+    const ciclo = pessoas > 0 ? tempoUnitario / pessoas : 0;
+    const porHora = ciclo > 0 ? Number((60 / ciclo).toFixed(1)) : 0;
+    const porDia = ciclo > 0 ? Math.floor(minutosDia / ciclo) : 0;
+
+    return {
+      id: p.passo.id,
+      ordem: i + 1,
+      etapa: et ? et.nome : 'etapa removida',
+      setor: p.departamento ? p.departamento.nome : '—',
+      equipamento: p.equipamento ? p.equipamento.nome : '',
+      tempoUnitario: Number(tempoUnitario.toFixed(5)),
+      pessoas,
+      pessoasOriginais: Math.max(1, num(p.passo.pessoas) || 1),
+      ciclo: Number(ciclo.toFixed(5)),
+      porHora, porDia,
+    };
+  });
+
+  /* filtrar por setor mostra a linha daquele departamento apenas */
+  if(op.departamentoId)
+    postos = postos.filter(p=>{
+      const passo = (r.passos.find(x=>x.passo.id===p.id)||{}).passo;
+      return passo && passo.departamentoId === op.departamentoId;
+    });
+  if(postos.length === 0)
+    return {vazio:true, postos:[], gargalo:null, minutosDia};
+
+  /* Escala nominal: quando o usuário diz QUEM faz a operação, o ritmo
+     vem do histórico de cada pessoa, não de uma média genérica. É a
+     diferença entre "duas pessoas" e "a Rita e o João". */
+  const escalas = op.escalas || {};
+  postos.forEach(p=>{
+    const esc = escalas[p.id];
+    if(!esc || !(esc.pessoas||[]).length) return;
+    const passo = (r.passos.find(x=>x.passo.id===p.id)||{}).passo;
+    const cap = capacidadeDaEquipe(db, esc.pessoas,
+      passo ? passo.etapaId : null, p.tempoUnitario);
+    if(cap.vazia || !(cap.porHora > 0)) return;
+    p.pessoas = cap.pessoas;
+    p.escala = cap;
+    p.maquinasEscaladas = (esc.maquinas||[]).length;
+    /* o ciclo passa a ser o da equipe real */
+    p.ciclo = Number(cap.ciclo.toFixed(5));
+    p.porHora = cap.porHora;
+    p.porDia = p.ciclo > 0 ? Math.floor(minutosDia / p.ciclo) : 0;
+  });
+
+  /* recursos: o cadastro do setor, ou o que o supervisor informou */
+  const informado = op.recursosInformados || {};
+
+  /* pessoas informadas viram alocação de verdade, distribuídas por
+     tempo de operação — senão informar a equipe não mudaria nada */
+  let equipeDividida = null;
+  const semEscala = postos.filter(p=>!p.escala);
+  if(num(informado.pessoas) > 0 && !op.alocacaoManual && semEscala.length===postos.length){
+    const total = num(informado.pessoas);
+    const soma = postos.reduce((s,p)=>s + p.tempoUnitario, 0);
+    if(soma > 0 && total > 0){
+      /* proporcional ao tempo da operação, com fração: uma pessoa pode
+         cobrir duas operações rápidas */
+      postos.forEach(p=>{
+        p.pessoas = Number((total * (p.tempoUnitario / soma)).toFixed(4));
+      });
+      const partidos = postos.filter(p=>p.pessoas < 1);
+      if(partidos.length)
+        equipeDividida = {informado: total, postos: postos.length,
+          partidos: partidos.length};
+      postos.forEach(p=>{
+        p.ciclo = p.pessoas > 0
+          ? Number((p.tempoUnitario / p.pessoas).toFixed(5)) : 0;
+        p.porHora = p.ciclo > 0 ? Number((60 / p.ciclo).toFixed(1)) : 0;
+        p.porDia = p.ciclo > 0 ? Math.floor(minutosDia / p.ciclo) : 0;
+      });
+    }
+  }
+
+  postos.forEach(p=>{
+    const passo = (r.passos.find(x=>x.passo.id===p.id)||{}).passo;
+    const doCadastro = passo
+      ? recursosDoSetor(passo.departamentoId, db)
+      : {pessoas:0, maquinas:0, limite:0};
+    const temInformado = (informado.pessoas !== null && informado.pessoas !== undefined) ||
+      (informado.maquinas !== null && informado.maquinas !== undefined);
+    if(temInformado){
+      const pessoas = informado.pessoas !== null && informado.pessoas !== undefined
+        ? informado.pessoas : doCadastro.pessoas;
+      const maquinas = informado.maquinas !== null && informado.maquinas !== undefined
+        ? informado.maquinas : doCadastro.maquinas;
+      p.recursos = {...doCadastro, pessoas, maquinas, informado:true,
+        limite: maquinas > 0 ? Math.min(pessoas, maquinas) : pessoas};
+    } else {
+      p.recursos = doCadastro;
+    }
+    p.excede = p.pessoas > p.recursos.limite && p.recursos.limite > 0;
+  });
+
+  /* o gargalo é o maior ciclo — a operação que segura a fila */
+  const gargalo = postos.slice().sort((a,b)=>b.ciclo - a.ciclo)[0] || null;
+  const cicloLinha = gargalo ? gargalo.ciclo : 0;
+  const saidaDia = cicloLinha > 0 ? Math.floor(minutosDia / cicloLinha) : 0;
+  const saidaHora = cicloLinha > 0 ? Number((60 / cicloLinha).toFixed(1)) : 0;
+
+  const totalPessoas = postos.reduce((s,p)=>s + p.pessoas, 0);
+  const somaTrabalho = postos.reduce((s,p)=>s + p.tempoUnitario, 0);
+
+  /* Eficiência de balanceamento: quanto do tempo pago vira produto.
+     100% seria todo mundo ocupado o tempo inteiro — não existe, mas
+     a distância até lá mede o desperdício. */
+  const eficiencia = (cicloLinha > 0 && totalPessoas > 0)
+    ? Number((somaTrabalho / (totalPessoas * cicloLinha) * 100).toFixed(1))
+    : null;
+
+  /* ocioso por posto: quanto cada um espera a cada peça */
+  postos.forEach(p=>{
+    p.ocioso = Number(Math.max(0, cicloLinha - p.ciclo).toFixed(5));
+    p.ocupacao = cicloLinha > 0
+      ? Number((p.ciclo / cicloLinha * 100).toFixed(1)) : 0;
+    p.gargalo = !!gargalo && p.id === gargalo.id;
+    /* quanto essa espera custa por dia, em minutos de gente parada */
+    p.minutosPerdidosDia = Number((p.ocioso * saidaDia * p.pessoas).toFixed(0));
+  });
+
+  const takt = op.demandaDia ? taktTime(minutosDia, op.demandaDia) : null;
+  const atende = takt !== null ? cicloLinha <= takt : null;
+
+  return {
+    vazio:false, postos, gargalo, cicloLinha, minutosDia,
+    saidaDia, saidaHora, totalPessoas,
+    somaTrabalho: Number(somaTrabalho.toFixed(5)),
+    eficiencia,
+    /* o tempo pago que não virou peça */
+    minutosOciososDia: postos.reduce((s,p)=>s + p.minutosPerdidosDia, 0),
+    equipeDividida,
+    takt, demandaDia: num(op.demandaDia) || null, atende,
+    faltaPorDia: (takt !== null && !atende)
+      ? Math.max(0, num(op.demandaDia) - saidaDia) : 0,
+  };
+}
+
+/* Onde colocar a próxima pessoa. A resposta quase nunca é óbvia:
+   reforçar o gargalo só ajuda até ele deixar de ser o gargalo. */
+function sugerirBalanceamento(produto, db, opcoes){
+  const op = opcoes || {};
+  const base = balancearLinha(produto, db, op);
+  if(base.vazio) return {vazio:true, sugestoes:[]};
+
+  const sugestoes = [];
+  const alocacao = {...(op.alocacao||{})};
+  base.postos.forEach(p=>{ alocacao[p.id] = p.pessoas; });
+
+  /* simula acrescentar uma pessoa em cada posto e vê qual rende mais */
+  base.postos.forEach(p=>{
+    const teste = {...alocacao};
+    teste[p.id] = p.pessoas + 1;
+    const novo = balancearLinha(produto, db, {...op, alocacao: teste});
+    const ganho = novo.saidaDia - base.saidaDia;
+    if(ganho > 0) sugestoes.push({
+      posto: p,
+      pessoasDepois: p.pessoas + 1,
+      saidaAntes: base.saidaDia,
+      saidaDepois: novo.saidaDia,
+      ganho,
+      ganhoPercentual: base.saidaDia > 0
+        ? Number((ganho / base.saidaDia * 100).toFixed(1)) : null,
+      eficienciaDepois: novo.eficiencia,
+      /* quanto cada peça a mais custa em gente */
+      pecasPorPessoa: Number((novo.saidaDia / novo.totalPessoas).toFixed(1)),
+    });
+  });
+
+  sugestoes.sort((a,b)=>b.ganho - a.ganho);
+
+  /* tirar gente de onde sobra também é balanceamento — e é o que
+     ninguém lembra de fazer */
+  const podeReduzir = base.postos
+    .filter(p=>p.pessoas > 1 && !p.gargalo)
+    .map(p=>{
+      const teste = {...alocacao};
+      teste[p.id] = p.pessoas - 1;
+      const novo = balancearLinha(produto, db, {...op, alocacao: teste});
+      return {
+        posto: p,
+        pessoasDepois: p.pessoas - 1,
+        perda: base.saidaDia - novo.saidaDia,
+        liberaPessoa: true,
+      };
+    })
+    .filter(x=>x.perda === 0)
+    .sort((a,b)=>a.posto.ocupacao - b.posto.ocupacao);
+
+  return {
+    vazio:false, base,
+    sugestoes: sugestoes.slice(0, 4),
+    podeReduzir: podeReduzir.slice(0, 3),
+    melhor: sugestoes[0] || null,
+  };
+}
+
+/* Quantas pessoas para atender a demanda, e como distribuí-las.
+   Divisão simples por carga: quem tem mais trabalho leva mais gente. */
+function dimensionarLinha(produto, db, opcoes){
+  const op = opcoes || {};
+  const demanda = num(op.demandaDia);
+  const j = jornadaDe(db);
+  const minutosDia = num(op.minutosDia) > 0 ? num(op.minutosDia) : j.produtivo;
+  const takt = taktTime(minutosDia, demanda);
+  if(takt === null) return {erro:'Informe a demanda por dia.'};
+
+  const base = balancearLinha(produto, db, {minutosDia});
+  if(base.vazio) return {erro:'Este produto não tem processo produtivo.'};
+
+  const postos = base.postos.map(p=>{
+    /* pessoas necessárias para o ciclo caber no takt */
+    const necessario = Math.max(1, Math.ceil(p.tempoUnitario / takt));
+    return {...p, necessario, diferenca: necessario - p.pessoas};
+  });
+
+  const total = postos.reduce((s,p)=>s + p.necessario, 0);
+  const alocacao = {};
+  postos.forEach(p=>{ alocacao[p.id] = p.necessario; });
+  const resultado = balancearLinha(produto, db, {minutosDia, alocacao,
+    demandaDia: demanda});
+
+  return {
+    takt, demanda, minutosDia,
+    postos, total,
+    totalAtual: base.totalPessoas,
+    diferenca: total - base.totalPessoas,
+    resultado,
+    /* dá para atender com o time proposto? */
+    atende: resultado.saidaDia >= demanda,
+    sobra: resultado.saidaDia - demanda,
+  };
+}
+
+/* ==========================================================
+   CUSTO INDIRETO
+   Material e mão de obra direta não são o custo da peça: são
+   parte dele. Aluguel, energia, manutenção e supervisão
+   existem mesmo quando ninguém está costurando, e alguém paga.
+   Ignorar isso é formar preço achando que a margem é maior do
+   que ela é.
+========================================================== */
+const TIPOS_CUSTO_FIXO = [
+  {id:'instalacao',  nome:'Instalação',   ajuda:'aluguel, IPTU, condomínio'},
+  {id:'energia',     nome:'Energia e água', ajuda:'conta de luz, água, gás'},
+  {id:'manutencao',  nome:'Manutenção',   ajuda:'mecânico, peças, revisão de máquina'},
+  {id:'depreciacao', nome:'Depreciação',  ajuda:'o desgaste das máquinas ao longo do tempo'},
+  {id:'indireta',    nome:'Mão de obra indireta',
+   ajuda:'supervisão, PCP, limpeza — quem não costura mas é necessário'},
+  {id:'administrativo', nome:'Administrativo',
+   ajuda:'contabilidade, sistema, telefone, material de escritório'},
+  {id:'outros',      nome:'Outros',       ajuda:'o que não coube acima'},
+];
+function tipoCustoFixo(id){
+  return TIPOS_CUSTO_FIXO.find(t=>t.id===id) || TIPOS_CUSTO_FIXO[TIPOS_CUSTO_FIXO.length-1];
+}
+
+/* A ocupação real muda tudo. Uma fábrica a 50% da capacidade tem o
+   dobro de custo fixo por peça — e é justamente quando ela está vazia
+   que o preço parece bom. */
+const OCUPACAO_PADRAO = 85;
+
+function salvarCustoFixo(d, dados, usuario){
+  const nome = String(dados.nome||'').trim();
+  if(!nome) return {erro:'Dê um nome ao custo.'};
+  const valor = num(dados.valorMensal);
+  if(!(valor > 0)) return {erro:'Informe o valor mensal.'};
+
+  const existente = dados.id ? (d.custosFixos||[]).find(c=>c.id===dados.id) : null;
+  if(dados.id && !existente) return {erro:'Custo não encontrado.'};
+
+  const reg = {
+    id: existente ? existente.id : uid(),
+    nome,
+    tipo: dados.tipo || 'outros',
+    valorMensal: valor,
+    observacao: String(dados.observacao||'').trim(),
+    ativo: dados.ativo !== false,
+    criadoEm: existente ? existente.criadoEm : agoraISO(),
+    alteradoEm: agoraISO(),
+  };
+  d.custosFixos = existente
+    ? (d.custosFixos||[]).map(c=>c.id===reg.id ? reg : c)
+    : [...(d.custosFixos||[]), reg];
+  registrarLog(d, usuario, existente ? 'custo.editado' : 'custo.criado',
+    `${reg.nome} · ${money(valor)}/mês`);
+  return {custo: reg};
+}
+
+function removerCustoFixo(d, id, usuario){
+  const c = (d.custosFixos||[]).find(x=>x.id===id);
+  if(!c) return {erro:'Custo não encontrado.'};
+  d.custosFixos = (d.custosFixos||[]).filter(x=>x.id!==id);
+  registrarLog(d, usuario, 'custo.removido', c.nome);
+  return {removido:true};
+}
+
+/* Quantos minutos de produção a fábrica tem por mês. É o denominador
+   da conta — e é onde mora a armadilha: dividir pela capacidade
+   teórica dá um custo por minuto otimista demais. */
+function capacidadeProdutivaMes(db){
+  const j = jornadaDe(db);
+  const p = db.parametrosCustoIndireto || {};
+  const dias = num(p.diasUteis) || num((db.parametrosMaoDeObra||{}).diasUteis) ||
+    DIAS_UTEIS_MES;
+  const ocupacao = num(p.ocupacao) > 0 ? num(p.ocupacao) : OCUPACAO_PADRAO;
+
+  /* só quem produz entra na conta: supervisão e administrativo já são
+     custo indireto, contá-los como capacidade seria contar duas vezes */
+  const diretos = (db.colaboradores||[]).filter(c=>{
+    if(c.status === 'Inativo') return false;
+    if(c.produtivo === false) return false;
+    return !!c.departamentoId;
+  });
+
+  const minutosTeoricos = diretos.length * j.produtivo * dias;
+  const minutosReais = minutosTeoricos * (ocupacao/100);
+  return {
+    pessoas: diretos.length,
+    minutosDia: j.produtivo,
+    dias, ocupacao,
+    minutosTeoricos,
+    minutosReais: Math.round(minutosReais),
+    horasMes: Number((minutosReais/60).toFixed(1)),
+    vazia: diretos.length === 0,
+  };
+}
+
+/* Quanto custa cada minuto de fábrica, além de quem está costurando. */
+function taxaCustoIndireto(db){
+  const lista = (db.custosFixos||[]).filter(c=>c.ativo !== false);
+  const total = lista.reduce((s,c)=>s + num(c.valorMensal), 0);
+  const cap = capacidadeProdutivaMes(db);
+
+  const porTipo = TIPOS_CUSTO_FIXO.map(t=>({
+    ...t,
+    total: lista.filter(c=>c.tipo===t.id).reduce((s,c)=>s+num(c.valorMensal), 0),
+  })).filter(x=>x.total > 0).sort((a,b)=>b.total-a.total);
+
+  const avisos = [];
+  if(lista.length === 0)
+    avisos.push('Nenhum custo fixo cadastrado. O custo do produto está '+
+      'incompleto: aluguel, energia e manutenção existem mesmo sem aparecer '+
+      'na conta, e quem forma preço sem eles trabalha com margem menor do '+
+      'que imagina.');
+  if(cap.vazia)
+    avisos.push('Nenhum colaborador de produção cadastrado — sem base para '+
+      'dividir o custo fixo.');
+  if(cap.ocupacao >= 100)
+    avisos.push('Ocupação em 100% supõe que a fábrica nunca para. Na prática '+
+      'ninguém opera assim, e o custo por peça sai menor do que o real.');
+
+  return {
+    lista, total, porTipo,
+    capacidade: cap,
+    /* o número que interessa */
+    porMinuto: cap.minutosReais > 0
+      ? Number((total / cap.minutosReais).toFixed(6)) : 0,
+    porHora: cap.minutosReais > 0
+      ? Number((total / (cap.minutosReais/60)).toFixed(2)) : 0,
+    avisos,
+    configurado: lista.length > 0 && !cap.vazia,
+  };
+}
+
+/* O custo indireto de um produto: o tempo que ele ocupa a fábrica
+   vezes o que a fábrica custa por minuto. */
+function custoIndiretoProduto(produto, db, lote){
+  const taxa = taxaCustoIndireto(db);
+  if(!produto) return {taxa, minutosOcupados:0, custo:0, configurado:false};
+  const r = resumoProcesso(produto, db, lote);
+  /* o tempo que ocupa a fábrica é o de relógio, não o de mão de obra:
+     duas pessoas na mesma operação usam uma bancada, não duas */
+  const minutos = num(r.minutos);
+  return {
+    taxa,
+    minutosOcupados: minutos,
+    custo: Number((minutos * taxa.porMinuto).toFixed(8)),
+    configurado: taxa.configurado,
+  };
+}
+
+/* A conta completa da peça. Antes disso, o sistema mostrava material
+   e mão de obra e chamava de "custo" — o que era verdade parcial. */
+function custoCompletoProduto(produto, db, lote){
+  /* produto que sumiu do cadastro não pode derrubar a tela de custo */
+  if(!produto) return {material:0, maoDeObra:0, indireto:0, total:0,
+    fatias:[], completo:false, avisos:['Produto não encontrado.'],
+    detalheMaterial:null, detalheMaoDeObra:null, detalheIndireto:null};
+  const mat = custearProduto(produto, db);
+  const mo = custoMaoDeObra(produto, db, lote);
+  const ind = custoIndiretoProduto(produto, db, lote);
+
+  const material = num(mat.custoTecido);
+  const maoDeObra = num(mo.total);
+  const indireto = num(ind.custo);
+  const total = material + maoDeObra + indireto;
+
+  const avisos = [...(mat.avisos||[]), ...(mo.avisos||[]), ...(ind.taxa.avisos||[])];
+
+  return {
+    material, maoDeObra, indireto,
+    total: Number(total.toFixed(8)),
+    detalheMaterial: mat,
+    detalheMaoDeObra: mo,
+    detalheIndireto: ind,
+    /* a participação de cada parte ajuda a saber onde mexer */
+    fatias: total > 0 ? [
+      {nome:'Material',      valor:material,  perc: Number((material/total*100).toFixed(1))},
+      {nome:'Mão de obra',   valor:maoDeObra, perc: Number((maoDeObra/total*100).toFixed(1))},
+      {nome:'Custo da fábrica', valor:indireto, perc: Number((indireto/total*100).toFixed(1))},
+    ] : [],
+    completo: ind.configurado,
+    avisos,
+  };
+}
+
+/* Formação de preço: a margem sobre o custo completo, e o que ela
+   seria se o indireto tivesse sido esquecido. */
+function precoSugerido(produto, db, opcoes){
+  const op = opcoes || {};
+  const c = custoCompletoProduto(produto, db, op.lote);
+  if(!produto) return {erro:'Produto não encontrado.', custo:c};
+  const margem = num(op.margem);
+  const impostos = num(op.impostos);
+  const comissao = num(op.comissao);
+
+  /* margem sobre o preço de venda, não sobre o custo: é assim que se
+     forma preço, e confundir os dois é o erro mais comum */
+  const carga = (margem + impostos + comissao) / 100;
+  if(carga >= 1)
+    return {erro:'Margem, impostos e comissão somam 100% ou mais do preço — '+
+      'não sobra nada para pagar o custo.', custo:c};
+
+  const preco = c.total / (1 - carga);
+  /* o preço que sairia sem contar o custo da fábrica */
+  const precoSemIndireto = (c.material + c.maoDeObra) / (1 - carga);
+  const margemReal = preco > 0
+    ? Number(((preco - c.total) / preco * 100).toFixed(2)) : 0;
+  /* quem esquece o indireto vende por precoSemIndireto e acha que tem
+     a margem cheia; a real é esta */
+  const margemIludida = precoSemIndireto > 0
+    ? Number(((precoSemIndireto - c.total) / precoSemIndireto * 100).toFixed(2)) : 0;
+
+  return {
+    custo: c,
+    margem, impostos, comissao,
+    preco: Number(preco.toFixed(4)),
+    precoSemIndireto: Number(precoSemIndireto.toFixed(4)),
+    margemReal,
+    margemIludida,
+    /* vender sem contar o indireto dá prejuízo? */
+    prejuizo: margemIludida < 0,
+    diferenca: Number((preco - precoSemIndireto).toFixed(4)),
+  };
+}
+
 function custoMaoDeObra(produto, db, lote) {
   const r = resumoProcesso(produto, db, lote);
   const cache = {};
@@ -6850,7 +10361,7 @@ function custoMaoDeObra(produto, db, lote) {
       custoDep: c,
       custoMinuto: minuto,
       estimado: !proprio && !geral.vazia,
-      custo: Number(custo.toFixed(5))
+      custo: Number(custo.toFixed(8))
     };
   });
   const mapa = {};
@@ -6899,7 +10410,7 @@ function custoMaoDeObra(produto, db, lote) {
     })).sort((a, b) => b.custo - a.custo),
     minutos: r.minutos,
     minutosHomem: r.minutosHomem,
-    total: Number(total.toFixed(5)),
+    total: Number(total.toFixed(8)),
     avisos,
     semProcesso: r.passos.length === 0
   };
@@ -7407,29 +10918,6 @@ function cargaDoColaborador(colaboradorId, db, opcoes) {
   };
 }
 
-/* Todos os colaboradores com a sua carga, para escolher com base em algo */
-function equipeDisponivel(db, departamentoId, opcoes) {
-  const doSetor = colaboradoresDoDepartamento(departamentoId, db);
-  const idsSetor = new Set(doSetor.map(c => c.id));
-  const outros = (db.colaboradores || []).filter(c => c.status !== 'Inativo' && !idsSetor.has(c.id));
-  const montar = (c, deFora) => ({
-    colaborador: c,
-    deFora,
-    departamento: (db.departamentos || []).find(d => d.id === c.departamentoId),
-    carga: cargaDoColaborador(c.id, db, opcoes)
-  });
-  return {
-    doSetor: doSetor.map(c => montar(c, false)),
-    deOutrosSetores: outros.map(c => montar(c, true)).sort((a, b) => a.carga.ocupado - b.carga.ocupado)
-  };
-}
-
-/* ==========================================================
-   APONTAMENTO DE FIM DE JORNADA
-   O que a programação previu contra o que a fábrica fez.
-========================================================== */
-const MOTIVOS_ATRASO = ['Máquina parada', 'Falta de material', 'Retrabalho', 'Falta de pessoal', 'Troca de ordem', 'Manutenção', 'Treinamento', 'Outro'];
-const TIPOS_DEFEITO = ['Costura torta', 'Ponto falhado', 'Mancha', 'Furo no tecido', 'Medida fora', 'Estampa deslocada', 'Peça trocada', 'Acabamento', 'Outro'];
 function apontamentosDoDia(data, db) {
   return (db.apontamentos || []).filter(a => a.data === data);
 }
@@ -8106,6 +11594,9 @@ const ABAS_SISTEMA = [{
 }, {
   id: 'canal',
   label: 'Conversa aberta'
+}, {
+  id: 'recados',
+  label: 'Chat'
 }];
 const ACOES_SISTEMA = [{
   id: 'cadastros',
@@ -8212,7 +11703,7 @@ const NIVEIS_ACESSO = [{
   cor: 'bad',
   desc: 'Vê e altera tudo, inclusive permissões, colaboradores e dados sensíveis.',
   perfil: 'Administrador',
-  abas: ['painel', 'pessoas', 'materiais', 'engenharia', 'produtos', 'producao', 'canal'],
+  abas: ['painel', 'pessoas', 'materiais', 'engenharia', 'produtos', 'producao', 'canal', 'recados'],
   acoes: TODAS_AREAS
 }, {
   id: 'gerencial',
@@ -8220,7 +11711,7 @@ const NIVEIS_ACESSO = [{
   cor: 'warn',
   desc: 'Administra os cadastros e acompanha a operação, sem alterar permissões.',
   perfil: 'Gestor',
-  abas: ['painel', 'pessoas', 'materiais', 'engenharia', 'produtos', 'producao', 'canal'],
+  abas: ['painel', 'pessoas', 'materiais', 'engenharia', 'produtos', 'producao', 'canal', 'recados'],
   acoes: TODAS_AREAS.filter(a => a !== 'admin' && a !== 'pessoas.permissoes')
 }, {
   id: 'cadastro',
@@ -8228,7 +11719,7 @@ const NIVEIS_ACESSO = [{
   cor: 'info',
   desc: 'Inclui e edita clientes, fornecedores e colaboradores.',
   perfil: 'Colaborador',
-  abas: ['painel', 'pessoas', 'materiais', 'engenharia', 'produtos', 'producao', 'canal'],
+  abas: ['painel', 'pessoas', 'materiais', 'engenharia', 'produtos', 'producao', 'canal', 'recados'],
   acoes: ['cadastros', 'materiais.editar', 'materiais.mover', 'produtos.editar', 'produtos.risco', 'produtos.processo']
 }, {
   id: 'consulta',
@@ -8236,7 +11727,7 @@ const NIVEIS_ACESSO = [{
   cor: 'idle',
   desc: 'Vê as informações, mas não altera nada.',
   perfil: 'Colaborador',
-  abas: ['painel', 'pessoas', 'materiais', 'engenharia', 'produtos', 'producao', 'canal'],
+  abas: ['painel', 'pessoas', 'materiais', 'engenharia', 'produtos', 'producao', 'canal', 'recados'],
   acoes: []
 }, {
   id: 'sem_acesso',
@@ -8262,11 +11753,11 @@ function acoesDe(liberadas) {
 }
 const PERM_PADRAO = {
   'Administrador': {
-    abas: ['painel', 'pessoas', 'materiais', 'engenharia', 'produtos', 'producao', 'canal'],
+    abas: ['painel', 'pessoas', 'materiais', 'engenharia', 'produtos', 'producao', 'canal', 'recados'],
     acoes: acoesDe(TODAS_AREAS)
   },
   'Gestor': {
-    abas: ['painel', 'pessoas', 'materiais', 'engenharia', 'produtos', 'producao', 'canal'],
+    abas: ['painel', 'pessoas', 'materiais', 'engenharia', 'produtos', 'producao', 'canal', 'recados'],
     acoes: acoesDe(TODAS_AREAS.filter(a => a !== 'admin' && a !== 'pessoas.permissoes'))
   },
   'Colaborador': {
@@ -8417,10 +11908,15 @@ A permissão necessária é "${nomeDaArea(area)}", em Cadastros → Níveis de a
   });
   return false;
 }
+/* O momento exato, com segundos. Sem eles, duas ações no mesmo minuto
+   ficam indistinguíveis no log e a duração de uma operação curta some
+   no arredondamento. O separador continua sendo espaço (e não T) por
+   compatibilidade com o que já está gravado — new Date() lê os dois. */
 function agoraISO() {
   const d = new Date();
   const p = n => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}` +
+    ` ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
 }
 // registra uma entrada no log; recebe o objeto db já em modo de escrita
 function registrarLog(d, usuario, acao, detalhe) {
@@ -8437,7 +11933,7 @@ function registrarLog(d, usuario, acao, detalhe) {
   if (d.logs.length > 500) d.logs = d.logs.slice(-500);
 }
 /* ---------------- persistence ---------------- */
-const VERSAO_APP = '2026.09.01-1417';
+const VERSAO_APP = '2026.09.03-1532';
 /* O canal do colaborador roda num arquivo próprio e grava aqui, numa
    caixa separada. Quem abrir o canal no chão de fábrica não alcança o
    banco da empresa — só esta caixa, que só tem manifestação. */
@@ -8580,8 +12076,8 @@ function garantirAdminPadrao(db) {
    cada registro é independente.
 ========================================================== */
 const PREFIXO = 'confeccao-erp';
-const COLECOES_ARRAY = ['colaboradores', 'clientes', 'fornecedores', 'logs', 'materiais', 'gruposMaterial', 'unidades', 'conversoes', 'estoques', 'saldos', 'movimentacoes', 'reservas', 'centrosCusto', 'materiaisFornecedor', 'historicoPrecos', 'riscos', 'gruposProduto', 'tiposProduto', 'ordens', 'apontamentos', 'avaliacoes', 'produtos', 'subprodutos', 'departamentos', 'etapas', 'equipamentos', 'versoesProduto', 'afericoes', 'metasOperacionais', 'objetivosMelhoria', 'manifestacoes', 'pesquisasClima'];
-const CAMPOS_UNICOS = ['permissoes', 'perfisPorCargo', 'niveisCustom', 'parametrosMateriais', 'parametrosMaoDeObra', 'jornada', 'configCanal', 'seq'];
+const COLECOES_ARRAY = ['colaboradores', 'clientes', 'fornecedores', 'logs', 'materiais', 'gruposMaterial', 'unidades', 'conversoes', 'estoques', 'saldos', 'movimentacoes', 'reservas', 'centrosCusto', 'programacoes', 'ocorrencias', 'custosFixos', 'riscos', 'gruposProduto', 'tiposProduto', 'ordens', 'apontamentos', 'avaliacoes', 'produtos', 'subprodutos', 'departamentos', 'etapas', 'equipamentos', 'versoesProduto', 'afericoes', 'metasOperacionais', 'objetivosMelhoria', 'conversas', 'mensagens', 'notas', 'vagas', 'indicacoes', 'manifestacoes', 'pesquisasClima'];
+const CAMPOS_UNICOS = ['permissoes', 'perfisPorCargo', 'niveisCustom', 'parametrosMateriais', 'parametrosMaoDeObra', 'parametrosCustoIndireto', 'parametrosFila', 'jornada', 'configCanal', 'seq'];
 
 function tamanhoBase(db) {
   try {
@@ -8962,6 +12458,11 @@ function App() {
     usuario: usuarioAtual,
     perm: perm
   }), tabAtual === 'canal' && /*#__PURE__*/React.createElement(GrupoCanal, {
+    db: db,
+    update: update,
+    usuario: usuarioAtual,
+    perm: perm
+  }), tabAtual === 'recados' && /*#__PURE__*/React.createElement(GrupoRecados, {
     db: db,
     update: update,
     usuario: usuarioAtual,
@@ -10894,7 +14395,7 @@ function Movimentacoes({
       className: "small"
     }, /*#__PURE__*/React.createElement("strong", null, m.numero), /*#__PURE__*/React.createElement("div", {
       className: "muted"
-    }, m.quando)), /*#__PURE__*/React.createElement("td", {
+    }, fmtDataHora(m.quando))), /*#__PURE__*/React.createElement("td", {
       className: "small"
     }, /*#__PURE__*/React.createElement("span", {
       style: {
@@ -12152,22 +15653,13 @@ function GrupoProducao({
     onChange: setSub,
     tabs: [{
       id: 'torre',
-      label: '🗼 Torre de controle'
+      label: 'Hoje'
     }, {
       id: 'ordens',
-      label: `Ordens de produção (${abertas})`
+      label: `Ordens (${abertas})`
     }, {
-      id: 'cronograma',
-      label: 'Cronograma da fábrica'
-    }, {
-      id: 'apontar',
-      label: `Fim de jornada (${(db.apontamentos || []).length})`
-    }, {
-      id: 'avaliacao',
-      label: 'Avaliação'
-    }, {
-      id: 'afericao',
-      label: '📊 Aferição e metas'
+      id: 'analise',
+      label: 'Programação'
     }]
   }), sub === 'torre' && /*#__PURE__*/React.createElement(TorreDeControle, {
     db: db,
@@ -12179,27 +15671,96 @@ function GrupoProducao({
     update: update,
     usuario: usuario,
     podeEditar: podeEditar
-  }), sub === 'cronograma' && /*#__PURE__*/React.createElement(CronogramaFabrica, {
-    db: db,
-    update: update,
-    usuario: usuario,
-    podeEditar: podeEditar
-  }), sub === 'apontar' && /*#__PURE__*/React.createElement(FimDeJornada, {
-    db: db,
-    update: update,
-    usuario: usuario,
-    podeEditar: podeEditar
-  }), sub === 'avaliacao' && /*#__PURE__*/React.createElement(AvaliacaoColaborador, {
-    db: db,
-    update: update,
-    usuario: usuario,
-    podeEditar: podeEditar
-  }), sub === 'afericao' && /*#__PURE__*/React.createElement(AfericaoEMetas, {
+  }), sub === 'analise' && /*#__PURE__*/React.createElement(AnaliseProducao, {
     db: db,
     update: update,
     usuario: usuario,
     podeEditar: podeEditar
   }));
+}
+
+/* As ferramentas de estudo, juntas. Antes estavam espalhadas: aferição
+   em Produção, balanceamento e lead time dentro do produto. São todas a
+   mesma coisa — entender a fábrica para planejar melhor. */
+function AnaliseProducao({ db, update, usuario, podeEditar }) {
+  const [qual, setQual] = React.useState('carteira');
+  const [produtoId, setProdutoId] = React.useState(
+    ((db.produtos || [])[0] || {}).id || '');
+  const produto = (db.produtos || []).find(p => p.id === produtoId) || null;
+
+  const precisaProduto = qual === 'balanceamento' || qual === 'leadtime';
+
+  return React.createElement("div", null,
+    React.createElement(SubTabs, {
+      active: qual, onChange: setQual, tabs: [
+        { id: 'ocorrencias', label: 'Ocorrências' },
+        { id: 'afericao', label: 'Aferição e metas' },
+        { id: 'carteira', label: 'Balanceamento da carteira' },
+        { id: 'cronograma', label: 'Cronograma' },
+        { id: 'apontar', label: `Apontamentos (${(db.apontamentos || []).length})` },
+        { id: 'avaliacao', label: 'Avaliação' },
+      ]
+    }),
+
+    precisaProduto && React.createElement("div", { className: "panel no-print" },
+      React.createElement(Field, { label: "Produto a estudar" },
+        React.createElement("select", {
+          value: produtoId, onChange: e => setProdutoId(e.target.value)
+        },
+          React.createElement("option", { value: "" }, "— escolha o produto —"),
+          (db.produtos || []).map(p => React.createElement("option", {
+            key: p.id, value: p.id
+          }, codigoCompletoProduto(p, db), " · ",
+            montarNomeProduto(p, db) || '(sem nome)'))))),
+
+    precisaProduto && !produto && React.createElement(Empty, {
+      text: "Escolha um produto para estudar a linha."
+    }),
+
+    /* Programação do dia: consolidada no Balanceamento da carteira, que
+       agora faz o plano inteiro num lugar só — escolher ordens, escalar
+       cada operação com nome e máquina, ver a carga de pessoas e de
+       equipamentos, conferir contra as entregas e publicar. A tela
+       antiga distribuía automaticamente em vez de deixar você escolher
+       quem faz o quê; fica no código porque essa distribuição pode
+       voltar a ser útil. */
+    qual === 'programacao' && React.createElement(ProgramacaoDoDia, {
+      db, update, usuario
+    }),
+    qual === 'ocorrencias' && React.createElement(TelaOcorrencias, {
+      db, update, usuario, podeEditar
+    }),
+    qual === 'afericao' && React.createElement(AfericaoEMetas, {
+      db, update, usuario, podeEditar
+    }),
+    /* Balanceamento por produto: oculto do menu, mas a tela continua
+       viva. A carteira responde "quando fica pronto e quem faz"; esta
+       responde "a linha está equilibrada e onde mexer" — meta por hora,
+       onde colocar a próxima pessoa, onde sobra gente e dimensionamento
+       pela demanda. Nada disso existe em outro lugar, então o código
+       fica: reativar é trocar uma linha, refazer seria semanas. */
+    qual === 'balanceamento' && produto && React.createElement(BalanceamentoLinha, {
+      produto, db, update, usuario
+    }),
+    qual === 'carteira' && React.createElement(BalanceamentoCarteira, {
+      db, update, usuario, podeEditar
+    }),
+    /* Lead time: oculto do menu. A carteira responde a mesma pergunta
+       com dados melhores — ela sabe quem faz cada operação e confronta
+       com a entrega. Esta tela calculava a travessia por fila estimada,
+       o que era o melhor possível antes da programação nominal existir. */
+    qual === 'leadtime' && produto && React.createElement(LeadTimeProduto, {
+      produto, db, update, usuario, podeEditar
+    }),
+    qual === 'cronograma' && React.createElement(CronogramaDoDia, {
+      db, update, usuario, podeEditar
+    }),
+    qual === 'apontar' && React.createElement(FimDeJornada, {
+      db, update, usuario, podeEditar
+    }),
+    qual === 'avaliacao' && React.createElement(AvaliacaoColaborador, {
+      db, update, usuario, podeEditar
+    }));
 }
 
 /* ---------------- Ordens de produção ---------------- */
@@ -12430,42 +15991,62 @@ function OrdemNovaModal({
     onClose: onClose,
     wide: true
   }, /*#__PURE__*/React.createElement("div", {
-    className: "grid2"
-  }, /*#__PURE__*/React.createElement(Field, {
+    className: "passo-form"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "passo-num"
+  }, "1"), /*#__PURE__*/React.createElement("div", {
+    className: "passo-corpo"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "passo-rot"
+  }, "O que produzir"), /*#__PURE__*/React.createElement(Field, {
     label: "Produto *"
   }, /*#__PURE__*/React.createElement("select", {
     value: f.produtoId,
+    autoFocus: true,
     onChange: e => set('produtoId', e.target.value)
   }, /*#__PURE__*/React.createElement("option", {
     value: ""
-  }, "— escolha o produto —"), (db.produtos || []).map(p => {
-    const etapas = (p.processo || []).length;
-    return /*#__PURE__*/React.createElement("option", {
+  }, "— escolha o produto —"), (() => {
+    /* liberados primeiro: é o que se produz no dia a dia */
+    const todos = db.produtos || [];
+    const liberados = todos.filter(p => statusProduto(statusDoProduto(p)).produz);
+    const resto = todos.filter(p => !liberados.includes(p));
+    const opcao = p => /*#__PURE__*/React.createElement("option", {
       key: p.id,
       value: p.id
-    }, codigoCompletoProduto(p, db), " · ", montarNomeProduto(p, db) || '(sem nome)', etapas === 0 ? ' — sem processo' : '', (() => {
-      const st = statusProduto(statusDoProduto(p));
-      return st.produz ? '' : ` — ${st.nome.toLowerCase()}`;
-    })());
-  }))), produto && (() => {
+    }, codigoCompletoProduto(p, db), " · ", montarNomeProduto(p, db) || '(sem nome)', (p.processo || []).length === 0 ? ' — sem processo' : '');
+    if (resto.length === 0) return todos.map(opcao);
+    return [liberados.length ? /*#__PURE__*/React.createElement("optgroup", {
+      key: "lib",
+      label: "Liberados para produção"
+    }, liberados.map(opcao)) : null, /*#__PURE__*/React.createElement("optgroup", {
+      key: "out",
+      label: "Ainda não liberados"
+    }, resto.map(p => /*#__PURE__*/React.createElement("option", {
+      key: p.id,
+      value: p.id
+    }, codigoCompletoProduto(p, db), " · ", montarNomeProduto(p, db) || '(sem nome)', ` — ${statusProduto(statusDoProduto(p)).nome.toLowerCase()}`)))];
+  })())), produto && (() => {
     const st = statusProduto(statusDoProduto(produto));
-    if (st.produz) return null;
+    const semProcesso = (produto.processo || []).length === 0;
+    if (st.produz && !semProcesso) return null;
     const ck = checklistEngenharia(produto, db);
+    const bloqueado = !st.amostra || semProcesso;
     return /*#__PURE__*/React.createElement("div", {
-      className: "panel",
+      className: "aviso-passo",
       style: {
-        borderColor: st.amostra ? 'var(--warn)' : 'var(--danger)',
-        background: st.amostra ? 'var(--warn-bg)' : 'rgba(176,58,46,.06)'
+        borderColor: bloqueado ? 'var(--danger)' : 'var(--warn)',
+        background: bloqueado ? 'rgba(176,58,46,.06)' : 'var(--warn-bg)'
       }
     }, /*#__PURE__*/React.createElement("div", {
       className: "small",
       style: {
         fontWeight: 600,
-        color: st.amostra ? 'var(--warn)' : 'var(--danger)'
+        color: bloqueado ? 'var(--danger)' : 'var(--warn)'
       }
-    }, "Produto ", st.nome.toLowerCase()), /*#__PURE__*/React.createElement("div", {
+    }, semProcesso ? 'Produto sem processo produtivo' : `Produto ${st.nome.toLowerCase()}`), /*#__PURE__*/React.createElement("div", {
       className: "small muted"
-    }, st.amostra ? /*#__PURE__*/React.createElement(React.Fragment, null, "Ordem normal não pode ser aberta ainda.", ck.pendentesObrigatorios.length > 0 && ` Falta na engenharia: ${ck.pendentesObrigatorios.map(i => i.nome.toLowerCase()).join(', ')}.`, ' ', "Para aprovar o modelo, marque como amostra abaixo.") : 'Este produto não pode ser produzido, nem como amostra.'), st.amostra && /*#__PURE__*/React.createElement("label", {
+    }, semProcesso ? /*#__PURE__*/React.createElement(React.Fragment, null, "Sem etapas cadastradas não há o que programar. Abra Produtos → ", montarNomeProduto(produto, db) || produto.codigo, ' ', "→ Processo produtivo.") : st.amostra ? /*#__PURE__*/React.createElement(React.Fragment, null, "Ordem normal não pode ser aberta ainda.", ck.pendentesObrigatorios.length > 0 && ` Falta na engenharia: ${ck.pendentesObrigatorios.map(i => i.nome.toLowerCase()).join(', ')}.`, ' ', "Para aprovar o modelo, marque como amostra abaixo.") : 'Este produto não pode ser produzido, nem como amostra.'), st.amostra && !semProcesso && /*#__PURE__*/React.createElement("label", {
       className: "check",
       style: {
         marginTop: 8
@@ -12480,16 +16061,22 @@ function OrdemNovaModal({
   }, /*#__PURE__*/React.createElement("input", {
     type: "number",
     min: "1",
+    style: {
+      maxWidth: 180
+    },
     value: f.quantidade,
     onChange: e => set('quantidade', e.target.value)
-  }))), produto && (produto.processo || []).length === 0 && /*#__PURE__*/React.createElement("div", {
-    className: "small",
-    style: {
-      color: 'var(--warn)',
-      fontWeight: 600,
-      marginTop: -6
-    }
-  }, "⚠ Este produto não tem processo produtivo. Cadastre as etapas em Produtos → ", montarNomeProduto(produto, db) || produto.codigo, " → Processo produtivo antes de abrir a ordem."), /*#__PURE__*/React.createElement("div", {
+  })), produto && qtd > 0 && previa && /*#__PURE__*/React.createElement("div", {
+    className: "small muted"
+  }, previa.r.passos.length, " etapa(s) ·", ' ', duracao(previa.trabalho), " de trabalho ·", ' ', previa.r.passos[0] && previa.r.passos[0].departamento ? `começa em ${previa.r.passos[0].departamento.nome}` : ''))), /*#__PURE__*/React.createElement("div", {
+    className: "passo-form"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "passo-num"
+  }, "2"), /*#__PURE__*/React.createElement("div", {
+    className: "passo-corpo"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "passo-rot"
+  }, "Para quem e para quando"), /*#__PURE__*/React.createElement("div", {
     className: "grid3"
   }, /*#__PURE__*/React.createElement(Field, {
     label: "Cliente"
@@ -12515,7 +16102,26 @@ function OrdemNovaModal({
     max: "9",
     value: f.prioridade,
     onChange: e => set('prioridade', e.target.value)
-  }))), /*#__PURE__*/React.createElement(Field, {
+  }))), produto && qtd > 0 && f.entrega && (() => {
+    /* a entrega vai junto: é ela que diz se atrasa e por quantos dias */
+    const fingida = {
+      id: 'previa',
+      produtoId: produto.id,
+      quantidade: qtd,
+      entrega: f.entrega,
+      tarefas: tarefasDoProduto(produto, db)
+    };
+    const prev = previsaoTermino(fingida, db);
+    if (!prev.data) return null;
+    return /*#__PURE__*/React.createElement("div", {
+      className: "small",
+      style: {
+        marginTop: -4,
+        color: prev.atrasada ? 'var(--danger)' : 'var(--ok)',
+        fontWeight: prev.atrasada ? 600 : 400
+      }
+    }, prev.atrasada ? `Atenção: pelo ritmo atual só ficaria pronta em ${fmtDate(prev.data)}, ` + `${prev.diasDeAtraso} dia(s) depois do combinado.` : `Pelo ritmo atual, a ordem fica pronta em ${fmtDate(prev.data)} — cabe no prazo.`);
+  })(), /*#__PURE__*/React.createElement(Field, {
     label: "Observação"
   }, /*#__PURE__*/React.createElement("input", {
     value: f.observacao,
@@ -12527,10 +16133,7 @@ function OrdemNovaModal({
       marginBottom: 6
     }
   }, "Arquivos (arte, referência)"), /*#__PURE__*/React.createElement("div", {
-    className: "anexos",
-    style: {
-      marginBottom: 12
-    }
+    className: "anexos"
   }, (f.anexos || []).map(x => /*#__PURE__*/React.createElement("span", {
     key: x.id,
     className: "anexo-chip"
@@ -12562,11 +16165,14 @@ function OrdemNovaModal({
       display: 'none'
     },
     onChange: anexar
-  }))), previa && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
-    className: "etp-rot",
-    style: {
-      marginBottom: 6
-    }
+  }))))), previa && /*#__PURE__*/React.createElement("div", {
+    className: "passo-form"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "passo-num"
+  }, "3"), /*#__PURE__*/React.createElement("div", {
+    className: "passo-corpo"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "passo-rot"
   }, "O que esta ordem significa"), /*#__PURE__*/React.createElement("div", {
     className: "painel-meta"
   }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
@@ -12615,7 +16221,7 @@ function OrdemNovaModal({
       fontWeight: 600,
       marginTop: 6
     }
-  }, "⚠ ", previa.mat.resumo)), /*#__PURE__*/React.createElement("div", {
+  }, "⚠ ", previa.mat.resumo))), /*#__PURE__*/React.createElement("div", {
     className: "modal-actions"
   }, /*#__PURE__*/React.createElement("button", {
     className: "btn ghost",
@@ -12753,6 +16359,54 @@ function OrdemDetalhe({
   }), (() => {
     const mat = materiaisDaOrdem(ordem, db);
     if (mat.semProduto || mat.linhas.length === 0) return null;
+    /* A lista de materiais é o que vai para o almoxarifado buscar o
+       tecido. Sem botão de impressão, alguém copiava à mão. */
+    const imprimir = () => {
+      const w = window.open('', '_blank');
+      if (!w) return alert('O navegador bloqueou a janela de impressão.');
+      const linhas = mat.linhas.map(l => {
+        const nome = l.material ? (l.material.nome || l.material.codigo || '—') : '—';
+        const n = v => Number(v || 0).toLocaleString('pt-BR',
+          { maximumFractionDigits: 2 });
+        const sit = l.semConsumo ? 'consumo não definido'
+          : l.falta > 0 ? `FALTAM ${n(l.falta)} ${l.unidade}` : 'ok';
+        return `<tr><td>${nome}</td>` +
+          `<td class="n">${l.semConsumo ? '—' : n(l.necessario) + ' ' + l.unidade}</td>` +
+          `<td class="n">${n(l.livre)} ${l.unidade}</td>` +
+          `<td>${sit}</td></tr>`;
+      }).join('');
+      const prod = (db.produtos || []).find(p => p.id === ordem.produtoId);
+      w.document.write(`<!doctype html><html lang="pt-BR"><head>
+        <meta charset="utf-8"><title>Materiais · ${ordem.codigo}</title>
+        <style>
+          body{font-family:Georgia,serif; padding:26px; color:#1a1a1a;}
+          h1{font-size:19px; margin:0 0 2px;}
+          .sub{font-size:12px; color:#666; margin-bottom:16px;}
+          table{width:100%; border-collapse:collapse; font-size:12.5px;}
+          th{text-align:left; border-bottom:2px solid #333; padding:6px 8px;
+             font-size:10px; text-transform:uppercase; letter-spacing:.06em;}
+          td{border-bottom:1px solid #ddd; padding:6px 8px;}
+          .n{text-align:right; font-variant-numeric:tabular-nums;}
+          .rodape{margin-top:22px; font-size:11px; color:#666;}
+          .assina{margin-top:34px; display:flex; gap:40px;}
+          .assina div{flex:1; border-top:1px solid #333; padding-top:5px;
+            font-size:10.5px; color:#666;}
+          @media print{ body{padding:12px;} }
+        </style></head><body>
+        <h1>Materiais · ${ordem.codigo}</h1>
+        <div class="sub">${prod ? montarNomeProduto(prod, db) : ''} ·
+          ${ordem.quantidade} peça(s)${ordem.entrega ? ' · entrega ' + fmtDate(ordem.entrega) : ''}</div>
+        <table><thead><tr><th>Material</th><th class="n">Necessário</th>
+          <th class="n">Em estoque</th><th>Situação</th></tr></thead>
+          <tbody>${linhas}</tbody></table>
+        <div class="rodape">${mat.resumo}</div>
+        <div class="assina"><div>Separado por</div><div>Conferido por</div>
+          <div>Data</div></div>
+        </body></html>`);
+      w.document.close();
+      w.focus();
+      setTimeout(() => w.print(), 250);
+    };
     return /*#__PURE__*/React.createElement("div", {
       className: "panel",
       style: {
@@ -12766,7 +16420,12 @@ function OrdemDetalhe({
         fontWeight: 600,
         marginBottom: 6
       }
-    }, mat.falta ? '⛔ ' : mat.indefinido ? '⚠ ' : '✓ ', mat.resumo), /*#__PURE__*/React.createElement("table", null, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("th", null, "Material"), /*#__PURE__*/React.createElement("th", {
+    }, mat.falta ? '⛔ ' : mat.indefinido ? '⚠ ' : '✓ ', mat.resumo,
+      /*#__PURE__*/React.createElement("button", {
+        className: "btn ghost sm no-print",
+        style: { marginLeft: 10 },
+        onClick: imprimir
+      }, "Imprimir lista")), /*#__PURE__*/React.createElement("table", null, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("th", null, "Material"), /*#__PURE__*/React.createElement("th", {
       className: "num"
     }, "Por peça"), /*#__PURE__*/React.createElement("th", {
       className: "num"
@@ -12818,6 +16477,58 @@ function OrdemDetalhe({
         marginTop: 6
       }
     }, "✓ material reservado em ", fmtDate(String(ordem.reservadoEm || '').slice(0, 10))));
+  })(), (() => {
+    /* A ordem entra e o plano nasce: o sistema usa o tempo do roteiro,
+       vê quem está livre e habilitado, e encadeia as etapas. É ponto de
+       partida — o ajuste fino é na Programação. */
+    if (!podeEditar || ordem.situacao === 'concluida') return null;
+    const jaTem = (db.programacoes || []).some(p =>
+      p.status !== 'encerrada' &&
+      (p.itens || []).some(x => x.ordemId === ordem.id));
+    return /*#__PURE__*/React.createElement("div", {
+      className: "panel no-print",
+      style: { borderColor: jaTem ? 'var(--line)' : 'var(--thread)' }
+    },
+      /*#__PURE__*/React.createElement("div", { className: "row-actions" },
+        /*#__PURE__*/React.createElement("div", { style: { flex: 1 } },
+          /*#__PURE__*/React.createElement("div", { className: "small",
+            style: { fontWeight: 600 } },
+            jaTem ? "Esta ordem já está programada."
+                  : "Esta ordem ainda não foi programada."),
+          /*#__PURE__*/React.createElement("div", { className: "small muted" },
+            jaTem
+              ? "Veja e ajuste em Produção → Programação. Programar de novo "
+                + "acrescenta o que faltar, sem mexer no que já existe."
+              : "O sistema monta o plano pelo tempo do roteiro, com quem "
+                + "está livre e habilitado, encadeando as etapas.")),
+        /*#__PURE__*/React.createElement(Field, { label: "Começar em" },
+          /*#__PURE__*/React.createElement("input", {
+            type: "date", value: inicio,
+            onChange: e => setInicio(e.target.value)
+          })),
+        /*#__PURE__*/React.createElement("button", {
+          className: jaTem ? "btn ghost" : "btn accent",
+          onClick: () => {
+            let msg = null;
+            update(d => {
+              const r = programarOrdem(d, ordem.id, { inicio }, usuario);
+              if (r.erro) { msg = r.erro; return d; }
+              const partes = [];
+              partes.push(`${r.itens.length} operação(ões) programada(s), `
+                + `de ${fmtDate(r.primeiroDia)} a ${fmtDate(r.ultimoDia)}.`);
+              if (r.cabeNaEntrega === false)
+                partes.push(`\nATENÇÃO: termina depois da entrega `
+                  + `(${fmtDate(ordem.entrega)}). Ajuste a equipe ou o prazo.`);
+              if (r.avisos.length)
+                partes.push('\n\n' + r.avisos.join('\n'));
+              partes.push('\n\nO plano é um ponto de partida: ajuste em '
+                + 'Produção → Programação antes de publicar.');
+              msg = partes.join('');
+              return d;
+            });
+            if (msg) alert(msg);
+          }
+        }, jaTem ? "Programar novamente" : "Programar produção")));
   })(), /*#__PURE__*/React.createElement("div", {
     className: "kpis"
   }, /*#__PURE__*/React.createElement("div", {
@@ -12974,246 +16685,7 @@ function OrdemDetalhe({
       display: 'none'
     },
     onChange: anexarNaOrdem
-  })))), /*#__PURE__*/React.createElement("h3", null, "Etapas e colaboradores"), /*#__PURE__*/React.createElement("div", {
-    className: "panel no-print"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "grid3"
-  }, /*#__PURE__*/React.createElement(Field, {
-    label: "Carga do dia"
-  }, /*#__PURE__*/React.createElement("input", {
-    type: "date",
-    value: inicio,
-    onChange: e => setInicio(e.target.value)
-  })), /*#__PURE__*/React.createElement("div", {
-    style: {
-      gridColumn: 'span 2',
-      paddingTop: 22
-    },
-    className: "small muted"
-  }, "O tempo livre nos chips é o deste dia, considerando tudo que já está programado na fábrica — não só esta ordem."))), /*#__PURE__*/React.createElement("div", {
-    className: "small muted",
-    style: {
-      marginBottom: 8
-    }
-  }, "Clique nos nomes para designar. Cada chip mostra quanto a pessoa ainda tem livre no dia. Sem ninguém marcado, a etapa se divide entre todo o setor; com vários marcados, eles dividem o trabalho entre si — e dá para trazer gente de outro setor pelo seletor abaixo dos nomes. A coluna Modo diz se a etapa é feita ", /*#__PURE__*/React.createElement("strong", null, "por pessoa"), " (cada uma faz a sua peça) ou ", /*#__PURE__*/React.createElement("strong", null, "por equipe"), " (todas na mesma peça)."), /*#__PURE__*/React.createElement("div", {
-    className: "panel",
-    style: {
-      padding: 0,
-      overflowX: 'auto'
-    }
-  }, /*#__PURE__*/React.createElement("table", null, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("th", {
-    style: {
-      width: 28
-    }
-  }, "#"), /*#__PURE__*/React.createElement("th", null, "Etapa"), /*#__PURE__*/React.createElement("th", null, "Departamento"), /*#__PURE__*/React.createElement("th", {
-    style: {
-      minWidth: 190
-    }
-  }, "Colaboradores"), /*#__PURE__*/React.createElement("th", {
-    style: {
-      minWidth: 140
-    }
-  }, "Equipamento"), /*#__PURE__*/React.createElement("th", {
-    style: {
-      minWidth: 120
-    }
-  }, "Material"), /*#__PURE__*/React.createElement("th", {
-    className: "num"
-  }, "Minutos"), /*#__PURE__*/React.createElement("th", {
-    className: "num"
-  }, "Feita"))), /*#__PURE__*/React.createElement("tbody", null, (ordem.tarefas || []).slice().sort((a, b) => num(a.ordem) - num(b.ordem)).map((t, i) => {
-    const etapa = (db.etapas || []).find(e => e.id === t.etapaId);
-    const depto = (db.departamentos || []).find(d => d.id === t.departamentoId);
-    const maquinas = equipamentosDoDepartamento(t.departamentoId, db);
-    const eq = (db.equipamentos || []).find(x => x.id === t.equipamentoId);
-    const parado = eq && eq.situacao !== 'operando';
-    return /*#__PURE__*/React.createElement("tr", {
-      key: t.id,
-      className: t.concluida ? 'linha-inativa' : ''
-    }, /*#__PURE__*/React.createElement("td", {
-      className: "num small"
-    }, i + 1), /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement("strong", null, etapa ? etapa.nome : 'etapa removida'), /*#__PURE__*/React.createElement("div", {
-      className: "small muted"
-    }, modoEtapa(t.modo).nome, t.modo === 'equipe' && num(t.pessoas) > 1 && ` · ${num(t.pessoas)} pessoas na mesma peça`), riscosDeProducao(t).length > 0 && /*#__PURE__*/React.createElement("div", {
-      className: "anexos",
-      style: {
-        marginTop: 4
-      }
-    }, /*#__PURE__*/React.createElement("span", {
-      className: "rot-risco"
-    }, "risco de produção"), riscosDeProducao(t).map(x => /*#__PURE__*/React.createElement("a", {
-      key: x.id,
-      className: "anexo-chip risco-prod",
-      href: x.url,
-      target: "_blank",
-      rel: "noreferrer",
-      download: x.nome
-    }, (x.tipo || '').startsWith('image/') ? /*#__PURE__*/React.createElement("img", {
-      src: x.url,
-      alt: x.nome
-    }) : /*#__PURE__*/React.createElement("span", {
-      className: "anexo-ic"
-    }, "📐"), /*#__PURE__*/React.createElement("span", {
-      className: "small"
-    }, x.nome)))), (t.anexos || []).length > 0 && /*#__PURE__*/React.createElement("div", {
-      className: "anexos",
-      style: {
-        marginTop: 4
-      }
-    }, (t.anexos || []).map(x => /*#__PURE__*/React.createElement("a", {
-      key: x.id,
-      className: "anexo-chip",
-      href: x.url,
-      target: "_blank",
-      rel: "noreferrer",
-      download: x.nome
-    }, (x.tipo || '').startsWith('image/') ? /*#__PURE__*/React.createElement("img", {
-      src: x.url,
-      alt: x.nome
-    }) : /*#__PURE__*/React.createElement("span", {
-      className: "anexo-ic"
-    }, "📄"), /*#__PURE__*/React.createElement("span", {
-      className: "small"
-    }, x.nome))))), /*#__PURE__*/React.createElement("td", {
-      className: "small muted"
-    }, depto ? depto.nome : '—'), /*#__PURE__*/React.createElement("td", null, (() => {
-      const ids = designadosDaTarefa(t);
-      const alternar = cid => {
-        const novo = ids.includes(cid) ? ids.filter(x => x !== cid) : [...ids, cid];
-        setT(t.id, {
-          colaboradorIds: novo,
-          colaboradorId: ''
-        });
-      };
-      const disp = equipeDisponivel(db, t.departamentoId, {
-        inicio
-      });
-      const marcados = ids.map(id => [...disp.doSetor, ...disp.deOutrosSetores].find(x => x.colaborador.id === id)).filter(Boolean);
-      const fora = marcados.filter(x => x.deFora);
-      const chip = x => {
-        const on = ids.includes(x.colaborador.id);
-        const c = x.carga;
-        const rotulo = c.semProgramacao ? 'dia livre' : `${duracao(c.livre)} livre`;
-        return /*#__PURE__*/React.createElement("button", {
-          key: x.colaborador.id,
-          type: "button",
-          disabled: !podeEditar,
-          className: "chip-colab" + (on ? ' on' : '') + (c.livre <= 0.01 ? ' lotado' : ''),
-          title: c.semProgramacao ? 'Sem nada programado no dia' : `${duracao(c.ocupado)} comprometidos` + (c.entrada ? ` · ${c.entrada} às ${c.saida}` : ''),
-          onClick: () => alternar(x.colaborador.id)
-        }, /*#__PURE__*/React.createElement("span", {
-          className: "nome"
-        }, x.colaborador.nome), /*#__PURE__*/React.createElement("span", {
-          className: "carga"
-        }, rotulo));
-      };
-      if (disp.doSetor.length === 0 && marcados.length === 0) return /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
-        className: "small",
-        style: {
-          color: 'var(--warn)',
-          marginBottom: 4
-        }
-      }, "ninguém neste setor"), podeEditar && /*#__PURE__*/React.createElement("select", {
-        value: "",
-        style: {
-          margin: 0
-        },
-        onChange: e => e.target.value && alternar(e.target.value)
-      }, /*#__PURE__*/React.createElement("option", {
-        value: ""
-      }, "— trazer de outro setor —"), disp.deOutrosSetores.map(x => /*#__PURE__*/React.createElement("option", {
-        key: x.colaborador.id,
-        value: x.colaborador.id
-      }, x.colaborador.nome, x.departamento ? ` · ${x.departamento.nome}` : '', ' · ', duracao(x.carga.livre), " livre"))));
-      return /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
-        className: "quem-faz"
-      }, disp.doSetor.map(chip), fora.map(chip)), /*#__PURE__*/React.createElement("div", {
-        className: "small muted"
-      }, ids.length === 0 ? `todo o setor (${disp.doSetor.length} pessoa(s))` : ids.length === 1 ? 'uma pessoa' : `${ids.length} pessoas em equipe`, fora.length > 0 && ` · ${fora.length} de outro setor`, ids.length > 0 && podeEditar && /*#__PURE__*/React.createElement("button", {
-        className: "link-btn",
-        style: {
-          marginLeft: 6
-        },
-        onClick: () => setT(t.id, {
-          colaboradorIds: [],
-          colaboradorId: ''
-        })
-      }, "liberar")), podeEditar && disp.deOutrosSetores.length > 0 && /*#__PURE__*/React.createElement("select", {
-        value: "",
-        style: {
-          margin: '4px 0 0'
-        },
-        onChange: e => e.target.value && alternar(e.target.value)
-      }, /*#__PURE__*/React.createElement("option", {
-        value: ""
-      }, "+ colaborador de outro setor"), disp.deOutrosSetores.filter(x => !ids.includes(x.colaborador.id)).map(x => /*#__PURE__*/React.createElement("option", {
-        key: x.colaborador.id,
-        value: x.colaborador.id
-      }, x.colaborador.nome, x.departamento ? ` · ${x.departamento.nome}` : '', ' · ', duracao(x.carga.livre), " livre"))));
-    })()), /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement("select", {
-      value: t.equipamentoId || '',
-      disabled: !podeEditar,
-      style: {
-        margin: 0
-      },
-      onChange: e => setT(t.id, {
-        equipamentoId: e.target.value
-      })
-    }, /*#__PURE__*/React.createElement("option", {
-      value: ""
-    }, "— sem equipamento —"), maquinas.map(x => /*#__PURE__*/React.createElement("option", {
-      key: x.id,
-      value: x.id
-    }, x.nome))), parado && /*#__PURE__*/React.createElement("div", {
-      className: "small",
-      style: {
-        color: 'var(--bad)'
-      }
-    }, situacaoEquip(eq.situacao).nome)), /*#__PURE__*/React.createElement("td", {
-      className: "small"
-    }, (() => {
-      /* o que a bancada precisa receber para esta etapa */
-      const mats = prod ? materiaisDaEtapa(t, prod, db) : [];
-      if (mats.length === 0) return /*#__PURE__*/React.createElement("span", {
-        className: "muted"
-      }, "—");
-      return mats.map(m => /*#__PURE__*/React.createElement("div", {
-        key: m.tecidoId
-      }, /*#__PURE__*/React.createElement("strong", null, m.nome), /*#__PURE__*/React.createElement("div", {
-        className: "muted"
-      }, Number(m.consumo * num(ordem.quantidade)).toFixed(3), " ", m.unidade)));
-    })()), /*#__PURE__*/React.createElement("td", {
-      className: "num"
-    }, duracao(t.minutosTotais)), /*#__PURE__*/React.createElement("td", {
-      className: "num"
-    }, /*#__PURE__*/React.createElement("input", {
-      type: "checkbox",
-      checked: !!t.concluida,
-      disabled: !podeEditar,
-      style: {
-        width: 'auto'
-      },
-      onChange: e => setT(t.id, {
-        concluida: e.target.checked
-      })
-    })));
-  })))), prog.semRecurso && prog.semRecurso.length > 0 && /*#__PURE__*/React.createElement("div", {
-    className: "panel",
-    style: {
-      borderColor: 'var(--warn)',
-      background: 'var(--warn-bg)'
-    }
-  }, prog.semRecurso.map((x, i) => {
-    const et = (db.etapas || []).find(e => e.id === x.tarefa.etapaId);
-    return /*#__PURE__*/React.createElement("div", {
-      key: i,
-      className: "small",
-      style: {
-        color: 'var(--warn)',
-        fontWeight: 600
-      }
-    }, "⚠ ", et ? et.nome : 'Etapa', ": ", x.motivo, " — não entra no cronograma.");
-  })));
+  })))));
 }
 
 /* ---------------- Avaliação do colaborador ---------------- */
@@ -13573,6 +17045,7 @@ function FimDeJornada({
 }) {
   const [data, setData] = useState(todayISO());
   const [modal, setModal] = useState(null);
+  const [concluir, setConcluir] = useState(null);
   const [fColab, setFColab] = useState('');
   const prog = agendarFabrica(db, {
     inicio: data
@@ -13639,7 +17112,58 @@ function FimDeJornada({
     style: {
       marginBottom: 10
     }
-  }, "Ao fim do dia, cada pessoa fecha o que fez: peças boas, defeitos e o motivo de qualquer atraso. O programado aparece ao lado para comparar."), /*#__PURE__*/React.createElement("div", {
+  }, "Ao fim do dia, cada pessoa fecha o que fez: peças boas, defeitos e o motivo de qualquer atraso. O programado aparece ao lado para comparar."),
+
+  /* As operações que foram iniciadas no cronograma e ainda não
+     fecharam. É aqui que a produção se conclui. */
+  (() => {
+    const c = cronogramaDoDia(db, data);
+    if (c.vazio) return null;
+    const emCurso = c.itens.filter(x => x.situacao === 'iniciada');
+    if (emCurso.length === 0) return null;
+    return /*#__PURE__*/React.createElement("div", {
+      className: "panel", style: { borderColor: 'var(--thread)' }
+    },
+      /*#__PURE__*/React.createElement("h3", { style: { marginTop: 0 } },
+        `Em produção agora (${emCurso.length})`),
+      /*#__PURE__*/React.createElement("table", null,
+        /*#__PURE__*/React.createElement("thead", null,
+          /*#__PURE__*/React.createElement("tr", null,
+            /*#__PURE__*/React.createElement("th", null, "Operação"),
+            /*#__PURE__*/React.createElement("th", null, "Quem"),
+            /*#__PURE__*/React.createElement("th", { className: "num" }, "Desde"),
+            /*#__PURE__*/React.createElement("th", { className: "no-print" }, ""))),
+        /*#__PURE__*/React.createElement("tbody", null,
+          emCurso.map(it => /*#__PURE__*/React.createElement("tr", { key: it.id },
+            /*#__PURE__*/React.createElement("td", null,
+              /*#__PURE__*/React.createElement("strong", null, it.etapa),
+              /*#__PURE__*/React.createElement("div", { className: "small muted" },
+                (it.ordemCodigo || '') + " · " + it.quantidadePrevista + " peça(s)")),
+            /*#__PURE__*/React.createElement("td", { className: "small" },
+              (it.pessoas || []).map(id => {
+                const p = (db.colaboradores || []).find(x => x.id === id);
+                return p ? p.nome.split(' ')[0] : '?';
+              }).join(', ') || '—'),
+            /*#__PURE__*/React.createElement("td", { className: "num small" },
+              fmtHora(it.iniciadoEm),
+              it.excesso > 0
+                ? /*#__PURE__*/React.createElement("div", {
+                    style: { color: 'var(--warn)', fontWeight: 600 }
+                  }, "+" + duracao(it.excesso))
+                : null),
+            podeEditar
+              ? /*#__PURE__*/React.createElement("td", { className: "no-print" },
+                  /*#__PURE__*/React.createElement("button", {
+                    className: "btn accent sm",
+                    onClick: () => setConcluir({ item: it, progId: c.programacao.id })
+                  }, "Concluir"))
+              : null)))),
+      /*#__PURE__*/React.createElement("div", { className: "small muted" },
+        "O tempo vem do relógio: da hora em que a operação foi iniciada no ",
+        "cronograma até agora."));
+  })(),
+
+  /*#__PURE__*/React.createElement("div", {
     className: "panel no-print"
   }, /*#__PURE__*/React.createElement("div", {
     className: "grid3"
@@ -13792,7 +17316,22 @@ function FimDeJornada({
     db: db,
     onClose: () => setModal(null),
     onSave: salvar
-  }));
+  }),
+
+    concluir && /*#__PURE__*/React.createElement(ConcluirEtapaModal, {
+      db, item: concluir.item, usuario,
+      onClose: () => setConcluir(null),
+      onConfirmar: dados => {
+        let erro = null;
+        update(d => {
+          const r = concluirEtapa(d, concluir.progId, concluir.item.id,
+            dados, usuario);
+          erro = r.erro || null;
+          return d;
+        });
+        if (erro) alert(erro); else setConcluir(null);
+      }
+    }));
 }
 function ApontamentoModal({
   dados,
@@ -13820,8 +17359,41 @@ function ApontamentoModal({
     ...p,
     [k]: v
   }));
-  const previsto = num(f.minutosPrevistos),
-    gasto = num(f.minutosGastos);
+  /* O previsto sai do roteiro: minutos por peça vezes o que foi
+     produzido. Não é campo de digitação — é o que a engenharia definiu,
+     e mexer nele à mão faria a comparação com o real perder o sentido. */
+  const previstoDoRoteiro = (() => {
+    const ordem = (db.ordens || []).find(o => o.id === f.ordemId);
+    if (!ordem) return null;
+    const produto = (db.produtos || []).find(p => p.id === ordem.produtoId);
+    if (!produto) return null;
+    const tarefa = (ordem.tarefas || []).find(t => t.id === f.tarefaId);
+    const etapaId = tarefa ? tarefa.etapaId : null;
+    if (!etapaId) return null;
+    const r = resumoProcesso(produto, db);
+    const passo = (r.passos || []).find(x => x.passo.etapaId === etapaId);
+    if (!passo) return null;
+    const porPeca = num(passo.minutosHomem) /
+      Math.max(1, num(passo.passo.pessoas) || 1);
+    const pecas = num(f.pecasBoas) + num(f.pecasDefeito);
+    return {
+      porPeca,
+      minutos: pecas > 0 ? Number((porPeca * pecas).toFixed(1)) : 0,
+      pecas,
+    };
+  })();
+
+  /* O gasto vem do relógio: início e fim reais. Digitar duração
+     enquanto se marca horário é pedir para os dois discordarem. */
+  const gastoDoRelogio = (f.inicioReal && f.fimReal)
+    ? Math.max(0, Math.round(
+        (new Date(f.fimReal) - new Date(f.inicioReal)) / 60000))
+    : null;
+
+  const previsto = previstoDoRoteiro ? previstoDoRoteiro.minutos
+    : num(f.minutosPrevistos);
+  const gasto = gastoDoRelogio !== null ? gastoDoRelogio
+    : num(f.minutosGastos);
   const atraso = gasto - previsto;
   const boas = num(f.pecasBoas),
     def = num(f.pecasDefeito);
@@ -13871,81 +17443,88 @@ function ApontamentoModal({
   }, /*#__PURE__*/React.createElement("input", {
     value: f.etapa || '',
     onChange: e => set('etapa', e.target.value)
-  }))), /*#__PURE__*/React.createElement("h3", null, "Tempo"), /*#__PURE__*/React.createElement("div", {
+  }))), /*#__PURE__*/React.createElement("h3", null, "Quando aconteceu"),
+  /*#__PURE__*/React.createElement("div", { className: "grid2" },
+    /*#__PURE__*/React.createElement(Field, { label: "Início real" },
+      /*#__PURE__*/React.createElement("input", {
+        type: "datetime-local", step: "1",
+        value: f.inicioReal || '',
+        onChange: e => {
+          const ini = e.target.value;
+          /* marcou os dois pontas? o tempo é a diferença — não faz
+             sentido digitar duração e horário e deixar os dois brigarem */
+          const min = (ini && f.fimReal)
+            ? Math.max(0, Math.round(
+                (new Date(f.fimReal) - new Date(ini)) / 60000))
+            : f.minutosGastos;
+          setF(p => ({ ...p, inicioReal: ini,
+            minutosGastos: min, gastoTexto: undefined }));
+        }
+      })),
+    /*#__PURE__*/React.createElement(Field, { label: "Fim real" },
+      /*#__PURE__*/React.createElement("input", {
+        type: "datetime-local", step: "1",
+        value: f.fimReal || '',
+        onChange: e => {
+          const fim = e.target.value;
+          const min = (f.inicioReal && fim)
+            ? Math.max(0, Math.round(
+                (new Date(fim) - new Date(f.inicioReal)) / 60000))
+            : f.minutosGastos;
+          setF(p => ({ ...p, fimReal: fim,
+            minutosGastos: min, gastoTexto: undefined }));
+        }
+      }))),
+  (() => {
+    if (!f.inicioReal || !f.fimReal) return /*#__PURE__*/React.createElement("div", {
+      className: "small muted", style: { marginTop: -6, marginBottom: 10 }
+    }, "Marcando os dois horários, o tempo gasto é calculado pela diferença. ",
+      "Sem eles, informe o tempo abaixo.");
+    const min = Math.round(
+      (new Date(f.fimReal) - new Date(f.inicioReal)) / 60000);
+    if (min < 0) return /*#__PURE__*/React.createElement("div", {
+      className: "small", style: { color: 'var(--danger)', fontWeight: 600,
+        marginTop: -6, marginBottom: 10 }
+    }, "O fim está antes do início.");
+    return /*#__PURE__*/React.createElement("div", {
+      className: "small muted", style: { marginTop: -6, marginBottom: 10 }
+    }, `Das ${fmtHora(f.inicioReal)} às ${fmtHora(f.fimReal)} — `,
+      /*#__PURE__*/React.createElement("strong", null, duracao(min)),
+      ". O tempo gasto abaixo veio dessa conta.");
+  })(),
+  /*#__PURE__*/React.createElement("h3", null, "Tempo"),
+  /*#__PURE__*/React.createElement("div", {
     className: "grid2"
-  }, /*#__PURE__*/React.createElement(Field, {
-    label: "Tempo previsto"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "campo-tempo largo"
-  }, /*#__PURE__*/React.createElement("input", {
-    value: f.previstoTexto !== undefined ? f.previstoTexto : tempoNaUnidade(f.minutosPrevistos, unPrevisto),
-    inputMode: "decimal",
-    placeholder: "0",
-    onChange: e => setF(p => ({
-      ...p,
-      previstoTexto: e.target.value,
-      minutosPrevistos: tempoParaMinutos(e.target.value, unPrevisto)
-    }))
-  }), /*#__PURE__*/React.createElement("div", {
-    className: "unidades-tempo"
-  }, UNIDADES_TEMPO.map(u => /*#__PURE__*/React.createElement("button", {
-    key: u.id,
-    type: "button",
-    className: "un-btn" + (unPrevisto === u.id ? ' on' : ''),
-    onClick: () => {
-      const naTela = f.previstoTexto !== undefined ? f.previstoTexto : tempoNaUnidade(f.minutosPrevistos, unPrevisto);
-      setUnPrevisto(u.id);
-      setF(p => ({
-        ...p,
-        previstoTexto: naTela,
-        minutosPrevistos: tempoParaMinutos(naTela, u.id)
-      }));
-    }
-  }, u.curto)), previsto > 0 && /*#__PURE__*/React.createElement("span", {
-    className: "small muted",
-    style: {
-      marginLeft: 6
-    }
-  }, duracao(previsto))))), /*#__PURE__*/React.createElement(Field, {
-    label: "Tempo gasto *"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "campo-tempo largo"
-  }, /*#__PURE__*/React.createElement("input", {
-    value: f.gastoTexto !== undefined ? f.gastoTexto : tempoNaUnidade(f.minutosGastos, unGasto),
-    inputMode: "decimal",
-    placeholder: "0",
-    onChange: e => setF(p => ({
-      ...p,
-      gastoTexto: e.target.value,
-      minutosGastos: tempoParaMinutos(e.target.value, unGasto)
-    }))
-  }), /*#__PURE__*/React.createElement("div", {
-    className: "unidades-tempo"
-  }, UNIDADES_TEMPO.map(u => /*#__PURE__*/React.createElement("button", {
-    key: u.id,
-    type: "button",
-    className: "un-btn" + (unGasto === u.id ? ' on' : ''),
-    onClick: () => {
-      const naTela = f.gastoTexto !== undefined ? f.gastoTexto : tempoNaUnidade(f.minutosGastos, unGasto);
-      setUnGasto(u.id);
-      setF(p => ({
-        ...p,
-        gastoTexto: naTela,
-        minutosGastos: tempoParaMinutos(naTela, u.id)
-      }));
-    }
-  }, u.curto)), gasto > 0 && /*#__PURE__*/React.createElement("span", {
-    className: "small muted",
-    style: {
-      marginLeft: 6
-    }
-  }, duracao(gasto)))))), /*#__PURE__*/React.createElement("div", {
-    className: "small muted",
-    style: {
-      marginTop: -2,
-      marginBottom: 10
-    }
-  }, "Digite o número e confirme a unidade ao lado. Trocar a unidade mantém o número: ", /*#__PURE__*/React.createElement("strong", null, "15"), " em ", /*#__PURE__*/React.createElement("strong", null, "min"), " vira quinze minutos, em ", /*#__PURE__*/React.createElement("strong", null, "s"), " vira quinze segundos."), previsto > 0 && gasto > 0 && /*#__PURE__*/React.createElement("div", {
+  },
+    /*#__PURE__*/React.createElement(Field, {
+      label: "Tempo previsto"
+    },
+      /*#__PURE__*/React.createElement("div", {
+        className: "campo-leitura" + (previsto > 0 ? "" : " vazio")
+      }, previsto > 0 ? duracao(previsto) : "—"),
+      /*#__PURE__*/React.createElement("div", {
+        className: "small muted"
+      }, previstoDoRoteiro
+        ? (previstoDoRoteiro.pecas > 0
+            ? duracao(previstoDoRoteiro.porPeca) + " por peça × "
+              + previstoDoRoteiro.pecas + " — vem do roteiro"
+            : "informe as peças abaixo para calcular")
+        : "esta operação não tem tempo no roteiro")
+    ),
+    /*#__PURE__*/React.createElement(Field, {
+      label: "Tempo gasto"
+    },
+      /*#__PURE__*/React.createElement("div", {
+        className: "campo-leitura" + (gasto > 0 ? "" : " vazio")
+      }, gasto > 0 ? duracao(gasto) : "—"),
+      /*#__PURE__*/React.createElement("div", {
+        className: "small muted"
+      }, gastoDoRelogio !== null
+        ? "do início ao fim marcados acima"
+        : "marque o início e o fim reais acima")
+    )
+  ),
+  /*#__PURE__*/React.createElement("div", {
     className: "painel-meta"
   }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
     className: "k"
@@ -14063,8 +17642,15 @@ function ApontamentoModal({
     onClick: onClose
   }, "Cancelar"), /*#__PURE__*/React.createElement("button", {
     className: "btn accent",
-    onClick: () => onSave(f),
-    disabled: !f.colaboradorId || !(num(f.minutosGastos) > 0)
+    /* o que vai para o banco é o calculado, não o que sobrou de um
+       campo antigo: previsto do roteiro, gasto do relógio */
+    onClick: () => onSave({
+      ...f,
+      minutosPrevistos: previsto,
+      minutosGastos: gasto
+    }),
+    disabled: !f.colaboradorId || !(gasto > 0) ||
+      !(num(f.pecasBoas) + num(f.pecasDefeito) > 0)
   }, "Salvar")));
 }
 
@@ -14260,549 +17846,6 @@ function RelatorioRecurso({
   }), rotulo)));
 }
 
-/* ---------------- Cronograma da fábrica ---------------- */
-function CronogramaFabrica({
-  db,
-  update,
-  usuario,
-  podeEditar
-}) {
-  const [inicio, setInicio] = useState(todayISO());
-  const [horaExtra, setHoraExtra] = useState(false);
-  const [sabado, setSabado] = useState(false);
-  const [visao, setVisao] = useState('dias');
-  const [de, setDe] = useState('');
-  const [ate, setAte] = useState('');
-  const [fDep, setFDep] = useState('');
-  const [fColab, setFColab] = useState('');
-  const [fSit, setFSit] = useState('');
-  const [aprovando, setAprovando] = useState(null);
-  const [quemAutoriza, setQuemAutoriza] = useState('');
-  const autorizacao = (db.parametrosMaoDeObra || {}).autorizacao || {};
-  const usaExtra = horaExtra && !!autorizacao.horaExtra;
-  const usaSabado = sabado && !!autorizacao.sabado;
-  const filtros = {
-    inicio,
-    de,
-    ate,
-    departamentoId: fDep,
-    colaboradorId: fColab,
-    situacoes: fSit ? [fSit] : null,
-    incluirConcluidas: fSit === 'concluida'
-  };
-  const prog = agendarFabrica(db, {
-    ...filtros,
-    horaExtra: usaExtra,
-    sabado: usaSabado
-  });
-  const analise = analisarNecessidadeExtra(db, filtros);
-  const j = jornadaDe(db);
-  function autorizar(tipo, quem) {
-    if (!String(quem || '').trim()) return alert('Informe quem está autorizando.');
-    update(d => {
-      const par = d.parametrosMaoDeObra || {};
-      d.parametrosMaoDeObra = {
-        ...par,
-        autorizacao: {
-          ...(par.autorizacao || {}),
-          [tipo]: {
-            quem: quem.trim(),
-            quando: agoraISO(),
-            por: usuario ? usuario.nome : ''
-          }
-        }
-      };
-      registrarLog(d, usuario, tipo === 'horaExtra' ? 'Autorizou hora extra na fábrica' : 'Autorizou sábado na fábrica', `aprovado por ${quem.trim()}`);
-      return d;
-    });
-    if (tipo === 'horaExtra') setHoraExtra(true);else setSabado(true);
-    setAprovando(null);
-    setQuemAutoriza('');
-  }
-  function revogar(tipo) {
-    if (!confirm('Revogar esta autorização?')) return;
-    update(d => {
-      const par = d.parametrosMaoDeObra || {};
-      const a2 = {
-        ...(par.autorizacao || {})
-      };
-      delete a2[tipo];
-      d.parametrosMaoDeObra = {
-        ...par,
-        autorizacao: a2
-      };
-      return d;
-    });
-    if (tipo === 'horaExtra') setHoraExtra(false);else setSabado(false);
-  }
-  if (prog.vazio) return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(Empty, {
-    text: prog.motivo
-  }), /*#__PURE__*/React.createElement("div", {
-    className: "small muted"
-  }, "As ordens aparecem aqui assim que forem abertas em Produção → Ordens de produção."));
-
-  /* carga por recurso, com as etapas de cada dia — é o que a pessoa
-     leva impresso para a bancada */
-  const cargaPessoa = {};
-  const cargaMaquina = {};
-  prog.dias.forEach(d => {
-    d.porPessoa.forEach(p => {
-      if (!cargaPessoa[p.id]) cargaPessoa[p.id] = {
-        id: p.id,
-        nome: p.nome,
-        minutos: 0,
-        dias: [],
-        setores: new Set()
-      };
-      cargaPessoa[p.id].minutos += p.usado;
-      /* as tarefas em que esta pessoa entrou naquele dia */
-      const tarefas = d.tarefas.filter(x => x.pessoas.some(q => q.nome === p.nome)).map(x => ({
-        ...x,
-        meusMinutos: (x.pessoas.find(q => q.nome === p.nome) || {}).minutos || 0
-      }));
-      tarefas.forEach(x => cargaPessoa[p.id].setores.add(x.departamento));
-      cargaPessoa[p.id].dias.push({
-        iso: d.iso,
-        data: d.data,
-        sabado: d.sabado,
-        usado: p.usado,
-        capacidade: p.capacidade,
-        ocupacao: p.ocupacao,
-        tarefas
-      });
-    });
-    d.porMaquina.forEach(m => {
-      if (!cargaMaquina[m.id]) cargaMaquina[m.id] = {
-        id: m.id,
-        nome: m.nome,
-        minutos: 0,
-        dias: [],
-        setores: new Set()
-      };
-      cargaMaquina[m.id].minutos += m.usado;
-      const tarefas = d.tarefas.filter(x => x.equipamento === m.nome);
-      tarefas.forEach(x => cargaMaquina[m.id].setores.add(x.departamento));
-      cargaMaquina[m.id].dias.push({
-        iso: d.iso,
-        data: d.data,
-        sabado: d.sabado,
-        usado: m.usado,
-        capacidade: m.capacidade,
-        ocupacao: m.ocupacao,
-        tarefas
-      });
-    });
-  });
-  const DIA_SEMANA = ['domingo', 'segunda', 'terça', 'quarta', 'quinta', 'sexta', 'sábado'];
-  return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
-    className: "small muted",
-    style: {
-      marginBottom: 10
-    }
-  }, "Todas as ordens abertas disputando as mesmas pessoas e máquinas. A ordem mais urgente ocupa primeiro; ninguém trabalha em dois lugares ao mesmo tempo."), /*#__PURE__*/React.createElement("div", {
-    className: "panel no-print"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "grid3"
-  }, /*#__PURE__*/React.createElement(Field, {
-    label: "Programar a partir de"
-  }, /*#__PURE__*/React.createElement("input", {
-    type: "date",
-    value: inicio,
-    onChange: e => setInicio(e.target.value)
-  })), /*#__PURE__*/React.createElement(Field, {
-    label: "Ver de"
-  }, /*#__PURE__*/React.createElement("input", {
-    type: "date",
-    value: de,
-    onChange: e => setDe(e.target.value)
-  })), /*#__PURE__*/React.createElement(Field, {
-    label: "Ver até"
-  }, /*#__PURE__*/React.createElement("input", {
-    type: "date",
-    value: ate,
-    onChange: e => setAte(e.target.value)
-  }))), /*#__PURE__*/React.createElement("div", {
-    className: "grid3"
-  }, /*#__PURE__*/React.createElement(Field, {
-    label: "Departamento"
-  }, /*#__PURE__*/React.createElement("select", {
-    value: fDep,
-    onChange: e => setFDep(e.target.value)
-  }, /*#__PURE__*/React.createElement("option", {
-    value: ""
-  }, "Todos"), (db.departamentos || []).map(d => /*#__PURE__*/React.createElement("option", {
-    key: d.id,
-    value: d.id
-  }, d.nome)))), /*#__PURE__*/React.createElement(Field, {
-    label: "Colaborador"
-  }, /*#__PURE__*/React.createElement("select", {
-    value: fColab,
-    onChange: e => setFColab(e.target.value)
-  }, /*#__PURE__*/React.createElement("option", {
-    value: ""
-  }, "Todos"), (db.colaboradores || []).filter(c => c.status !== 'Inativo').map(c => /*#__PURE__*/React.createElement("option", {
-    key: c.id,
-    value: c.id
-  }, c.nome)))), /*#__PURE__*/React.createElement(Field, {
-    label: "Situação da ordem"
-  }, /*#__PURE__*/React.createElement("select", {
-    value: fSit,
-    onChange: e => setFSit(e.target.value)
-  }, /*#__PURE__*/React.createElement("option", {
-    value: ""
-  }, "Abertas, liberadas e em produção"), SITUACOES_OP.map(x => /*#__PURE__*/React.createElement("option", {
-    key: x.id,
-    value: x.id
-  }, x.nome))))), /*#__PURE__*/React.createElement("div", {
-    className: "row-actions"
-  }, /*#__PURE__*/React.createElement("span", {
-    className: "small muted",
-    style: {
-      flex: 1,
-      minWidth: 220
-    }
-  }, "Jornada ", j.inicio, " às ", j.fim, " · ", /*#__PURE__*/React.createElement("strong", null, j.produtivo, " min"), " por pessoa.", prog.recortado && ' O filtro recorta o que você vê; as datas continuam as da fábrica inteira.'), (de || ate || fDep || fColab || fSit) && /*#__PURE__*/React.createElement("button", {
-    className: "btn ghost sm",
-    onClick: () => {
-      setDe('');
-      setAte('');
-      setFDep('');
-      setFColab('');
-      setFSit('');
-    }
-  }, "Limpar filtros"))), !analise.vazio && analise.precisa && /*#__PURE__*/React.createElement("div", {
-    className: "panel",
-    style: {
-      borderColor: 'var(--warn)',
-      background: 'var(--warn-bg)'
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "small",
-    style: {
-      color: 'var(--warn)',
-      fontWeight: 600,
-      marginBottom: 6
-    }
-  }, "⚠ ", analise.motivo), analise.semSolucao ? /*#__PURE__*/React.createElement("div", {
-    className: "small muted"
-  }, "Nem a hora extra nem o sábado dão conta deste volume.") : /*#__PURE__*/React.createElement("div", {
-    className: "opcoes-extra"
-  }, analise.opcoes.map(o => {
-    const jaTem = !!autorizacao[o.id];
-    return /*#__PURE__*/React.createElement("div", {
-      key: o.id,
-      className: "opcao-extra"
-    }, /*#__PURE__*/React.createElement("div", {
-      style: {
-        flex: 1,
-        minWidth: 220
-      }
-    }, /*#__PURE__*/React.createElement("strong", {
-      className: "small"
-    }, o.titulo), /*#__PURE__*/React.createElement("div", {
-      className: "small muted"
-    }, o.detalhe), /*#__PURE__*/React.createElement("div", {
-      className: "small",
-      style: {
-        color: o.resolve ? 'var(--ok)' : 'var(--warn)',
-        fontWeight: 600
-      }
-    }, o.resolve ? '✓ resolve: todas as ordens voltam ao prazo' : `${o.ganho} — ainda restam ${o.restam} atrasada(s)`), /*#__PURE__*/React.createElement("div", {
-      className: "small muted"
-    }, "Exige aprovação de ", o.exige, ".")), jaTem ? /*#__PURE__*/React.createElement("div", {
-      style: {
-        textAlign: 'right'
-      }
-    }, /*#__PURE__*/React.createElement("div", {
-      className: "small",
-      style: {
-        color: 'var(--ok)',
-        fontWeight: 600
-      }
-    }, "✓ autorizado por ", autorizacao[o.id].quem), /*#__PURE__*/React.createElement("div", {
-      className: "row-actions",
-      style: {
-        justifyContent: 'flex-end',
-        marginTop: 5
-      }
-    }, /*#__PURE__*/React.createElement("label", {
-      className: "small linha-check"
-    }, /*#__PURE__*/React.createElement("input", {
-      type: "checkbox",
-      checked: o.id === 'horaExtra' ? horaExtra : sabado,
-      onChange: e => o.id === 'horaExtra' ? setHoraExtra(e.target.checked) : setSabado(e.target.checked)
-    }), "Aplicar"), podeEditar && /*#__PURE__*/React.createElement("button", {
-      className: "btn ghost sm",
-      onClick: () => revogar(o.id)
-    }, "Revogar"))) : podeEditar && /*#__PURE__*/React.createElement("button", {
-      className: "btn accent sm",
-      onClick: () => setAprovando(o.id)
-    }, "Solicitar aprovação"));
-  }))), !analise.vazio && !analise.precisa && /*#__PURE__*/React.createElement("div", {
-    className: "small muted",
-    style: {
-      marginBottom: 10
-    }
-  }, "✓ ", analise.motivo, " Hora extra e sábado não são necessários."), (autorizacao.horaExtra || autorizacao.sabado) && /*#__PURE__*/React.createElement("div", {
-    className: "panel",
-    style: {
-      borderColor: 'var(--ok)',
-      background: 'var(--ok-bg)'
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "small",
-    style: {
-      color: 'var(--ok)',
-      fontWeight: 600,
-      marginBottom: 5
-    }
-  }, "Autorizações em vigor"), ['horaExtra', 'sabado'].filter(k => autorizacao[k]).map(k => /*#__PURE__*/React.createElement("div", {
-    key: k,
-    className: "row-actions",
-    style: {
-      marginBottom: 4
-    }
-  }, /*#__PURE__*/React.createElement("span", {
-    className: "small",
-    style: {
-      flex: 1,
-      minWidth: 220
-    }
-  }, /*#__PURE__*/React.createElement("strong", null, k === 'horaExtra' ? `Hora extra até ${j.extensao.fim}` : `Sábado ${j.sabado.inicio} às ${j.sabado.fim}`), ' ', "— autorizado por ", autorizacao[k].quem, ' ', "em ", fmtDate(String(autorizacao[k].quando).slice(0, 10))), /*#__PURE__*/React.createElement("label", {
-    className: "small linha-check"
-  }, /*#__PURE__*/React.createElement("input", {
-    type: "checkbox",
-    checked: k === 'horaExtra' ? horaExtra : sabado,
-    onChange: e => k === 'horaExtra' ? setHoraExtra(e.target.checked) : setSabado(e.target.checked)
-  }), "Aplicar no cronograma"), podeEditar && /*#__PURE__*/React.createElement("button", {
-    className: "btn ghost sm",
-    onClick: () => revogar(k)
-  }, "Revogar")))), aprovando && /*#__PURE__*/React.createElement(Modal, {
-    title: aprovando === 'horaExtra' ? 'Autorizar hora extra' : 'Autorizar trabalho no sábado',
-    onClose: () => setAprovando(null)
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "small muted",
-    style: {
-      marginBottom: 12
-    }
-  }, aprovando === 'horaExtra' ? `A jornada se estende até ${j.extensao.fim}, somando ${j.minutosExtras} minutos por pessoa.` : `O sábado rende ${j.minutosSabado} minutos por pessoa, das ${j.sabado.inicio} às ${j.sabado.fim}.`, ' ', "A autorização fica registrada com o nome de quem aprovou e vale para toda a fábrica."), /*#__PURE__*/React.createElement(Field, {
-    label: "Autorizado por *"
-  }, (db.colaboradores || []).length > 0 ? /*#__PURE__*/React.createElement("select", {
-    value: quemAutoriza,
-    onChange: e => setQuemAutoriza(e.target.value)
-  }, /*#__PURE__*/React.createElement("option", {
-    value: ""
-  }, "— quem está autorizando —"), (db.colaboradores || []).filter(x => x.status !== 'Inativo').map(x => /*#__PURE__*/React.createElement("option", {
-    key: x.id,
-    value: x.nome
-  }, x.nome))) : /*#__PURE__*/React.createElement("input", {
-    value: quemAutoriza,
-    placeholder: "nome do superior",
-    onChange: e => setQuemAutoriza(e.target.value)
-  })), /*#__PURE__*/React.createElement("div", {
-    className: "modal-actions"
-  }, /*#__PURE__*/React.createElement("button", {
-    className: "btn ghost",
-    onClick: () => setAprovando(null)
-  }, "Cancelar"), /*#__PURE__*/React.createElement("button", {
-    className: "btn accent",
-    disabled: !String(quemAutoriza || '').trim(),
-    onClick: () => autorizar(aprovando, quemAutoriza)
-  }, "Autorizar"))), /*#__PURE__*/React.createElement("div", {
-    className: "kpis"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "kpi"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "lbl"
-  }, "Ordens"), /*#__PURE__*/React.createElement("div", {
-    className: "val"
-  }, prog.ordens.length)), /*#__PURE__*/React.createElement("div", {
-    className: "kpi"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "lbl"
-  }, "Trabalho total"), /*#__PURE__*/React.createElement("div", {
-    className: "val"
-  }, (prog.totalMinutos / 60).toFixed(1)), /*#__PURE__*/React.createElement("div", {
-    className: "sub"
-  }, "horas-homem")), /*#__PURE__*/React.createElement("div", {
-    className: "kpi accent"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "lbl"
-  }, "Última entrega"), /*#__PURE__*/React.createElement("div", {
-    className: "val",
-    style: {
-      fontSize: 17
-    }
-  }, fmtDate(prog.ultimoDia)), /*#__PURE__*/React.createElement("div", {
-    className: "sub"
-  }, prog.dias.length, " dia(s) de produção")), /*#__PURE__*/React.createElement("div", {
-    className: "kpi"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "lbl"
-  }, "Ordens atrasadas"), /*#__PURE__*/React.createElement("div", {
-    className: "val",
-    style: prog.atrasadas.length ? {
-      color: 'var(--bad)'
-    } : {}
-  }, prog.atrasadas.length))), prog.atrasadas.length > 0 && /*#__PURE__*/React.createElement("div", {
-    className: "panel",
-    style: {
-      borderColor: 'var(--bad)',
-      background: 'var(--bad-bg)'
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "small",
-    style: {
-      color: 'var(--bad)',
-      fontWeight: 600,
-      marginBottom: 5
-    }
-  }, "⛔ ", prog.atrasadas.length, " ordem(ns) não fecham no prazo:"), prog.atrasadas.map(x => /*#__PURE__*/React.createElement("div", {
-    key: x.ordem.id,
-    className: "small"
-  }, /*#__PURE__*/React.createElement("strong", null, x.ordem.codigo), " — entrega ", fmtDate(x.ordem.entrega), ",", ' ', "pronta em ", fmtDate(x.fim), " (", x.diasDeAtraso, " dia(s) depois)")), /*#__PURE__*/React.createElement("div", {
-    className: "small muted",
-    style: {
-      marginTop: 5
-    }
-  }, analise.precisa && !analise.semSolucao ? 'Veja acima as opções de hora extra ou sábado.' : 'Reveja prazos, prioridades ou o tamanho dos lotes.')), prog.semRecurso.length > 0 && /*#__PURE__*/React.createElement("div", {
-    className: "panel",
-    style: {
-      borderColor: 'var(--warn)',
-      background: 'var(--warn-bg)'
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "small",
-    style: {
-      color: 'var(--warn)',
-      fontWeight: 600
-    }
-  }, "⚠ ", prog.semRecurso.length, " etapa(s) ficaram de fora por falta de recurso:"), prog.semRecurso.slice(0, 6).map((x, i) => {
-    const et = (db.etapas || []).find(e => e.id === x.tarefa.etapaId);
-    return /*#__PURE__*/React.createElement("div", {
-      key: i,
-      className: "small"
-    }, x.ordem.codigo, " · ", et ? et.nome : 'etapa', " — ", x.motivo);
-  })), /*#__PURE__*/React.createElement(SubTabs, {
-    active: visao,
-    onChange: setVisao,
-    tabs: [{
-      id: 'dias',
-      label: 'Dia a dia'
-    }, {
-      id: 'ordens',
-      label: `Por ordem (${prog.ordens.length})`
-    }, {
-      id: 'pessoas',
-      label: 'Carga por pessoa'
-    }, {
-      id: 'maquinas',
-      label: 'Carga por máquina'
-    }]
-  }), visao === 'dias' && /*#__PURE__*/React.createElement("div", null, prog.dias.map(d => /*#__PURE__*/React.createElement("div", {
-    key: d.iso,
-    className: "dia-bloco" + (d.sabado ? ' sabado' : '')
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "dia-topo"
-  }, /*#__PURE__*/React.createElement("strong", null, fmtDate(d.iso)), /*#__PURE__*/React.createElement("span", {
-    className: "small muted"
-  }, ['domingo', 'segunda', 'terça', 'quarta', 'quinta', 'sexta', 'sábado'][d.data.getDay()], d.sabado && ' · autorizado'), /*#__PURE__*/React.createElement("span", {
-    style: {
-      flex: 1
-    }
-  }), /*#__PURE__*/React.createElement("span", {
-    className: "small muted"
-  }, (d.minutos / 60).toFixed(1), " h ·", ' ', d.porPessoa.length, " pessoa(s)")), /*#__PURE__*/React.createElement("table", null, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("th", null, "OP"), /*#__PURE__*/React.createElement("th", null, "Etapa"), /*#__PURE__*/React.createElement("th", null, "Quem"), /*#__PURE__*/React.createElement("th", null, "Máquina"), /*#__PURE__*/React.createElement("th", {
-    className: "num"
-  }, "Minutos"), /*#__PURE__*/React.createElement("th", {
-    className: "num"
-  }, "Peças"))), /*#__PURE__*/React.createElement("tbody", null, d.tarefas.map((x, i) => /*#__PURE__*/React.createElement("tr", {
-    key: i
-  }, /*#__PURE__*/React.createElement("td", {
-    className: "small",
-    style: {
-      fontFamily: 'var(--mono)'
-    }
-  }, x.ordem, /*#__PURE__*/React.createElement("div", {
-    className: "muted",
-    style: {
-      fontFamily: 'var(--sans)'
-    }
-  }, x.produto)), /*#__PURE__*/React.createElement("td", {
-    className: "small"
-  }, /*#__PURE__*/React.createElement("strong", null, x.etapa), /*#__PURE__*/React.createElement("div", {
-    className: "muted"
-  }, x.departamento)), /*#__PURE__*/React.createElement("td", {
-    className: "small"
-  }, x.pessoas.map(p => p.nome).join(', ')), /*#__PURE__*/React.createElement("td", {
-    className: "small muted"
-  }, x.equipamento || '—'), /*#__PURE__*/React.createElement("td", {
-    className: "num"
-  }, duracao(x.minutos)), /*#__PURE__*/React.createElement("td", {
-    className: "num small"
-  }, x.pecas, x.parcial && /*#__PURE__*/React.createElement("div", {
-    style: {
-      color: 'var(--warn)'
-    }
-  }, "continua"))))))))), visao === 'ordens' && /*#__PURE__*/React.createElement("div", {
-    className: "panel",
-    style: {
-      padding: 0
-    }
-  }, /*#__PURE__*/React.createElement("table", null, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("th", null, "OP"), /*#__PURE__*/React.createElement("th", null, "Produto"), /*#__PURE__*/React.createElement("th", {
-    className: "num"
-  }, "Qtd"), /*#__PURE__*/React.createElement("th", null, "Entrega"), /*#__PURE__*/React.createElement("th", null, "Fica pronta"), /*#__PURE__*/React.createElement("th", null, "Situação"))), /*#__PURE__*/React.createElement("tbody", null, prog.ordens.map(x => {
-    const prod = (db.produtos || []).find(p => p.id === x.ordem.produtoId);
-    return /*#__PURE__*/React.createElement("tr", {
-      key: x.ordem.id,
-      className: x.atraso ? 'linha-atraso' : ''
-    }, /*#__PURE__*/React.createElement("td", {
-      className: "small",
-      style: {
-        fontFamily: 'var(--mono)'
-      }
-    }, /*#__PURE__*/React.createElement("strong", null, x.ordem.codigo), /*#__PURE__*/React.createElement("div", {
-      className: "muted",
-      style: {
-        fontFamily: 'var(--sans)'
-      }
-    }, "prioridade ", num(x.ordem.prioridade) || 5)), /*#__PURE__*/React.createElement("td", {
-      className: "small"
-    }, prod ? montarNomeProduto(prod, db) || prod.codigo : '—'), /*#__PURE__*/React.createElement("td", {
-      className: "num"
-    }, x.ordem.quantidade), /*#__PURE__*/React.createElement("td", {
-      className: "small"
-    }, x.ordem.entrega ? fmtDate(x.ordem.entrega) : '—'), /*#__PURE__*/React.createElement("td", {
-      className: "small"
-    }, /*#__PURE__*/React.createElement("strong", null, x.fim ? fmtDate(x.fim) : '—')), /*#__PURE__*/React.createElement("td", null, x.atraso ? /*#__PURE__*/React.createElement(Badge, {
-      tone: "bad"
-    }, x.diasDeAtraso, "d de atraso") : /*#__PURE__*/React.createElement(Badge, {
-      tone: "ok"
-    }, "no prazo")));
-  })))), visao === 'pessoas' && /*#__PURE__*/React.createElement(RelatorioRecurso, {
-    tipo: "pessoa",
-    itens: Object.values(cargaPessoa),
-    jornada: j,
-    prog: prog,
-    db: db,
-    diaSemana: DIA_SEMANA
-  }), visao === 'maquinas' && (Object.keys(cargaMaquina).length === 0 ? /*#__PURE__*/React.createElement(Empty, {
-    text: "Nenhuma etapa usa equipamento. Vincule máquinas às etapas do processo."
-  }) : /*#__PURE__*/React.createElement(RelatorioRecurso, {
-    tipo: "maquina",
-    itens: Object.values(cargaMaquina),
-    jornada: j,
-    prog: prog,
-    db: db,
-    diaSemana: DIA_SEMANA
-  })));
-}
-
-/* ==========================================================
-   MÓDULO ENGENHARIA
-   O que a fábrica é: setores, etapas, máquinas, jornada — e as
-   listas que os cadastros consultam.
-========================================================== */
 function GrupoEngenharia({
   db,
   update,
@@ -14823,6 +17866,9 @@ function GrupoEngenharia({
   }, {
     id: 'jornada',
     label: 'Jornada e mão de obra'
+  }, {
+    id: 'custos',
+    label: 'Custo da fábrica'
   }, {
     id: 'listas',
     label: 'Grupos e tipos de produto'
@@ -14849,6 +17895,11 @@ function GrupoEngenharia({
     usuario: usuario,
     podeEditar: podeEditar
   }), sub === 'equipamentos' && /*#__PURE__*/React.createElement(TelaEquipamentos, {
+    db: db,
+    update: update,
+    usuario: usuario,
+    podeEditar: podeEditar
+  }), sub === 'custos' && /*#__PURE__*/React.createElement(CustosFixos, {
     db: db,
     update: update,
     usuario: usuario,
@@ -15323,14 +18374,38 @@ function TelaEquipamentos({
     eq: modal,
     db: db,
     onClose: () => setModal(null),
-    onSave: salvar
+    onSave: salvar,
+    /* marcar aqui grava na lista do colaborador: o dado é dele, esta
+       tela é só outra porta de entrada */
+    onOperador: (colaboradorId, passaAOperar) => update(d => {
+      const c = (d.colaboradores || []).find(x => x.id === colaboradorId);
+      if (!c) return d;
+      const atual = Array.isArray(c.equipamentos) ? c.equipamentos : [];
+      const doSetor = (d.equipamentos || [])
+        .filter(e => e.departamentoId === c.departamentoId && e.ativo !== false)
+        .map(e => e.id);
+      if (passaAOperar) {
+        /* lista vazia já significava "opera tudo": nada a fazer */
+        if (atual.length === 0) return d;
+        c.equipamentos = [...new Set([...atual, modal.id])];
+      } else {
+        /* desmarcar quem não tinha lista exige materializá-la primeiro,
+           senão "não opera esta" viraria "não opera nenhuma" */
+        const base = atual.length === 0 ? doSetor : atual;
+        c.equipamentos = base.filter(x => x !== modal.id);
+      }
+      registrarLog(d, usuario, 'engenharia.operador',
+        `${c.nome} · ${modal.nome} · ${passaAOperar ? 'passa a operar' : 'deixa de operar'}`);
+      return d;
+    })
   }));
 }
 function EquipamentoModal({
   eq,
   db,
   onClose,
-  onSave
+  onSave,
+  onOperador
 }) {
   const [f, setF] = useState({
     nome: '',
@@ -15437,7 +18512,57 @@ function EquipamentoModal({
     value: f.localizacao,
     onChange: e => set('localizacao', e.target.value),
     placeholder: dep ? `dentro de ${dep.nome}` : 'onde a máquina está'
-  }))), /*#__PURE__*/React.createElement(Field, {
+  }))), (() => {
+    /* Quem opera esta máquina. O mesmo dado que existe no cadastro do
+       colaborador, visto pelo outro lado — marcar aqui é mais natural
+       quando a máquina é nova e várias pessoas já sabem usá-la. */
+    const doSetor = (db.colaboradores || []).filter(c =>
+      c.departamentoId === f.departamentoId &&
+      c.status !== 'Inativo' && c.produtivo !== false);
+    if (!f.departamentoId)
+      return /*#__PURE__*/React.createElement(Field, { label: "Quem opera" },
+        /*#__PURE__*/React.createElement("div", { className: "small muted" },
+          "Escolha o departamento acima para ver os colaboradores."));
+    if (doSetor.length === 0)
+      return /*#__PURE__*/React.createElement(Field, { label: "Quem opera" },
+        /*#__PURE__*/React.createElement("div", { className: "small muted" },
+          "Nenhum colaborador cadastrado neste departamento."));
+    /* a lista vive no colaborador; aqui só se lê e se marca */
+    const opera = id => {
+      const c = doSetor.find(x => x.id === id);
+      const l = Array.isArray(c && c.equipamentos) ? c.equipamentos : null;
+      /* sem lista significa "ainda não informado": opera tudo */
+      return l === null || l.length === 0 || l.includes(f.id);
+    };
+    const explicito = id => {
+      const c = doSetor.find(x => x.id === id);
+      return Array.isArray(c && c.equipamentos) && c.equipamentos.length > 0;
+    };
+    return /*#__PURE__*/React.createElement("div", null,
+      /*#__PURE__*/React.createElement("div", { className: "etp-rot",
+        style: { marginBottom: 6 } },
+        `Quem opera (${doSetor.filter(c => opera(c.id)).length} de ${doSetor.length})`),
+      /*#__PURE__*/React.createElement("div", { className: "gente-grade" },
+        doSetor.map(c => /*#__PURE__*/React.createElement("label", {
+          key: c.id,
+          className: "gente-check" + (opera(c.id) ? " on" : "")
+        },
+          /*#__PURE__*/React.createElement("input", {
+            type: "checkbox", checked: opera(c.id),
+            onChange: () => onOperador && onOperador(c.id, !opera(c.id))
+          }),
+          /*#__PURE__*/React.createElement("span", null,
+            /*#__PURE__*/React.createElement("strong", null, c.nome),
+            /*#__PURE__*/React.createElement("span", { className: "small muted" },
+              explicito(c.id) ? `${c.equipamentos.length} máquina(s)`
+                : 'não informado'))))),
+      /*#__PURE__*/React.createElement("div", { className: "small muted",
+        style: { marginTop: 6, marginBottom: 10 } },
+        "Quem aparece como “não informado” ainda não teve as máquinas ",
+        "marcadas no cadastro dele — o planejamento o considera apto a ",
+        "qualquer uma do setor. Marcar aqui grava no cadastro do ",
+        "colaborador; é o mesmo dado, visto pelo outro lado."));
+  })(), /*#__PURE__*/React.createElement(Field, {
     label: "Observação"
   }, /*#__PURE__*/React.createElement("textarea", {
     rows: "2",
@@ -15928,7 +19053,24 @@ function DepartamentoModal({
     type: "checkbox",
     checked: f.ativo !== false,
     onChange: e => set('ativo', e.target.checked)
-  }), "Departamento ativo"), /*#__PURE__*/React.createElement("div", {
+  }), "Departamento ativo"), /*#__PURE__*/React.createElement("label", {
+    className: "small linha-check"
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "checkbox",
+    checked: f.exigeAfericao === true,
+    onChange: e => set('exigeAfericao', e.target.checked)
+  }), "Este setor trabalha com aferição de meta"),
+  /*#__PURE__*/React.createElement("div", {
+    className: "small muted",
+    style: { marginTop: -4, marginBottom: 10 }
+  }, f.exigeAfericao
+    ? "Cada pessoa é cronometrada nas operações deste setor, e a meta " +
+      "passa por prova e validação. É o caso da costura, onde a mesma " +
+      "operação se repete peça a peça e o ritmo varia muito entre pessoas."
+    : "A meta deste setor sai da jornada: peças produzidas sobre tempo " +
+      "trabalhado, pelos apontamentos. Sem cronômetro e sem prova — é o " +
+      "que faz sentido no corte, na embalagem ou na expedição."),
+  /*#__PURE__*/React.createElement("div", {
     className: "modal-actions"
   }, /*#__PURE__*/React.createElement("button", {
     className: "btn ghost",
@@ -15949,36 +19091,16 @@ function GrupoProdutos({
   usuario,
   perm
 }) {
-  const [sub, setSub] = useState('produtos');
   const podeEditar = podeExecutar(usuario, 'cadastros') || podeExecutar(usuario, 'admin');
+  /* Sem sub-abas: subproduto e modelagem pertencem a um produto e só
+     fazem sentido dentro dele. Listá-los aqui sugeria que existiam por
+     conta própria — e a pessoa acabava procurando ali o que só se
+     resolve abrindo o produto. */
   return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
     className: "page-head"
   }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
     className: "eyebrow"
-  }, "Engenharia de produto"), /*#__PURE__*/React.createElement("h2", null, "Produtos"))), /*#__PURE__*/React.createElement(SubTabs, {
-    active: sub,
-    onChange: setSub,
-    tabs: [{
-      id: 'produtos',
-      label: `Produtos (${(db.produtos || []).length})`
-    }, {
-      id: 'subprodutos',
-      label: `Subprodutos (${(db.subprodutos || []).length})`
-    }, {
-      id: 'riscos',
-      label: `Modelagens (${(db.riscos || []).length})`
-    }]
-  }), sub === 'produtos' && /*#__PURE__*/React.createElement(ListaProdutos, {
-    db: db,
-    update: update,
-    usuario: usuario,
-    podeEditar: podeEditar
-  }), sub === 'subprodutos' && /*#__PURE__*/React.createElement(ListaSubprodutos, {
-    db: db,
-    update: update,
-    usuario: usuario,
-    podeEditar: podeEditar
-  }), sub === 'riscos' && /*#__PURE__*/React.createElement(TelaRiscos, {
+  }, "Engenharia de produto"), /*#__PURE__*/React.createElement("h2", null, "Produtos"))), /*#__PURE__*/React.createElement(ListaProdutos, {
     db: db,
     update: update,
     usuario: usuario,
@@ -15996,7 +19118,9 @@ function ProdutoDetalhe({
   onVoltar
 }) {
   /* a engenharia abre primeiro: é dela que sai tudo o mais */
-  const [aba, setAba] = useState('engenharia');
+  const [aba, setAba] = useState('identidade');
+  /* dentro de "como é feito", a ordem do fluxo */
+  const [passo, setPasso] = useState('materiais');
   const [importando, setImportando] = useState(null); // {tecidoId, analise}
   const [verRisco, setVerRisco] = useState(null);
   const produto = (db.produtos || []).find(p => p.id === produtoId);
@@ -16220,38 +19344,56 @@ function ProdutoDetalhe({
   }, "⚠ ", x))), /*#__PURE__*/React.createElement(SubTabs, {
     active: aba,
     onChange: setAba,
+    /* Três abas, na ordem em que a pessoa trabalha: o que é, como se
+       faz, e o documento que sai disso. Antes eram sete, sem ordem
+       aparente — cada pedido virava uma aba nova. */
     tabs: [{
-      id: 'engenharia',
-      label: (() => {
-        const ck = checklistEngenharia(produto, db);
-        return `Engenharia (${ck.percentual}%)`;
-      })()
+      id: 'identidade',
+      label: 'O que é'
     }, {
-      id: 'tecidos',
-      label: `Materiais (${c.tecidos.length})`
-    }, {
-      id: 'partes',
-      label: `Subprodutos (${c.subprodutos.length})`
-    }, {
-      id: 'processo',
-      label: `Processo produtivo (${(produto.processo || []).length})`
+      id: 'comofeito',
+      label: `Como é feito (${c.tecidos.length + (produto.processo || []).length})`
     }, {
       id: 'ficha',
-      label: 'Ficha'
+      label: 'Ficha técnica'
     }]
-  }), aba === 'engenharia' && /*#__PURE__*/React.createElement(EngenhariaDoProduto, {
+  }),
+
+  /* A engenharia sai da aba e vira faixa: em que pé está o produto
+     precisa estar sempre à vista, não escondido atrás de um clique. */
+  /*#__PURE__*/React.createElement(FaixaEngenharia, {
+    produto: produto,
+    db: db,
+    update: update,
+    usuario: usuario,
+    podeEditar: podeEditar,
+    aberta: aba === 'identidade'
+  }), aba === 'identidade' && /*#__PURE__*/React.createElement(EngenhariaDoProduto, {
     produto: produto,
     db: db,
     update: update,
     usuario: usuario,
     podeEditar: podeEditar
-  }), aba === 'processo' && /*#__PURE__*/React.createElement(ProcessoProdutivo, {
+  }), aba === 'comofeito' && /*#__PURE__*/React.createElement(SubTabs, {
+    active: passo,
+    onChange: setPasso,
+    tabs: [{
+      id: 'materiais',
+      label: `1. Materiais (${c.tecidos.length})`
+    }, {
+      id: 'partes',
+      label: `2. Subprodutos (${c.subprodutos.length})`
+    }, {
+      id: 'processo',
+      label: `3. Processo (${(produto.processo || []).length})`
+    }]
+  }), aba === 'comofeito' && passo === 'processo' && /*#__PURE__*/React.createElement(ProcessoProdutivo, {
     produto: produto,
     db: db,
     update: update,
     usuario: usuario,
     podeEditar: podeEditar
-  }), aba === 'tecidos' && /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+  }), aba === 'comofeito' && passo === 'materiais' && /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
     className: "small muted",
     style: {
       marginBottom: 10
@@ -16590,7 +19732,7 @@ function ProdutoDetalhe({
         fontWeight: 600
       }
     }, "⚠ Esta modelagem não tem partes nomeadas. Abra-a em Corte e identifique as peças.")));
-  })), aba === 'partes' && /*#__PURE__*/React.createElement(ListaSubprodutos, {
+  })), aba === 'comofeito' && passo === 'partes' && /*#__PURE__*/React.createElement(ListaSubprodutos, {
     db: db,
     update: update,
     usuario: usuario,
@@ -17358,7 +20500,7 @@ function ProcessoProdutivo({
       color: 'var(--ok)',
       fontWeight: 600
     }
-  }, "✓ Horas extras autorizadas por ", /*#__PURE__*/React.createElement("strong", null, autorizacao.horaExtra.quem), ' ', "em ", fmtDate(String(autorizacao.horaExtra.quando).slice(0, 10)), autorizacao.horaExtra.por && ` · registrado por ${autorizacao.horaExtra.por}`), /*#__PURE__*/React.createElement("div", {
+  }, "✓ Horas extras autorizadas por ", /*#__PURE__*/React.createElement("strong", null, autorizacao.horaExtra.quem), ' ', "em ", fmtDataHora(autorizacao.horaExtra.quando), autorizacao.horaExtra.por && ` · registrado por ${autorizacao.horaExtra.por}`), /*#__PURE__*/React.createElement("div", {
     className: "row-actions",
     style: {
       marginTop: 7
@@ -17394,7 +20536,7 @@ function ProcessoProdutivo({
       color: 'var(--ok)',
       fontWeight: 600
     }
-  }, "✓ Sábado autorizado por ", /*#__PURE__*/React.createElement("strong", null, autorizacao.sabado.quem), ' ', "em ", fmtDate(String(autorizacao.sabado.quando).slice(0, 10))), /*#__PURE__*/React.createElement("div", {
+  }, "✓ Sábado autorizado por ", /*#__PURE__*/React.createElement("strong", null, autorizacao.sabado.quem), ' ', "em ", fmtDataHora(autorizacao.sabado.quando)), /*#__PURE__*/React.createElement("div", {
     className: "row-actions",
     style: {
       marginTop: 7
@@ -17634,7 +20776,57 @@ function EtapaDoProcessoModal({
     }
   }, "⚠ Ninguém alocado neste setor: o custo sairá pela média da fábrica e o cronograma não conseguirá programar esta etapa."), /*#__PURE__*/React.createElement("div", {
     className: "grid2"
-  }, /*#__PURE__*/React.createElement(Field, {
+  }, (() => {
+    /* A operação pode sair em mais de uma máquina — "fecha no overloque
+       ou na interlock". Marcar todas dá ao planejamento onde encaixar
+       quando uma estiver ocupada ou parada. */
+    const lista = Array.isArray(f.equipamentos) && f.equipamentos.length
+      ? f.equipamentos
+      : (f.equipamentoId ? [f.equipamentoId] : []);
+    const opcoes = equipsDep.filter(x => x.ativo !== false);
+    if (!f.departamentoId)
+      return /*#__PURE__*/React.createElement(Field, { label: "Equipamentos" },
+        /*#__PURE__*/React.createElement("div", { className: "small muted" },
+          "Escolha o setor acima para ver as máquinas."));
+    if (opcoes.length === 0)
+      return /*#__PURE__*/React.createElement(Field, { label: "Equipamentos" },
+        /*#__PURE__*/React.createElement("div", { className: "small muted" },
+          "Nenhuma máquina cadastrada neste setor — a operação é manual."));
+    const marcar = id => {
+      const nova = lista.includes(id)
+        ? lista.filter(x => x !== id) : [...lista, id];
+      set('equipamentos', nova);
+      /* o primeiro da lista continua sendo o equipamento da ficha */
+      set('equipamentoId', nova[0] || '');
+    };
+    return /*#__PURE__*/React.createElement("div", null,
+      /*#__PURE__*/React.createElement("div", { className: "etp-rot",
+        style: { marginBottom: 6 } },
+        `Equipamentos (${lista.length} de ${opcoes.length})`),
+      /*#__PURE__*/React.createElement("div", { className: "gente-grade" },
+        opcoes.map(x => /*#__PURE__*/React.createElement("label", {
+          key: x.id,
+          className: "gente-check" + (lista.includes(x.id) ? " on" : "")
+        },
+          /*#__PURE__*/React.createElement("input", {
+            type: "checkbox", checked: lista.includes(x.id),
+            onChange: () => marcar(x.id)
+          }),
+          /*#__PURE__*/React.createElement("span", null,
+            /*#__PURE__*/React.createElement("strong", null, x.nome),
+            /*#__PURE__*/React.createElement("span", { className: "small muted" },
+              x.codigo || x.tipo || ''))))),
+      /*#__PURE__*/React.createElement("div", { className: "small muted",
+        style: { marginTop: 6, marginBottom: 10 } },
+        lista.length === 0
+          ? "Nenhuma marcada: a operação é tratada como manual e qualquer "
+            + "pessoa do setor pode fazê-la."
+          : lista.length === 1
+            ? "Só esta máquina. Se ela parar, a operação para junto — marcar "
+              + "as alternativas dá ao planejamento onde encaixar."
+            : `${lista.length} alternativas. O planejamento usa a que estiver `
+              + "livre no dia."));
+  })(), false && /*#__PURE__*/React.createElement(Field, {
     label: "Equipamento"
   }, /*#__PURE__*/React.createElement("select", {
     value: f.equipamentoId || '',
@@ -17884,6 +21076,7 @@ function CanalColaborador({
   setorInicial
 }) {
   const [passo, setPasso] = useState('inicio'); // inicio · formulario · pronto
+  const [verVagas, setVerVagas] = useState(false);
   const [categoria, setCategoria] = useState('');
   const [protocolo, setProtocolo] = useState('');
   const [consulta, setConsulta] = useState('');
@@ -17892,6 +21085,16 @@ function CanalColaborador({
   const eu = (db.colaboradores || []).find(c => usuario && c.nome === usuario.nome);
   const meuSetor = setorInicial || eu && eu.departamentoId || '';
   const minhas = eu ? (db.manifestacoes || []).filter(m => m.colaboradorId === eu.id) : [];
+  if (verVagas) {
+    return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("button", {
+      className: "btn ghost sm",
+      onClick: () => setVerVagas(false)
+    }, "← Voltar ao canal"), /*#__PURE__*/React.createElement(VagasParaColaborador, {
+      db: db,
+      update: update,
+      usuario: usuario
+    }));
+  }
   if (passo === 'formulario') {
     return /*#__PURE__*/React.createElement(CanalFormulario, {
       db: db,
@@ -17975,7 +21178,18 @@ function CanalColaborador({
     className: "frase"
   }, c.frase))))), /*#__PURE__*/React.createElement("div", {
     className: "canal-aviso"
-  }, "Relatos feitos de boa-fé são tratados com respeito e sigilo. Este canal não deve ser usado para perseguir alguém, ameaçar ou acusar sabendo que não é verdade."), /*#__PURE__*/React.createElement(TermometroDia, {
+  }, "Relatos feitos de boa-fé são tratados com respeito e sigilo. Este canal não deve ser usado para perseguir alguém, ameaçar ou acusar sabendo que não é verdade."), vagasAbertas(db).length > 0 && /*#__PURE__*/React.createElement("button", {
+    className: "atalho-vagas",
+    onClick: () => setVerVagas(true)
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "ic"
+  }, "🤝"), /*#__PURE__*/React.createElement("span", {
+    className: "texto"
+  }, /*#__PURE__*/React.createElement("strong", null, vagasAbertas(db).length, " vaga(s) aberta(s)"), /*#__PURE__*/React.createElement("span", {
+    className: "small muted"
+  }, "Conhece alguém que se daria bem aqui? Indique.")), /*#__PURE__*/React.createElement("span", {
+    className: "seta"
+  }, "→")), /*#__PURE__*/React.createElement(TermometroDia, {
     db: db,
     update: update,
     setorInicial: meuSetor
@@ -18026,12 +21240,12 @@ function CanalColaborador({
     className: "tag"
   }, statusCanal(achada.status).nome)), /*#__PURE__*/React.createElement("div", {
     className: "small muted"
-  }, categoriaCanal(achada.categoria).nome, " ·", ' ', "aberta em ", fmtDate(String(achada.criadaEm || '').slice(0, 10))), (achada.interacoes || []).filter(i => !i.interno).map(i => /*#__PURE__*/React.createElement("div", {
+  }, categoriaCanal(achada.categoria).nome, " ·", ' ', "aberta em ", fmtDataHora(achada.criadaEm)), (achada.interacoes || []).filter(i => !i.interno).map(i => /*#__PURE__*/React.createElement("div", {
     key: i.id,
     className: "canal-resposta"
   }, /*#__PURE__*/React.createElement("div", {
     className: "small muted"
-  }, fmtDate(String(i.quando || '').slice(0, 10))), /*#__PURE__*/React.createElement("div", {
+  }, fmtDataHora(i.quando)), /*#__PURE__*/React.createElement("div", {
     className: "small"
   }, i.texto))), (achada.interacoes || []).filter(i => !i.interno).length === 0 && /*#__PURE__*/React.createElement("div", {
     className: "small muted",
@@ -18143,12 +21357,21 @@ function CanalFormulario({
     }
   }, /*#__PURE__*/React.createElement("div", {
     className: "small"
-  }, "Este tipo de relato tem acesso restrito: só o RH e a direção conseguem abrir. Seu líder e seus colegas não veem.")), /*#__PURE__*/React.createElement(Field, {
-    label: "O que aconteceu? *"
+  }, "Este tipo de relato tem acesso restrito: só o RH e a direção conseguem abrir. Seu líder e seus colegas não veem.")), cat.reconhecimento && /*#__PURE__*/React.createElement("div", {
+    className: "panel",
+    style: {
+      borderColor: 'var(--ok)',
+      background: 'var(--ok-bg)',
+      marginBottom: 12
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "small"
+  }, "Um reconhecimento registrado chega a quem foi citado e à liderança. Vale para pessoa, equipe ou para uma mudança que deu certo — e não precisa ser nada grandioso: a ajuda de um colega num dia corrido conta.")), /*#__PURE__*/React.createElement(Field, {
+    label: cat.reconhecimento ? 'Quem ou o que você quer reconhecer? *' : 'O que aconteceu? *'
   }, /*#__PURE__*/React.createElement("textarea", {
     rows: 5,
     value: f.descricao,
-    placeholder: "Conte com suas palavras. Não precisa escrever bonito — só precisa ficar claro.",
+    placeholder: cat.reconhecimento ? 'Ex: a Maria ficou depois da hora para me ensinar a regular a máquina.' : 'Conte com suas palavras. Não precisa escrever bonito — só precisa ficar claro.',
     onChange: e => set('descricao', e.target.value)
   })), /*#__PURE__*/React.createElement("div", {
     className: "grid3"
@@ -18386,6 +21609,3345 @@ function TermometroDia({
 }
 
 /* O grupo do módulo: canal, tratamento, indicadores e QR Codes. */
+/* ---------------- Recados: as telas ---------------- */
+function GrupoRecados({db, update, usuario, perm}) {
+  const eu = (db.colaboradores || []).find(c => usuario && c.nome === usuario.nome);
+  const [aberta, setAberta] = React.useState(null);
+  const [novo, setNovo] = React.useState(null);      // 'pessoa' | 'grupo'
+  const [painel, setPainel] = React.useState('conversas');
+  const servidor = chatFuncionaDeVerdade();
+
+  if (!eu) {
+    return React.createElement("div", { className: "panel", style: { borderColor: 'var(--warn)', background: 'var(--warn-bg)' } },
+      React.createElement("div", { className: "small", style: { fontWeight: 600 } },
+        "Recados precisam de um cadastro de colaborador."),
+      React.createElement("div", { className: "small muted" },
+        "Seu usuário não está ligado a nenhuma pessoa no cadastro, então não há " +
+        "de quem nem para quem mandar. Peça ao administrador para vincular.")
+    );
+  }
+
+  const lista = conversasDe(db, eu.id);
+  const conversa = aberta ? (db.conversas || []).find(c => c.id === aberta) : null;
+
+  return React.createElement("div", null,
+    React.createElement("div", { className: "page-head" },
+      React.createElement("div", null,
+        React.createElement("div", { className: "eyebrow" }, "Comunicação interna"),
+        React.createElement("h2", null, "Chat"))),
+
+    React.createElement(SubTabs, {
+      active: painel, onChange: setPainel, tabs: [
+        { id: 'conversas', label: `Conversas${naoLidasDe(db, eu.id) ? ' (' + naoLidasDe(db, eu.id) + ')' : ''}` },
+        { id: 'notas', label: `Minhas notas (${notasDe(db, eu.id).length})` },
+      ]
+    }),
+
+    painel === 'notas' && React.createElement(BlocoDeNotas, { db, update, eu }),
+
+    painel === 'conversas' && React.createElement(React.Fragment, null,
+
+    React.createElement("div", { className: "row-actions", style: { marginBottom: 10 } },
+      React.createElement("button", { className: "btn ghost sm", onClick: () => setNovo('pessoa') },
+        "+ Conversa"),
+      React.createElement("button", { className: "btn ghost sm", onClick: () => setNovo('grupo') },
+        "+ Grupo"),
+      React.createElement("span", { style: { flex: 1 } }),
+      React.createElement("span", { className: "small muted" },
+        `${lista.length} conversa(s)`)),
+
+    React.createElement("div", { className: "recados-tela" },
+      React.createElement("div", { className: "recados-lista" },
+        lista.length === 0
+          ? React.createElement("div", { className: "small muted", style: { padding: 14 } },
+              "Nenhuma conversa ainda. Use “+ Conversa” para falar com alguém.")
+          : lista.map(c => React.createElement("button", {
+              key: c.id,
+              className: "recado-item" + (aberta === c.id ? " on" : ""),
+              onClick: () => {
+                setAberta(c.id);
+                update(d => { marcarLidas(d, c.id, eu.id); return d; });
+              }
+            },
+            React.createElement("div", { className: "recado-topo" },
+              React.createElement("strong", null, nomeConversa(db, c, eu.id)),
+              c.naoLidas > 0 && React.createElement("span", { className: "bolha" }, c.naoLidas)),
+            React.createElement("div", { className: "small muted recado-previa" },
+              c.grupo ? `${(c.participantes || []).length} pessoas · ` : '',
+              c.ultima
+                ? (c.ultima.texto ||
+                   `${(c.ultima.anexos||[]).length} arquivo(s)`)
+                : 'sem mensagens'),
+            c.ultima && React.createElement("div", { className: "recado-hora" },
+              fmtDataHora(c.ultima.quando))))),
+
+      React.createElement("div", { className: "recados-conversa" },
+        conversa
+          ? React.createElement(Conversa, { conversa, db, update, eu })
+          : React.createElement("div", { className: "small muted", style: { padding: 20, textAlign: 'center' } },
+              "Escolha uma conversa ao lado."))),
+
+    ),
+
+    /* Os avisos ficam no pé: precisam existir, não precisam dominar a tela.
+       E são sobre o chat — na aba de notas não fazem sentido. */
+    painel === 'conversas' && React.createElement("div", { className: "chat-avisos" },
+      !servidor && React.createElement("div", { className: "chat-aviso grave" },
+        React.createElement("span", { className: "ic" }, "⚠"),
+        React.createElement("span", null,
+          React.createElement("strong", null, "As mensagens não saem deste computador. "),
+          "O sistema está aberto como arquivo local, então cada navegador tem o " +
+          "seu próprio banco. Para o chat funcionar entre aparelhos, ele precisa " +
+          "estar publicado num endereço com banco compartilhado.")),
+      React.createElement("div", { className: "chat-aviso" },
+        React.createElement("span", { className: "ic" }, "🔓"),
+        React.createElement("span", null,
+          "Conversa aqui não é conversa privada: quem exporta o backup lê tudo. " +
+          "Para assunto delicado, use o canal ",
+          React.createElement("strong", null, "Conversa aberta"),
+          " — lá o sigilo é tratado como regra."))),
+
+    novo === 'pessoa' && painel === 'conversas' && React.createElement(NovaConversaModal, {
+      db, eu, update, onClose: () => setNovo(null),
+      onAberta: id => { setNovo(null); setAberta(id); }
+    }),
+    novo === 'grupo' && painel === 'conversas' && React.createElement(NovoGrupoModal, {
+      db, eu, update, usuario, onClose: () => setNovo(null),
+      onCriado: id => { setNovo(null); setAberta(id); }
+    })
+  );
+}
+
+function Conversa({ conversa, db, update, eu }) {
+  const [texto, setTexto] = React.useState('');
+  const [anexos, setAnexos] = React.useState([]);
+  const [verGente, setVerGente] = React.useState(false);
+  const msgs = mensagensDa(db, conversa.id);
+  const gente = participantesDa(db, conversa);
+
+  const enviar = () => {
+    if (!texto.trim() && anexos.length === 0) return;
+    let erro = null;
+    update(d => {
+      const r = enviarMensagem(d, conversa.id, eu.id, texto, null, anexos);
+      erro = r.erro || null;
+      return d;
+    });
+    if (erro) alert(erro); else { setTexto(''); setAnexos([]); }
+  };
+
+  const anexar = ev => {
+    const file = ev.target.files && ev.target.files[0];
+    ev.target.value = '';
+    if (!file) return;
+    if (file.size > LIMITE_ARQUIVO_CHAT)
+      return alert(`"${file.name}" tem ${Math.round(file.size / 1024)} KB e passa ` +
+        `do limite de ${Math.round(LIMITE_ARQUIVO_CHAT / 1024)} KB. ` +
+        `Sem servidor, arquivo grande deixa o sistema lento para todo mundo.`);
+    const leitor = new FileReader();
+    leitor.onload = () => setAnexos(a => [...a, {
+      id: uid(), nome: file.name, tipo: file.type,
+      tamanho: file.size, url: leitor.result
+    }]);
+    leitor.readAsDataURL(file);
+  };
+
+  /* iniciais para o avatar — dois caracteres bastam para reconhecer */
+  const iniciais = txt => String(txt || '?').trim().split(/\s+/)
+    .slice(0, 2).map(p => p[0]).join('').toUpperCase();
+  const titulo = nomeConversa(db, conversa, eu.id);
+
+  return React.createElement("div", { className: "conversa-coluna" },
+    React.createElement("div", { className: "conversa-topo" },
+      React.createElement("div", { className: "conversa-avatar" }, iniciais(titulo)),
+      React.createElement("div", { style: { flex: 1, minWidth: 0 } },
+        React.createElement("strong", null, titulo),
+        React.createElement("div", { className: "small muted" },
+          conversa.grupo
+            ? gente.map(g => g.nome).join(', ')
+            : (() => {
+                const outro = gente.find(g => g.id !== eu.id);
+                const dp = outro && (db.departamentos || []).find(x => x.id === outro.departamentoId);
+                return dp ? dp.nome : '';
+              })())),
+      conversa.grupo && React.createElement("button", {
+        className: "btn ghost sm", onClick: () => setVerGente(true)
+      }, "Participantes")),
+
+    React.createElement("div", { className: "conversa-corpo" },
+      msgs.length === 0
+        ? React.createElement("div", { className: "small muted vazio" },
+            "Nenhuma mensagem ainda. Escreva a primeira.")
+        : msgs.map((m, i) => {
+            const meu = m.autorId === eu.id;
+            const autor = (db.colaboradores || []).find(c => c.id === m.autorId);
+            const antes = msgs[i - 1];
+            /* mensagens seguidas da mesma pessoa se agrupam; o nome só
+               aparece na primeira do bloco */
+            const seguida = antes && antes.autorId === m.autorId &&
+              String(antes.quando || '').slice(0, 10) === String(m.quando || '').slice(0, 10);
+            const diaNovo = !antes ||
+              String(antes.quando || '').slice(0, 10) !== String(m.quando || '').slice(0, 10);
+            const lida = meu && (m.lidaPor || []).length > 1;
+
+            return React.createElement(React.Fragment, { key: m.id },
+              diaNovo && React.createElement("div", { className: "dia-marca" },
+                (() => {
+                  const dia = String(m.quando || '').slice(0, 10);
+                  if (dia === todayISO()) return 'HOJE';
+                  const ontem = new Date(); ontem.setDate(ontem.getDate() - 1);
+                  if (dia === ontem.toISOString().slice(0, 10)) return 'ONTEM';
+                  return fmtDate(dia);
+                })()),
+              React.createElement("div", {
+                className: "msg" + (meu ? " minha" : "") + (seguida ? " seguida" : "")
+              },
+                !meu && conversa.grupo && !seguida &&
+                  React.createElement("div", { className: "msg-autor" },
+                    autor ? autor.nome : 'removido'),
+                m.texto && React.createElement("div", { className: "msg-texto" }, m.texto),
+                (m.anexos || []).length > 0 && React.createElement("div", { className: "msg-anexos" },
+                  (m.anexos || []).map(x =>
+                    React.createElement("a", {
+                      key: x.id, href: x.url, download: x.nome, className: "msg-anexo"
+                    },
+                      (x.tipo || '').startsWith('image/')
+                        ? React.createElement("img", { src: x.url, alt: x.nome })
+                        : React.createElement("span", { className: "anexo-ic" }, "📄"),
+                      React.createElement("span", { className: "small" }, x.nome,
+                        React.createElement("span", { className: "muted" },
+                          ` · ${Math.round(num(x.tamanho) / 1024)} KB`))))),
+                React.createElement("div", { className: "msg-hora" },
+                  fmtHora(m.quando),
+                  lida && React.createElement("span", { className: "lida" }, " ✓✓"))));
+          })),
+
+    React.createElement("div", { className: "conversa-rodape" },
+      anexos.length > 0 && React.createElement("div", { className: "anexos-fila" },
+        anexos.map(x => React.createElement("span", { key: x.id, className: "anexo-chip" },
+          (x.tipo || '').startsWith('image/')
+            ? React.createElement("img", { src: x.url, alt: x.nome })
+            : React.createElement("span", { className: "anexo-ic" }, "📄"),
+          React.createElement("span", { className: "small" }, x.nome),
+          React.createElement("button", {
+            className: "btn-ic ic-danger",
+            onClick: () => setAnexos(a => a.filter(y => y.id !== x.id))
+          }, "×")))),
+
+      React.createElement("div", { className: "conversa-escrever" },
+        React.createElement("label", { className: "btn-redondo", title: "Anexar arquivo" },
+          "📎",
+          React.createElement("input", {
+            type: "file", style: { display: 'none' }, onChange: anexar
+          })),
+        React.createElement("textarea", {
+          rows: 1, value: texto, placeholder: "Mensagem",
+          maxLength: LIMITE_MENSAGEM,
+          onChange: e => setTexto(e.target.value),
+          onKeyDown: e => {
+            if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); enviar(); }
+          }
+        }),
+        React.createElement("button", {
+          className: "btn-redondo enviar", title: "Enviar",
+          disabled: !texto.trim() && anexos.length === 0, onClick: enviar
+        }, "➤")),
+      React.createElement("div", { className: "dica-envio" },
+        `Enter envia · Shift+Enter quebra a linha · arquivo até ` +
+        `${Math.round(LIMITE_ARQUIVO_CHAT / 1024)} KB`)),
+
+    verGente && React.createElement(ParticipantesModal, {
+      conversa, db, update, eu, onClose: () => setVerGente(false)
+    })
+  );
+}
+
+function NovaConversaModal({ db, eu, update, onClose, onAberta }) {
+  const [busca, setBusca] = React.useState('');
+  const pessoas = pessoasDisponiveis(db, eu.id).filter(p =>
+    !busca.trim() || textoSimples(p.nome).includes(textoSimples(busca)));
+
+  return React.createElement(Modal, { title: "Falar com quem?", onClose },
+    React.createElement(Field, { label: "Procurar" },
+      React.createElement("input", {
+        value: busca, autoFocus: true, placeholder: "nome da pessoa",
+        onChange: e => setBusca(e.target.value)
+      })),
+    pessoas.length === 0
+      ? React.createElement("div", { className: "small muted" }, "Ninguém encontrado.")
+      : React.createElement("div", { className: "gente-lista" },
+          pessoas.map(p => {
+            const dp = (db.departamentos || []).find(x => x.id === p.departamentoId);
+            return React.createElement("button", {
+              key: p.id, className: "gente-item",
+              onClick: () => {
+                let id = null, erro = null;
+                update(d => {
+                  const r = abrirConversa(d, eu.id, p.id, null);
+                  erro = r.erro || null;
+                  id = r.conversa ? r.conversa.id : null;
+                  return d;
+                });
+                if (erro) alert(erro); else onAberta(id);
+              }
+            },
+              React.createElement("strong", null, p.nome),
+              React.createElement("span", { className: "small muted" },
+                dp ? dp.nome : 'sem setor'));
+          })),
+    React.createElement("div", { className: "modal-actions" },
+      React.createElement("button", { className: "btn ghost", onClick: onClose }, "Fechar"))
+  );
+}
+
+function NovoGrupoModal({ db, eu, update, usuario, onClose, onCriado }) {
+  const [nome, setNome] = React.useState('');
+  const [descricao, setDescricao] = React.useState('');
+  const [membros, setMembros] = React.useState([eu.id]);
+  const pessoas = pessoasDisponiveis(db, eu.id);
+
+  const alternar = id => setMembros(m =>
+    m.includes(id) ? m.filter(x => x !== id) : [...m, id]);
+
+  return React.createElement(Modal, { title: "Novo grupo", onClose, wide: true },
+    React.createElement(Field, { label: "Nome do grupo *" },
+      React.createElement("input", {
+        value: nome, autoFocus: true, placeholder: "ex: Turno da manhã",
+        onChange: e => setNome(e.target.value)
+      })),
+    React.createElement(Field, { label: "Para que serve" },
+      React.createElement("input", {
+        value: descricao, placeholder: "avisos do turno, combinações do setor…",
+        onChange: e => setDescricao(e.target.value)
+      })),
+    React.createElement("div", { className: "etp-rot", style: { marginBottom: 6 } },
+      `Quem participa (${membros.length})`),
+    React.createElement("div", { className: "gente-grade" },
+      pessoas.map(p => {
+        const dp = (db.departamentos || []).find(x => x.id === p.departamentoId);
+        return React.createElement("label", {
+          key: p.id, className: "gente-check" + (membros.includes(p.id) ? " on" : "")
+        },
+          React.createElement("input", {
+            type: "checkbox", checked: membros.includes(p.id),
+            onChange: () => alternar(p.id)
+          }),
+          React.createElement("span", null,
+            React.createElement("strong", null, p.nome),
+            React.createElement("span", { className: "small muted" },
+              dp ? dp.nome : 'sem setor')));
+      })),
+    React.createElement("div", { className: "small muted", style: { marginTop: 8 } },
+      "Você entra no grupo automaticamente. Quem for adicionado vê as mensagens " +
+      "a partir de agora, não as anteriores."),
+    React.createElement("div", { className: "modal-actions" },
+      React.createElement("button", { className: "btn ghost", onClick: onClose }, "Cancelar"),
+      React.createElement("button", {
+        className: "btn accent",
+        disabled: !nome.trim() || membros.length < 2,
+        onClick: () => {
+          let id = null, erro = null;
+          update(d => {
+            const r = criarGrupo(d, {
+              nome, descricao, participantes: membros, criadorId: eu.id
+            }, usuario);
+            erro = r.erro || null;
+            id = r.conversa ? r.conversa.id : null;
+            return d;
+          });
+          if (erro) alert(erro); else onCriado(id);
+        }
+      }, "Criar grupo"))
+  );
+}
+
+function ParticipantesModal({ conversa, db, update, eu, onClose }) {
+  const [membros, setMembros] = React.useState(conversa.participantes || []);
+  const pessoas = pessoasDisponiveis(db, eu.id);
+  const alternar = id => setMembros(m =>
+    m.includes(id) ? m.filter(x => x !== id) : [...m, id]);
+
+  return React.createElement(Modal, { title: `Participantes de ${conversa.nome}`, onClose, wide: true },
+    React.createElement("div", { className: "gente-grade" },
+      [eu, ...pessoas].map(p => {
+        const dp = (db.departamentos || []).find(x => x.id === p.departamentoId);
+        const souEu = p.id === eu.id;
+        return React.createElement("label", {
+          key: p.id,
+          className: "gente-check" + (membros.includes(p.id) ? " on" : "")
+        },
+          React.createElement("input", {
+            type: "checkbox", checked: membros.includes(p.id), disabled: souEu,
+            onChange: () => alternar(p.id)
+          }),
+          React.createElement("span", null,
+            React.createElement("strong", null, p.nome + (souEu ? ' (você)' : '')),
+            React.createElement("span", { className: "small muted" },
+              dp ? dp.nome : 'sem setor')));
+      })),
+    React.createElement("div", { className: "small muted", style: { marginTop: 8 } },
+      "Quem sair para de receber as próximas mensagens, mas o que já foi dito " +
+      "continua no histórico de quem ficou."),
+    React.createElement("div", { className: "modal-actions" },
+      React.createElement("button", { className: "btn ghost", onClick: onClose }, "Cancelar"),
+      React.createElement("button", {
+        className: "btn accent",
+        onClick: () => {
+          let erro = null;
+          update(d => {
+            const r = mudarParticipantes(d, conversa.id, membros, null);
+            erro = r.erro || null;
+            return d;
+          });
+          if (erro) alert(erro); else onClose();
+        }
+      }, "Salvar"))
+  );
+}
+
+/* O bloco de notas: anotação de trabalho, só de quem escreveu. */
+function BlocoDeNotas({ db, update, eu }) {
+  const [editando, setEditando] = React.useState(null);
+  const [busca, setBusca] = React.useState('');
+  const todas = notasDe(db, eu.id);
+  const lista = busca.trim()
+    ? todas.filter(n => textoSimples(n.titulo + ' ' + n.texto)
+        .includes(textoSimples(busca)))
+    : todas;
+
+  return React.createElement("div", null,
+    React.createElement("div", { className: "panel", style: { borderColor: 'var(--thread)' } },
+      React.createElement("div", { className: "small muted" },
+        "Suas anotações de trabalho — o que lembrar, o que combinar, o rascunho ",
+        "de uma conversa. Só aparecem para você no sistema. ",
+        React.createElement("strong", null, "Mas quem exporta o backup lê tudo"),
+        ", então não guarde aqui o que não pode ser lido por outra pessoa.")),
+
+    React.createElement("div", { className: "row-actions", style: { marginBottom: 12 } },
+      React.createElement("button", {
+        className: "btn accent sm",
+        onClick: () => setEditando({ titulo: '', texto: '', fixada: false })
+      }, "+ Nota"),
+      React.createElement("input", {
+        value: busca, placeholder: "procurar nas notas", style: { flex: 1, maxWidth: 280 },
+        onChange: e => setBusca(e.target.value)
+      }),
+      React.createElement("span", { style: { flex: 1 } }),
+      React.createElement("span", { className: "small muted" },
+        `${todas.length} nota(s)`)),
+
+    lista.length === 0
+      ? React.createElement(Empty, {
+          text: busca.trim() ? "Nenhuma nota com esse texto."
+            : "Nenhuma nota ainda. Use “+ Nota” para começar."
+        })
+      : React.createElement("div", { className: "notas-grade" },
+          lista.map(n => React.createElement("div", {
+            key: n.id, className: "nota-card" + (n.fixada ? " fixada" : "")
+          },
+            React.createElement("div", { className: "nota-topo" },
+              React.createElement("strong", { style: { flex: 1 } },
+                n.titulo || 'sem título'),
+              React.createElement("button", {
+                className: "btn-ic", title: n.fixada ? "Soltar" : "Fixar no topo",
+                onClick: () => update(d => {
+                  const alvo = (d.notas || []).find(x => x.id === n.id);
+                  if (alvo) { alvo.fixada = !alvo.fixada; alvo.alteradaEm = instanteISO(); }
+                  return d;
+                })
+              }, n.fixada ? "📌" : "📍")),
+            React.createElement("div", { className: "nota-texto" }, n.texto),
+            React.createElement("div", { className: "nota-rodape" },
+              React.createElement("span", { className: "small muted" },
+                fmtDataHora(n.alteradaEm)),
+              React.createElement("span", { style: { flex: 1 } }),
+              React.createElement("button", {
+                className: "btn ghost sm", onClick: () => setEditando({ ...n })
+              }, "Abrir"),
+              React.createElement("button", {
+                className: "btn-ic ic-danger",
+                onClick: () => {
+                  if (!confirm(`Apagar "${n.titulo || 'esta nota'}"? Não dá para desfazer.`)) return;
+                  update(d => { removerNota(d, n.id, eu.id); return d; });
+                }
+              }, "×"))))),
+
+    editando && React.createElement(NotaModal, {
+      nota: editando, eu, update, onClose: () => setEditando(null)
+    })
+  );
+}
+
+function NotaModal({ nota, eu, update, onClose }) {
+  const [f, setF] = React.useState({ ...nota });
+  const set = (k, v) => setF(p => ({ ...p, [k]: v }));
+  const restam = LIMITE_NOTA - String(f.texto || '').length;
+
+  return React.createElement(Modal, {
+    title: nota.id ? "Editar nota" : "Nova nota", onClose, wide: true
+  },
+    React.createElement(Field, { label: "Título" },
+      React.createElement("input", {
+        value: f.titulo || '', autoFocus: true,
+        placeholder: "deixe em branco para usar a primeira linha",
+        onChange: e => set('titulo', e.target.value)
+      })),
+    React.createElement(Field, { label: "Anotação" },
+      React.createElement("textarea", {
+        rows: 12, value: f.texto || '', maxLength: LIMITE_NOTA,
+        placeholder: "escreva à vontade",
+        onChange: e => set('texto', e.target.value)
+      })),
+    React.createElement("div", { className: "row-actions" },
+      React.createElement("label", { className: "check" },
+        React.createElement("input", {
+          type: "checkbox", checked: !!f.fixada,
+          onChange: e => set('fixada', e.target.checked)
+        }),
+        React.createElement("span", null, "Fixar no topo")),
+      React.createElement("span", { style: { flex: 1 } }),
+      restam < 2000 && React.createElement("span", { className: "small muted" },
+        `${restam} caracteres restantes`)),
+    React.createElement("div", { className: "modal-actions" },
+      React.createElement("button", { className: "btn ghost", onClick: onClose }, "Cancelar"),
+      React.createElement("button", {
+        className: "btn accent",
+        disabled: !String(f.texto || '').trim() && !String(f.titulo || '').trim(),
+        onClick: () => {
+          let erro = null;
+          update(d => {
+            const r = salvarNota(d, { ...f, colaboradorId: eu.id }, null);
+            erro = r.erro || null;
+            return d;
+          });
+          if (erro) alert(erro); else onClose();
+        }
+      }, "Salvar"))
+  );
+}
+
+/* O custo da fábrica: o que existe mesmo quando ninguém está costurando. */
+/* O balanceamento: onde a linha trava e o que fazer a respeito. */
+/* Balanceamento da carteira: várias ordens disputando a mesma linha. */
+/* Barra de filtros: mesmo desenho nas telas de análise, para quem
+   aprendeu numa não precisar reaprender na outra. */
+function recursosDisponiveis(db, departamentoId){
+  const ativos = c => c.status !== 'Inativo' && c.produtivo !== false;
+  const maqOk = e => e.ativo !== false && e.situacao !== 'parada' &&
+    e.situacao !== 'baixada';
+
+  const pessoas = (db.colaboradores||[]).filter(c=>
+    ativos(c) && (!departamentoId || c.departamentoId === departamentoId));
+  const maquinas = (db.equipamentos||[]).filter(e=>
+    maqOk(e) && (!departamentoId || e.departamentoId === departamentoId));
+
+  const nomes = (lista, limite) => {
+    if(lista.length === 0) return 'nenhum cadastrado';
+    if(lista.length <= limite)
+      return lista.map(x=>x.nome).join(', ');
+    return lista.slice(0,limite).map(x=>x.nome).join(', ') +
+      ` e mais ${lista.length-limite}`;
+  };
+
+  return {
+    pessoas, maquinas,
+    rotuloPessoas: nomes(pessoas, 3),
+    rotuloMaquinas: nomes(maquinas, 3),
+  };
+}
+
+/* Escolher os recursos pelo nome, não pela quantidade. "4 máquinas" não
+   diz quais, e quais importa: quem opera o quê muda o que a linha
+   entrega. */
+/* O calendário de um recurso: o que a jornada oferece e o que já está
+   tomado, dia a dia. */
+function CalendarioRecurso({ db, tipo, id, nome, onClose, onEscolherDia,
+  diaAtual }) {
+  const [dias, setDias] = React.useState(14);
+  const d = disponibilidadeDe(db, tipo, id, { dias });
+  const j = jornadaDe(db);
+
+  const DIAS_NOME = ['dom', 'seg', 'ter', 'qua', 'qui', 'sex', 'sáb'];
+
+  const cabecalho = React.createElement("div", { className: "small muted",
+    style: { marginBottom: 10 } },
+    "Os horários vêm da jornada cadastrada em Engenharia → Jornada e mão de "
+    + "obra: entrada " + j.inicio + ", saída " + j.fim
+    + (j.intervalos && j.intervalos.length
+        ? ", com " + j.intervalos.length + " intervalo(s)" : "")
+    + ". O calendário mostra o que sobra depois do que já está reservado."
+  );
+
+  const impedido = !d.condicao.ok ? React.createElement("div", {
+    className: "panel",
+    style: { borderColor: 'var(--danger)', background: 'rgba(176,58,46,.06)' }
+  },
+    React.createElement("div", { className: "small", style: { fontWeight: 600 } },
+      (tipo === 'pessoa' ? "Colaborador" : "Equipamento") + " " + d.condicao.motivo + "."),
+    React.createElement("div", { className: "small muted" },
+      "Enquanto estiver assim, nenhum dia aparece como livre.")
+  ) : null;
+
+  const faixa = React.createElement("div", { className: "faixa-dados" },
+    React.createElement("div", { className: "linha-rotulos" },
+      React.createElement("span", null, "Dias livres"),
+      React.createElement("span", null, "Dias úteis"),
+      React.createElement("span", null, "Horas livres"),
+      React.createElement("span", null, "Por dia")
+    ),
+    React.createElement("div", { className: "linha-valores" },
+      React.createElement("span", { className: d.totalLivres > 0 ? "destaque" : "alerta" },
+        d.totalLivres,
+        React.createElement("small", null, "sem compromisso")
+      ),
+      React.createElement("span", null, d.totalUteis,
+        React.createElement("small", null, "no período")
+      ),
+      React.createElement("span", null, duracao(d.minutosLivres),
+        React.createElement("small", null, "de produção")
+      ),
+      React.createElement("span", null, duracao(j.produtivo),
+        React.createElement("small", null, "pela jornada")
+      )
+    )
+  );
+
+  const celula = (dia) => {
+    /* só faz sentido escolher um dia em que dá para trabalhar */
+    const pode = onEscolherDia && dia.trabalha && !dia.impedido;
+    const classe = "cal-dia"
+      + (dia.livre ? " livre" : "")
+      + (dia.ocupado ? " ocupado" : "")
+      + (!dia.trabalha ? " fechado" : "")
+      + (pode ? " clicavel" : "")
+      + (diaAtual === dia.data ? " escolhido" : "");
+    return React.createElement("div", {
+      key: dia.data, className: classe,
+      onClick: pode ? () => onEscolherDia(dia.data) : undefined,
+      title: pode ? "Programar para este dia" : undefined
+    },
+      React.createElement("div", { className: "cal-topo" },
+        React.createElement("span", { className: "cal-num" },
+          dia.data.slice(8, 10)),
+        React.createElement("span", { className: "cal-sem" },
+          DIAS_NOME[dia.semana])
+      ),
+      !dia.trabalha
+        ? React.createElement("div", { className: "cal-vazio" }, dia.motivo)
+        : React.createElement(React.Fragment, null,
+            React.createElement("div", { className: "cal-hora" },
+              dia.inicio + "–" + dia.fim),
+            (dia.blocos || []).length > 1
+              ? React.createElement("div", { className: "cal-blocos" },
+                  dia.blocos.map((b, k) => React.createElement("span", { key: k },
+                    b.inicio + "–" + b.fim)))
+              : null,
+            React.createElement("div", { className: "cal-min" },
+              duracao(dia.minutos)),
+            dia.compromissos.length > 0
+              ? React.createElement("div", { className: "cal-comp" },
+                  dia.compromissos.map((c, k) => React.createElement("div", { key: k },
+                    React.createElement("strong", null, c.rotulo),
+                    c.detalhe ? React.createElement("div", { className: "muted" },
+                      c.detalhe) : null)))
+              : React.createElement("div", { className: "cal-ok" },
+                  diaAtual === dia.data ? "programado" : "livre")
+          )
+    );
+  };
+
+  return React.createElement(Modal, {
+    title: (tipo === 'pessoa' ? "Agenda de " : "Agenda da ") + nome,
+    onClose, wide: true
+  },
+    cabecalho,
+    impedido,
+    faixa,
+    React.createElement("div", { className: "row-actions", style: { marginBottom: 10 } },
+      [7, 14, 30].map(n => React.createElement("button", {
+        key: n,
+        className: "btn " + (dias === n ? "accent" : "ghost") + " sm",
+        onClick: () => setDias(n)
+      }, n + " dias"))
+    ),
+    onEscolherDia ? React.createElement("div", { className: "small muted",
+      style: { marginBottom: 6 } },
+      "Clique num dia para programar a produção nele. Dias já ocupados "
+      + "podem ser escolhidos — o sistema avisa o conflito na hora de salvar."
+    ) : null,
+    React.createElement("div", { className: "cal-grade" }, d.dias.map(celula)),
+    React.createElement("div", { className: "small muted", style: { marginTop: 10 } },
+      "Feriado não entra nesta conta — a jornada não guarda calendário de "
+      + "feriados, então um dia útil aqui pode não existir na prática."),
+    React.createElement("div", { className: "modal-actions" },
+      React.createElement("button", { className: "btn accent", onClick: onClose },
+        "Fechar"))
+  );
+}
+
+function SeletorRecursos({ titulo, itens, escolhidos, onChange, vazio, rodape,
+  db, tipoAgenda, onEscolherDia, diaAtual }) {
+  const lista = escolhidos || [];
+  const [agenda, setAgenda] = React.useState(null);
+  const alternar = id => onChange(lista.includes(id)
+    ? lista.filter(x => x !== id) : [...lista, id]);
+
+  return React.createElement("div", { className: "sel-recursos" },
+    React.createElement("div", { className: "sel-topo" },
+      React.createElement("span", { className: "filtro-rot" },
+        `${titulo} (${lista.length} de ${itens.length})`),
+      itens.length > 0 && React.createElement("span", { className: "row-actions" },
+        React.createElement("button", {
+          className: "btn ghost sm", onClick: () => onChange(itens.map(i => i.id))
+        }, "Todos"),
+        lista.length > 0 && React.createElement("button", {
+          className: "btn ghost sm", onClick: () => onChange([])
+        }, "Limpar"))),
+
+    itens.length === 0
+      ? React.createElement("div", { className: "small muted" },
+          vazio || "Nada cadastrado.")
+      : React.createElement("div", { className: "sel-grade" },
+          itens.map(i => React.createElement("label", {
+            key: i.id, className: "sel-item" + (lista.includes(i.id) ? " on" : "") +
+              (i.alerta ? " alerta" : "")
+          },
+            React.createElement("input", {
+              type: "checkbox", checked: lista.includes(i.id),
+              onChange: () => alternar(i.id)
+            }),
+            React.createElement("span", { className: "sel-nome" }, i.nome),
+            i.detalhe && React.createElement("span", { className: "sel-detalhe" },
+              i.detalhe),
+            /* o nome abre a agenda: dias e horários que sobram */
+            db && tipoAgenda && React.createElement("button", {
+              className: "sel-agenda", title: "Ver dias e horários disponíveis",
+              onClick: ev => { ev.preventDefault(); ev.stopPropagation();
+                setAgenda({ id: i.id, nome: i.nome }); }
+            }, "agenda")))),
+
+    rodape && React.createElement("div", { className: "small muted",
+      style: { marginTop: 6 } }, rodape),
+
+    agenda && React.createElement(CalendarioRecurso, {
+      db, tipo: tipoAgenda, id: agenda.id, nome: agenda.nome, diaAtual,
+      onEscolherDia: onEscolherDia
+        ? (data) => { onEscolherDia(data); setAgenda(null); } : null,
+      onClose: () => setAgenda(null)
+    }));
+}
+
+function BarraFiltros({ campos }) {
+  return React.createElement("div", { className: "barra-filtros" },
+    campos.filter(Boolean).map((c, i) =>
+      React.createElement("div", { key: c.id || i, className: "filtro-campo" },
+        React.createElement("label", { className: "filtro-rot" }, c.label),
+        c.tipo === 'select'
+          ? React.createElement("select", {
+              value: c.valor, onChange: e => c.onChange(e.target.value)
+            },
+              (c.opcoes || []).map(o => React.createElement("option", {
+                key: o.id, value: o.id
+              }, o.nome)))
+          : React.createElement("input", {
+              type: c.tipo || 'text',
+              min: c.min, max: c.max, value: c.valor,
+              placeholder: c.placeholder || '',
+              onChange: e => c.onChange(e.target.value)
+            }),
+        c.ajuda && React.createElement("span", { className: "filtro-ajuda" }, c.ajuda))));
+}
+
+/* A programação do dia: quem faz o quê, até a jornada encher. */
+function ProgramacaoDoDia({ db, update, usuario }) {
+  const j = jornadaDe(db);
+  const [departamentoId, setDepartamentoId] = React.useState('');
+  const [minutosDia, setMinutosDia] = React.useState(j.produtivo);
+  const [extra, setExtra] = React.useState('0');
+  const [pessoas, setPessoas] = React.useState([]);
+  const [maquinas, setMaquinas] = React.useState([]);
+
+  const disp = recursosDisponiveis(db, departamentoId);
+  const abertas = (db.ordens || []).filter(o =>
+    o.situacao !== 'cancelada' && o.situacao !== 'concluida');
+
+  const p = programarDia(db, {
+    ordemIds: abertas.map(o => o.id),
+    colaboradorIds: pessoas, maquinaIds: maquinas,
+    minutosDia, permitirExtra: num(extra), departamentoId
+  });
+
+  const alternar = (lista, set, id) => set(l =>
+    l.includes(id) ? l.filter(x => x !== id) : [...l, id]);
+
+  return React.createElement("div", null,
+    React.createElement("div", { className: "small muted", style: { marginBottom: 12 } },
+      "Escolha as máquinas e as pessoas do dia. O sistema distribui as ",
+      "operações pendentes entre elas, no ritmo de cada uma, até a jornada ",
+      "encher — e diz o que fazer com o que sobrar ou com quem sobrar tempo."),
+
+    React.createElement(BarraFiltros, { campos: [
+      { id: 'dep', label: 'Departamento', tipo: 'select', valor: departamentoId,
+        onChange: v => { setDepartamentoId(v); setPessoas([]); setMaquinas([]); },
+        opcoes: [{ id: '', nome: 'Todos' }].concat(
+          (db.departamentos || []).filter(d => d.ativo !== false)
+            .map(d => ({ id: d.id, nome: d.nome }))) },
+      { id: 'min', label: 'Minutos por dia', tipo: 'number', min: '1',
+        valor: minutosDia, onChange: v => setMinutosDia(num(v)) },
+      { id: 'extra', label: 'Hora extra permitida', tipo: 'select',
+        valor: extra, onChange: setExtra,
+        opcoes: [{ id: '0', nome: 'Sem hora extra' },
+          { id: '30', nome: '30 minutos' }, { id: '60', nome: '1 hora' },
+          { id: '120', nome: '2 horas (limite legal)' }],
+        ajuda: num(extra) > 0 ? 'hora extra custa mais que hora normal' : '' },
+    ] }),
+
+    React.createElement("div", { className: "panel no-print" },
+      React.createElement("div", { className: "etp-rot", style: { marginBottom: 6 } },
+        `Máquinas do dia (${maquinas.length} de ${disp.maquinas.length})`),
+      disp.maquinas.length === 0
+        ? React.createElement("div", { className: "small muted" },
+            "Nenhuma máquina cadastrada neste setor.")
+        : React.createElement("div", { className: "gente-grade" },
+            disp.maquinas.map(m => React.createElement("label", {
+              key: m.id, className: "gente-check" + (maquinas.includes(m.id) ? " on" : "")
+            },
+              React.createElement("input", {
+                type: "checkbox", checked: maquinas.includes(m.id),
+                onChange: () => alternar(maquinas, setMaquinas, m.id)
+              }),
+              React.createElement("span", null,
+                React.createElement("strong", null, m.nome),
+                React.createElement("span", { className: "small muted" },
+                  m.codigo || ''))))),
+
+      React.createElement("div", { className: "etp-rot",
+        style: { marginTop: 14, marginBottom: 6 } },
+        `Quem trabalha hoje (${pessoas.length} de ${disp.pessoas.length})`),
+      disp.pessoas.length === 0
+        ? React.createElement("div", { className: "small muted" },
+            "Nenhum colaborador cadastrado neste setor.")
+        : React.createElement("div", { className: "gente-grade" },
+            disp.pessoas.map(c => React.createElement("label", {
+              key: c.id, className: "gente-check" + (pessoas.includes(c.id) ? " on" : "")
+            },
+              React.createElement("input", {
+                type: "checkbox", checked: pessoas.includes(c.id),
+                onChange: () => alternar(pessoas, setPessoas, c.id)
+              }),
+              React.createElement("span", null,
+                React.createElement("strong", null, c.nome),
+                React.createElement("span", { className: "small muted" },
+                  (db.departamentos || []).find(d => d.id === c.departamentoId)?.nome
+                    || 'sem setor'))))),
+
+      maquinas.length > 0 && pessoas.length > maquinas.length &&
+        React.createElement("div", { className: "small muted", style: { marginTop: 8 } },
+          `${pessoas.length} pessoas para ${maquinas.length} máquina(s): `,
+          `só ${maquinas.length} trabalham ao mesmo tempo.`)),
+
+    p.vazio
+      ? React.createElement(Empty, { text: p.motivo })
+      : React.createElement(React.Fragment, null,
+          React.createElement("div", { className: "faixa-dados" },
+            React.createElement("div", { className: "linha-rotulos" },
+              React.createElement("span", null, "Peças programadas"),
+              React.createElement("span", null, "Continua amanhã"),
+              React.createElement("span", null, "Hora extra"),
+              React.createElement("span", null, "Tempo livre"),
+              React.createElement("span", null, "Pessoas")),
+            React.createElement("div", { className: "linha-valores" },
+              React.createElement("span", { className: "destaque" }, p.pecasProgramadas,
+                React.createElement("small", null, "para hoje")),
+              React.createElement("span", {
+                className: p.pecasSobrando > 0 ? "alerta" : ""
+              }, p.pecasSobrando,
+                React.createElement("small", null,
+                  p.totalSobra > 0 ? duracao(p.totalSobra) : 'tudo coube')),
+              React.createElement("span", null,
+                p.totalExtra > 0 ? duracao(p.totalExtra) : '—',
+                React.createElement("small", null,
+                  p.totalExtra > 0 ? 'já contada acima' : 'não foi preciso')),
+              React.createElement("span", null, duracao(p.folgaTotal),
+                React.createElement("small", null, "somando as folgas")),
+              React.createElement("span", null, p.agenda.length,
+                React.createElement("small", null,
+                  p.maquinas > 0 ? `${p.maquinas} máquina(s)` : 'sem máquina')))),
+
+          React.createElement("div", { className: "panel", style: { padding: 0 } },
+            React.createElement("table", null,
+              React.createElement("thead", null,
+                React.createElement("tr", null,
+                  React.createElement("th", null, "Pessoa"),
+                  React.createElement("th", null, "O que faz hoje"),
+                  React.createElement("th", { className: "num" }, "Tempo"),
+                  React.createElement("th", null, "Ocupação"))),
+              React.createElement("tbody", null,
+                p.agenda.map(a => React.createElement("tr", { key: a.id },
+                  React.createElement("td", null,
+                    React.createElement("strong", null, a.nome),
+                    a.extraUsado > 0 && React.createElement("div", {
+                      className: "small", style: { color: 'var(--warn)' }
+                    }, `+${duracao(a.extraUsado)} extra`),
+                    a.temFolga && React.createElement("div", { className: "small muted" },
+                      `${duracao(a.livre)} livre(s)`)),
+                  React.createElement("td", { className: "small" },
+                    a.tarefas.length === 0
+                      ? React.createElement("span", { className: "muted" },
+                          "nada programado")
+                      : a.tarefas.map((tf, i) => React.createElement("div", { key: i },
+                          React.createElement("strong", null, `${tf.pecas}× `),
+                          `${tf.etapa} · ${tf.ordem}`,
+                          React.createElement("span", { className: "muted" },
+                            ` (${tf.porHora}/h`,
+                            tf.base !== 'historico' ? ', estimado' : '',
+                            tf.emExtra > 0 ? `, ${duracao(tf.emExtra)} em extra` : '',
+                            ')')))),
+                  React.createElement("td", { className: "num" },
+                    duracao(a.usado + a.extraUsado),
+                    React.createElement("div", { className: "small muted" },
+                      `de ${duracao(a.capacidade)}`)),
+                  React.createElement("td", null,
+                    React.createElement("span", { className: "trilho",
+                      style: { display: 'block' } },
+                      React.createElement("span", {
+                        className: "preenche",
+                        style: {
+                          width: `${Math.min(100, a.ocupacao)}%`,
+                          background: a.ocupacao >= 95 ? 'var(--ok)'
+                            : a.ocupacao < 60 ? 'var(--danger)' : 'var(--thread)'
+                        }
+                      })),
+                    React.createElement("span", { className: "small muted" },
+                      `${a.ocupacao}%`)))))),
+
+          /* ---- o veredicto do período ---- */
+          (() => {
+            const ind = indicadorDoPeriodo(db, p, {});
+            if (!ind) return null;
+            const cor = ind.situacao === 'dentro' ? 'var(--ok)'
+              : ind.situacao === 'fora' ? 'var(--danger)' : 'var(--warn)';
+            const fundo = ind.situacao === 'dentro' ? 'var(--ok-bg)'
+              : ind.situacao === 'fora' ? 'rgba(176,58,46,.06)' : 'var(--warn-bg)';
+            return React.createElement("div", { className: "panel",
+              style: { borderColor: cor, background: fundo } },
+              React.createElement("div", { className: "small",
+                style: { fontWeight: 600, color: cor, marginBottom: 6 } },
+                ind.situacao === 'dentro'
+                  ? "As entregas cabem no ritmo desta equipe."
+                  : ind.situacao === 'fora'
+                    ? "Nenhuma entrega cabe no ritmo desta equipe."
+                    : `${ind.apertadas.length} de ${ind.linhas.length} entrega(s) não cabem no ritmo desta equipe.`),
+              React.createElement("table", null,
+                React.createElement("thead", null,
+                  React.createElement("tr", null,
+                    React.createElement("th", null, "Entrega"),
+                    React.createElement("th", { className: "num" }, "Dias úteis"),
+                    React.createElement("th", { className: "num" }, "Precisa"),
+                    React.createElement("th", { className: "num" }, "Capacidade"),
+                    React.createElement("th", null, ""))),
+                React.createElement("tbody", null,
+                  ind.linhas.map(l => React.createElement("tr", { key: l.entrega },
+                    React.createElement("td", null,
+                      React.createElement("strong", null, fmtDate(l.entrega)),
+                      React.createElement("div", { className: "small muted" },
+                        l.ordens.join(', '), ` · ${l.pecas} peças`)),
+                    React.createElement("td", { className: "num" }, l.uteis),
+                    React.createElement("td", { className: "num" }, duracao(l.minutos)),
+                    React.createElement("td", { className: "num" }, duracao(l.capacidade)),
+                    React.createElement("td", { className: "small",
+                      style: { color: l.cabe ? 'var(--ok)' : 'var(--danger)',
+                        fontWeight: 600 } },
+                      l.cabe ? `sobra ${duracao(l.folga)}`
+                        : `faltam ${l.diasFaltando} dia(s)`))))),
+              ind.semData > 0 && React.createElement("div", {
+                className: "small muted", style: { marginTop: 6 }
+              }, `${ind.semData} operação(ões) sem data de entrega ficaram fora `,
+                "desta conta — sem prazo, não há como dizer se cabe."),
+              React.createElement("div", { className: "small muted",
+                style: { marginTop: 6 } },
+                `A conta usa ${ind.pessoasDia} pessoa(s) × ${duracao(ind.capacidadeDia / Math.max(1, ind.pessoasDia))} `,
+                "por dia útil, do dia de hoje até a entrega. Feriado e falta ",
+                "não entram — se houver, sobra menos do que aparece aqui."));
+          })(),
+
+          /* ---- a carga das máquinas ---- */
+          p.maquinas > 0 && (() => {
+            const cargas = cargaDosEquipamentos(db, p);
+            if (cargas.length === 0) return null;
+            return React.createElement("div", { className: "panel", style: { padding: 0 } },
+              React.createElement("table", null,
+                React.createElement("thead", null,
+                  React.createElement("tr", null,
+                    React.createElement("th", null, "Máquina"),
+                    React.createElement("th", { className: "num" }, "Uso do dia"),
+                    React.createElement("th", { className: "num" }, "Peças"),
+                    React.createElement("th", null, "Ocupação"))),
+                React.createElement("tbody", null,
+                  cargas.map(c => React.createElement("tr", { key: c.id },
+                    React.createElement("td", null,
+                      React.createElement("strong", null, c.nome),
+                      c.codigo && React.createElement("div", { className: "small muted" },
+                        c.codigo)),
+                    React.createElement("td", { className: "num" },
+                      duracao(c.minutos),
+                      React.createElement("div", { className: "small muted" },
+                        `de ${duracao(c.capacidade)}`)),
+                    React.createElement("td", { className: "num" }, c.pecas),
+                    React.createElement("td", null,
+                      React.createElement("span", { className: "trilho",
+                        style: { display: 'block' } },
+                        React.createElement("span", {
+                          className: "preenche",
+                          style: {
+                            width: `${Math.min(100, c.ocupacao)}%`,
+                            background: c.ocupacao >= 95 ? 'var(--ok)'
+                              : c.ocupacao < 60 ? 'var(--danger)' : 'var(--thread)'
+                          }
+                        })),
+                      React.createElement("span", { className: "small muted" },
+                        `${c.ocupacao}%`,
+                        c.livre > 30 ? ` · ${duracao(c.livre)} livre` : '')))))),
+              React.createElement("div", { className: "small muted",
+                style: { padding: '8px 12px' } },
+                "O uso é dividido entre as máquinas escolhidas — o sistema não ",
+                "sabe qual pessoa ficou em qual máquina, só quantas estão em uso."));
+          })(),
+
+          p.sugestoes.length > 0 && React.createElement("div", { className: "panel" },
+            React.createElement("h3", { style: { marginTop: 0 } },
+              p.pecasSobrando > 0 ? "O que fazer com o que não coube hoje"
+                : "O que fazer com o tempo que sobrou"),
+            p.sugestoes.map((sg, i) => React.createElement("div", {
+              key: i, style: { marginBottom: 10 }
+            },
+              React.createElement("div", { className: "small",
+                style: { fontWeight: 600 } }, sg.titulo),
+              React.createElement("div", { className: "small muted" }, sg.detalhe)))),
+
+          p.sobra.length > 0 && React.createElement("div", { className: "panel",
+            style: { padding: 0 } },
+            React.createElement("table", null,
+              React.createElement("thead", null,
+                React.createElement("tr", null,
+                  React.createElement("th", null, "Continua amanhã"),
+                  React.createElement("th", { className: "num" }, "Peças"),
+                  React.createElement("th", { className: "num" }, "Tempo"),
+                  React.createElement("th", null, "Entrega"))),
+              React.createElement("tbody", null,
+                p.sobra.map((x, i) => React.createElement("tr", { key: i },
+                  React.createElement("td", null,
+                    React.createElement("strong", null, x.etapa),
+                    React.createElement("div", { className: "small muted" },
+                      `${x.ordemCodigo} · ${x.produtoNome}`)),
+                  React.createElement("td", { className: "num" }, x.quantidade),
+                  React.createElement("td", { className: "num" }, duracao(x.minutos)),
+                  React.createElement("td", { className: "small" },
+                    x.entrega ? fmtDate(x.entrega) : '—')))))))));
+}
+
+/* O dia de cada pessoa, a carga das máquinas e o confronto com as
+   entregas. Antes vivia numa tela separada; a carteira já sabe quem
+   faz cada operação, então é aqui que a informação pertence. */
+function ResumoDoDia({ db, balanceamento, escalas, minutosDia, extra, maquinas }) {
+  /* as máquinas em uso são as escolhidas em cada operação, mais as do
+     filtro geral — sem juntar as duas, a carga dos equipamentos ficava
+     vazia sempre que o supervisor escalava direto na operação */
+  const usadas = [...new Set([
+    ...(maquinas || []),
+    ...Object.values(escalas || {}).flatMap(e => (e && e.maquinas) || [])
+  ])];
+
+  const ag = agendaDaCarteira(db, balanceamento, escalas,
+    { minutosDia, permitirExtra: num(extra), maquinaIds: usadas });
+  if (ag.vazio) return null;
+
+  const ind = indicadorDoPeriodo(db, ag, {});
+  const cargas = usadas.length > 0 ? cargaDosEquipamentos(db, ag) : [];
+  const cor = !ind ? null
+    : ind.situacao === 'dentro' ? 'var(--ok)'
+    : ind.situacao === 'fora' ? 'var(--danger)' : 'var(--warn)';
+
+  const barra = (pct) => React.createElement("span", {
+    className: "trilho", style: { display: 'block' }
+  }, React.createElement("span", {
+    className: "preenche",
+    style: {
+      width: Math.min(100, pct) + '%',
+      background: pct >= 95 ? 'var(--ok)'
+        : pct < 60 ? 'var(--danger)' : 'var(--thread)'
+    }
+  }));
+
+  const faixa = React.createElement("div", {
+    className: "faixa-dados", style: { marginTop: 14 }
+  },
+    React.createElement("div", { className: "linha-rotulos" },
+      React.createElement("span", null, "Peças no dia"),
+      React.createElement("span", null, "Continua amanhã"),
+      React.createElement("span", null, "Hora extra"),
+      React.createElement("span", null, "Tempo livre"),
+      React.createElement("span", null, "Pessoas")
+    ),
+    React.createElement("div", { className: "linha-valores" },
+      React.createElement("span", { className: "destaque" },
+        ag.pecasProgramadas,
+        React.createElement("small", null, "com esta equipe")
+      ),
+      React.createElement("span", { className: ag.pecasSobrando > 0 ? "alerta" : "" },
+        ag.pecasSobrando,
+        React.createElement("small", null,
+          ag.totalSobra > 0 ? duracao(ag.totalSobra) : 'tudo coube')
+      ),
+      React.createElement("span", null,
+        ag.totalExtra > 0 ? duracao(ag.totalExtra) : '—',
+        React.createElement("small", null,
+          ag.totalExtra > 0 ? 'já contada' : 'não foi preciso')
+      ),
+      React.createElement("span", null,
+        duracao(ag.folgaTotal),
+        React.createElement("small", null, "somando as folgas")
+      ),
+      React.createElement("span", null,
+        ag.agenda.length,
+        React.createElement("small", null,
+          ag.maquinas > 0 ? ag.maquinas + " máquina(s)" : 'sem máquina')
+      )
+    )
+  );
+
+  const linhaPessoa = (a) => React.createElement("tr", { key: a.id },
+    React.createElement("td", null,
+      React.createElement("strong", null, a.nome),
+      a.extraUsado > 0 ? React.createElement("div", {
+        className: "small", style: { color: 'var(--warn)' }
+      }, "+" + duracao(a.extraUsado) + " extra") : null,
+      a.temFolga ? React.createElement("div", { className: "small muted" },
+        duracao(a.livre) + " livre(s)") : null
+    ),
+    React.createElement("td", { className: "small" },
+      a.tarefas.map((tf, k) => React.createElement("div", { key: k },
+        React.createElement("strong", null, tf.pecas + "× "),
+        tf.etapa + " · " + tf.ordem,
+        React.createElement("span", { className: "muted" },
+          " (" + tf.porHora + "/h"
+            + (tf.base !== 'historico' ? ', estimado' : '')
+            + (tf.emExtra > 0 ? ', ' + duracao(tf.emExtra) + ' em extra' : '')
+            + ")")
+      ))
+    ),
+    React.createElement("td", { className: "num" },
+      duracao(a.usado + a.extraUsado),
+      React.createElement("div", { className: "small muted" },
+        "de " + duracao(a.capacidade))
+    ),
+    React.createElement("td", null,
+      barra(a.ocupacao),
+      React.createElement("span", { className: "small muted" }, a.ocupacao + "%")
+    )
+  );
+
+  const tabelaPessoas = React.createElement("div", {
+    className: "panel", style: { padding: 0 }
+  },
+    React.createElement("table", null,
+      React.createElement("thead", null,
+        React.createElement("tr", null,
+          React.createElement("th", null, "Pessoa"),
+          React.createElement("th", null, "O que faz hoje"),
+          React.createElement("th", { className: "num" }, "Tempo"),
+          React.createElement("th", null, "Ocupação")
+        )
+      ),
+      React.createElement("tbody", null, ag.agenda.map(linhaPessoa))
+    )
+  );
+
+  const linhaMaquina = (c) => React.createElement("tr", { key: c.id },
+    React.createElement("td", null,
+      React.createElement("strong", null, c.nome),
+      c.codigo ? React.createElement("div", { className: "small muted" }, c.codigo) : null
+    ),
+    React.createElement("td", { className: "num" },
+      duracao(c.minutos),
+      React.createElement("div", { className: "small muted" },
+        "de " + duracao(c.capacidade))
+    ),
+    React.createElement("td", { className: "num" }, c.pecas),
+    React.createElement("td", null,
+      barra(c.ocupacao),
+      React.createElement("span", { className: "small muted" },
+        c.ocupacao + "%" + (c.livre > 30 ? ' · ' + duracao(c.livre) + ' livre' : ''))
+    )
+  );
+
+  const tabelaMaquinas = cargas.length === 0 ? null
+    : React.createElement("div", { className: "panel", style: { padding: 0 } },
+        React.createElement("table", null,
+          React.createElement("thead", null,
+            React.createElement("tr", null,
+              React.createElement("th", null, "Máquina"),
+              React.createElement("th", { className: "num" }, "Uso do dia"),
+              React.createElement("th", { className: "num" }, "Peças"),
+              React.createElement("th", null, "Ocupação")
+            )
+          ),
+          React.createElement("tbody", null, cargas.map(linhaMaquina))
+        ),
+        React.createElement("div", { className: "small muted",
+          style: { padding: '8px 12px' } },
+          "O uso é dividido entre as máquinas escolhidas — o sistema não sabe "
+          + "qual pessoa ficou em qual máquina, só quantas estão em uso.")
+      );
+
+  const veredicto = !ind ? null : (() => {
+    const titulo = ind.situacao === 'dentro'
+      ? "As entregas cabem no ritmo desta equipe."
+      : ind.situacao === 'fora'
+        ? "Nenhuma entrega cabe no ritmo desta equipe."
+        : ind.apertadas.length + " de " + ind.linhas.length
+          + " entrega(s) não cabem no ritmo desta equipe.";
+
+    const linha = (l) => React.createElement("tr", { key: l.entrega },
+      React.createElement("td", null,
+        React.createElement("strong", null, fmtDate(l.entrega)),
+        React.createElement("div", { className: "small muted" },
+          l.ordens.join(', ') + " · " + l.pecas + " peças")
+      ),
+      React.createElement("td", { className: "num" }, l.uteis),
+      React.createElement("td", { className: "num" }, duracao(l.minutos)),
+      React.createElement("td", { className: "num" }, duracao(l.capacidade)),
+      React.createElement("td", {
+        className: "small",
+        style: { color: l.cabe ? 'var(--ok)' : 'var(--danger)', fontWeight: 600 }
+      }, l.cabe ? "sobra " + duracao(l.folga)
+                : "faltam " + l.diasFaltando + " dia(s)")
+    );
+
+    return React.createElement("div", { className: "panel", style: { borderColor: cor } },
+      React.createElement("div", {
+        className: "small",
+        style: { fontWeight: 600, color: cor, marginBottom: 6 }
+      }, titulo),
+      React.createElement("table", null,
+        React.createElement("thead", null,
+          React.createElement("tr", null,
+            React.createElement("th", null, "Entrega"),
+            React.createElement("th", { className: "num" }, "Dias úteis"),
+            React.createElement("th", { className: "num" }, "Precisa"),
+            React.createElement("th", { className: "num" }, "Capacidade"),
+            React.createElement("th", null, "")
+          )
+        ),
+        React.createElement("tbody", null, ind.linhas.map(linha))
+      ),
+      ind.semData > 0 ? React.createElement("div", {
+        className: "small muted", style: { marginTop: 6 }
+      }, ind.semData + " operação(ões) sem data de entrega ficaram fora desta "
+        + "conta — sem prazo, não há como dizer se cabe.") : null,
+      React.createElement("div", { className: "small muted", style: { marginTop: 6 } },
+        "A conta usa os dias úteis do calendário, de hoje até a entrega. "
+        + "Feriado e falta não entram — se houver, sobra menos.")
+    );
+  })();
+
+  const sugestoes = ag.sugestoes.length === 0 ? null
+    : React.createElement("div", { className: "panel" },
+        React.createElement("h3", { style: { marginTop: 0 } },
+          ag.pecasSobrando > 0 ? "O que fazer com o que não coube hoje"
+                               : "O que fazer com o tempo que sobrou"),
+        ag.sugestoes.map((sg, k) => React.createElement("div", {
+          key: k, style: { marginBottom: 10 }
+        },
+          React.createElement("div", { className: "small", style: { fontWeight: 600 } },
+            sg.titulo),
+          React.createElement("div", { className: "small muted" }, sg.detalhe)
+        ))
+      );
+
+  return React.createElement(React.Fragment, null,
+    faixa, tabelaPessoas, tabelaMaquinas, veredicto, sugestoes);
+}
+
+/* Registrar o que interrompeu e mandar o trabalho para outro lugar. */
+function TelaOcorrencias({ db, update, usuario, podeEditar }) {
+  const [novo, setNovo] = React.useState(null);
+  const [realocando, setRealocando] = React.useState(null);
+  const abertas = ocorrenciasAbertas(db);
+  const historico = (db.ocorrencias || [])
+    .filter(o => o.situacao === 'encerrada')
+    .slice(-10).reverse();
+
+  const nome = (tipo, id) => {
+    const l = tipo === 'maquina' ? (db.equipamentos || []) : (db.colaboradores || []);
+    const x = l.find(y => y.id === id);
+    return x ? x.nome : '—';
+  };
+
+  const cartao = (o) => {
+    const t = TIPOS_OCORRENCIA.find(x => x.id === o.tipo) || {};
+    const alvo = o.equipamentoId ? nome('maquina', o.equipamentoId)
+      : o.colaboradorId ? nome('pessoa', o.colaboradorId) : '';
+    const af = itensAfetados(db, o);
+    return React.createElement("div", {
+      key: o.id, className: "panel",
+      style: { borderColor: o.situacao === 'aberta' ? 'var(--warn)' : 'var(--line)' }
+    },
+      React.createElement("div", { className: "row-actions" },
+        React.createElement("div", { style: { flex: 1, minWidth: 0 } },
+          React.createElement("strong", null, o.codigo + " · " + o.tipoNome),
+          alvo ? React.createElement("span", { className: "muted" }, " — " + alvo) : null,
+          React.createElement("div", { className: "small muted" },
+            fmtDate(o.data) + " · " + o.descricao),
+          o.minutosParado > 0 ? React.createElement("div", { className: "small muted" },
+            duracao(o.minutosParado) + " de parada") : null,
+          o.realocacoes && o.realocacoes.length
+            ? React.createElement("div", { className: "small",
+                style: { color: 'var(--ok)', marginTop: 4 } },
+                "Realocado: " + o.realocacoes.join(' · '))
+            : null
+        ),
+        podeEditar && o.situacao !== 'encerrada' && af.itens.length > 0
+          ? React.createElement("button", {
+              className: "btn accent sm",
+              onClick: () => setRealocando(o)
+            }, af.itens.length + " operação(ões) para realocar")
+          : null,
+        podeEditar && o.situacao !== 'encerrada'
+          ? React.createElement("button", {
+              className: "btn ghost sm",
+              onClick: () => {
+                let erro = null;
+                update(d => {
+                  const r = encerrarOcorrencia(d, o.id, usuario);
+                  erro = r.erro || null;
+                  return d;
+                });
+                if (erro) alert(erro);
+              }
+            }, "Encerrar")
+          : null
+      ),
+      o.situacao !== 'encerrada' && af.itens.length === 0
+        ? React.createElement("div", { className: "small muted", style: { marginTop: 6 } },
+            "Nada programado neste recurso hoje — não há o que realocar.")
+        : null
+    );
+  };
+
+  return React.createElement("div", null,
+    React.createElement("div", { className: "small muted", style: { marginBottom: 12 } },
+      "O que interrompeu a produção: máquina parada, gente que faltou, "
+      + "material que não chegou. Quando o recurso tinha operação programada, "
+      + "o sistema mostra para onde ela pode ir."),
+
+    podeEditar ? React.createElement("div", { className: "row-actions",
+      style: { marginBottom: 12 } },
+      React.createElement("button", {
+        className: "btn accent",
+        onClick: () => setNovo({ tipo: '', data: todayISO(), descricao: '' })
+      }, "Registrar ocorrência")
+    ) : null,
+
+    abertas.length === 0 && historico.length === 0
+      ? React.createElement(Empty, { text: "Nenhuma ocorrência registrada." })
+      : null,
+
+    abertas.length > 0 ? React.createElement("div", null,
+      React.createElement("div", { className: "etp-rot", style: { marginBottom: 6 } },
+        "Em aberto (" + abertas.length + ")"),
+      abertas.map(cartao)
+    ) : null,
+
+    historico.length > 0 ? React.createElement("div", { style: { marginTop: 14 } },
+      React.createElement("div", { className: "etp-rot", style: { marginBottom: 6 } },
+        "Encerradas"),
+      historico.map(cartao)
+    ) : null,
+
+    novo ? React.createElement(OcorrenciaModal, {
+      db, dados: novo, onChange: setNovo,
+      onClose: () => setNovo(null),
+      onSalvar: () => {
+        let erro = null;
+        update(d => {
+          const r = registrarOcorrencia(d, novo, usuario);
+          erro = r.erro || null;
+          return d;
+        });
+        if (erro) alert(erro); else setNovo(null);
+      }
+    }) : null,
+
+    realocando ? React.createElement(RealocarModal, {
+      db, ocorrencia: realocando,
+      onClose: () => setRealocando(null),
+      onConfirmar: (trocas) => {
+        let msg = null;
+        update(d => {
+          const r = realocar(d, realocando.id, trocas, usuario);
+          msg = r.erro || null;
+          return d;
+        });
+        if (msg) alert(msg); else setRealocando(null);
+      }
+    }) : null
+  );
+}
+
+function OcorrenciaModal({ db, dados, onChange, onClose, onSalvar }) {
+  const set = (k, v) => onChange({ ...dados, [k]: v });
+  const t = TIPOS_OCORRENCIA.find(x => x.id === dados.tipo);
+
+  return React.createElement(Modal, { title: "Registrar ocorrência", onClose },
+    React.createElement(Field, { label: "O que aconteceu" },
+      React.createElement("select", {
+        value: dados.tipo, onChange: e => set('tipo', e.target.value)
+      },
+        React.createElement("option", { value: "" }, "escolha..."),
+        TIPOS_OCORRENCIA.map(x => React.createElement("option",
+          { key: x.id, value: x.id }, x.nome))
+      ),
+      t && t.ajuda ? React.createElement("div", { className: "small muted" },
+        t.ajuda) : null
+    ),
+
+    React.createElement(Field, { label: "Dia" },
+      React.createElement("input", {
+        type: "date", value: dados.data,
+        onChange: e => set('data', e.target.value)
+      })
+    ),
+
+    t && t.alvo === 'maquina' ? React.createElement(Field, { label: "Qual máquina" },
+      React.createElement("select", {
+        value: dados.equipamentoId || '',
+        onChange: e => set('equipamentoId', e.target.value)
+      },
+        React.createElement("option", { value: "" }, "escolha..."),
+        (db.equipamentos || []).filter(e => e.ativo !== false)
+          .map(e => React.createElement("option", { key: e.id, value: e.id },
+            e.nome + (e.codigo ? " · " + e.codigo : "")))
+      ),
+      React.createElement("div", { className: "small muted" },
+        "A máquina passa a constar em manutenção e sai do planejamento "
+        + "até a ocorrência ser encerrada.")
+    ) : null,
+
+    t && t.alvo === 'pessoa' ? React.createElement(Field, { label: "Quem faltou" },
+      React.createElement("select", {
+        value: dados.colaboradorId || '',
+        onChange: e => set('colaboradorId', e.target.value)
+      },
+        React.createElement("option", { value: "" }, "escolha..."),
+        (db.colaboradores || []).filter(c => c.status !== 'Inativo')
+          .map(c => React.createElement("option", { key: c.id, value: c.id }, c.nome))
+      )
+    ) : null,
+
+    React.createElement(Field, { label: "O que houve" },
+      React.createElement("textarea", {
+        rows: "2", value: dados.descricao,
+        placeholder: "uma frase basta",
+        onChange: e => set('descricao', e.target.value)
+      })
+    ),
+
+    React.createElement(Field, { label: "Minutos de parada (se souber)" },
+      React.createElement("input", {
+        type: "number", min: "0", value: dados.minutosParado || '',
+        onChange: e => set('minutosParado', e.target.value)
+      })
+    ),
+
+    React.createElement("div", { className: "modal-actions" },
+      React.createElement("button", { className: "btn ghost", onClick: onClose },
+        "Cancelar"),
+      React.createElement("button", { className: "btn accent", onClick: onSalvar },
+        "Registrar")
+    )
+  );
+}
+
+function RealocarModal({ db, ocorrencia, onClose, onConfirmar }) {
+  const af = itensAfetados(db, ocorrencia);
+  const [trocas, setTrocas] = React.useState({});
+  const paraMaquina = !!ocorrencia.equipamentoId;
+
+  const linha = (it) => {
+    const alt = alternativasPara(db, ocorrencia, it);
+    const escolhido = trocas[it.id] || '';
+    return React.createElement("div", { key: it.id, className: "panel" },
+      React.createElement("div", { className: "small", style: { fontWeight: 600 } },
+        it.etapa + " · " + (it.ordemCodigo || '')),
+      React.createElement("div", { className: "small muted", style: { marginBottom: 8 } },
+        it.falta + " peça(s) ainda por fazer"
+        + (it.feito > 0 ? " · " + it.feito + " já saíram" : "")),
+
+      alt.length === 0
+        ? React.createElement("div", { className: "small",
+            style: { color: 'var(--danger)' } },
+            paraMaquina
+              ? "Nenhuma outra máquina disponível neste setor."
+              : "Ninguém mais disponível neste setor.")
+        : React.createElement("div", { className: "sel-grade" },
+            alt.map(a => React.createElement("label", {
+              key: a.id,
+              className: "sel-item" + (escolhido === a.id ? " on" : "")
+                + (a.alerta ? " alerta" : "")
+            },
+              React.createElement("input", {
+                type: "radio", name: "tr-" + it.id,
+                checked: escolhido === a.id,
+                onChange: () => setTrocas(t => ({ ...t, [it.id]: a.id }))
+              }),
+              React.createElement("span", { className: "sel-nome" }, a.nome),
+              React.createElement("span", { className: "sel-detalhe" },
+                (a.porHora ? a.porHora + "/h" : "")
+                + (a.livre ? "" : " · ocupado"))
+            ))
+          ),
+
+      alt.filter(a => a.alerta).length > 0
+        ? React.createElement("div", { className: "small muted", style: { marginTop: 6 } },
+            alt.filter(a => a.alerta)
+              .map(a => a.nome + ": " + a.alerta).join(' · '))
+        : null
+    );
+  };
+
+  return React.createElement(Modal, {
+    title: "Realocar · " + ocorrencia.codigo, onClose, wide: true
+  },
+    React.createElement("div", { className: "small muted", style: { marginBottom: 10 } },
+      paraMaquina
+        ? "A máquina parou. Escolha para onde vai cada operação que estava nela."
+        : "A pessoa não veio. Escolha quem assume cada operação."),
+
+    af.itens.length === 0
+      ? React.createElement(Empty, { text: "Nada programado neste recurso." })
+      : af.itens.map(linha),
+
+    React.createElement("div", { className: "small muted", style: { marginTop: 8 } },
+      "Trocar aqui altera a programação do dia. O que já foi apontado "
+      + "continua no nome de quem produziu."),
+
+    React.createElement("div", { className: "modal-actions" },
+      React.createElement("button", { className: "btn ghost", onClick: onClose },
+        "Cancelar"),
+      React.createElement("button", {
+        className: "btn accent",
+        disabled: Object.keys(trocas).length === 0,
+        onClick: () => onConfirmar(
+          Object.entries(trocas).map(([itemId, novoId]) => ({ itemId, novoId })))
+      }, "Confirmar realocação")
+    )
+  );
+}
+
+/* Apontar produção pela operação: a carteira já sabe qual ordem, qual
+   etapa e quem foi escalado. O que falta é quanto saiu. */
+function ApontarNaOperacao({ db, posto, escala, usuario, onClose, onSalvar }) {
+  const ordens = posto.produtos || [];
+  const [ordemId, setOrdemId] = React.useState(
+    ordens.length === 1 ? (ordens[0].ordemId || '') : '');
+  const [colaboradorId, setColaboradorId] = React.useState(
+    (escala.pessoas || []).length === 1 ? escala.pessoas[0] : '');
+  const [boas, setBoas] = React.useState('');
+  const [defeito, setDefeito] = React.useState('');
+  const [minutos, setMinutos] = React.useState('');
+  const [data, setData] = React.useState(todayISO());
+
+  const ordem = (db.ordens || []).find(o => o.id === ordemId);
+  const tarefa = ordem
+    ? (ordem.tarefas || []).find(t => t.etapaId === posto.id) : null;
+
+  /* quem pode apontar: os escalados primeiro, depois o resto do setor */
+  const escalados = (escala.pessoas || [])
+    .map(id => (db.colaboradores || []).find(c => c.id === id))
+    .filter(Boolean);
+  const outros = (db.colaboradores || []).filter(c =>
+    c.departamentoId === posto.departamentoId &&
+    c.status !== 'Inativo' &&
+    !(escala.pessoas || []).includes(c.id));
+
+  const ritmo = colaboradorId
+    ? ritmoEsperado(db, colaboradorId, posto.id, posto.unitario) : null;
+  const esperado = (ritmo && ritmo.porHora > 0 && num(minutos) > 0)
+    ? Math.round(ritmo.porHora * num(minutos) / 60) : null;
+
+  return React.createElement(Modal, {
+    title: "Apontar · " + posto.etapa, onClose
+  },
+    ordens.length > 1
+      ? React.createElement(Field, { label: "De qual ordem" },
+          React.createElement("select", {
+            value: ordemId, onChange: e => setOrdemId(e.target.value)
+          },
+            React.createElement("option", { value: "" }, "escolha..."),
+            ordens.map(o => React.createElement("option",
+              { key: o.ordemId, value: o.ordemId },
+              o.ordem + " · " + (o.produto || "")))
+          ),
+          React.createElement("div", { className: "small muted" },
+            "Esta operação atende " + ordens.length + " ordens ao mesmo tempo.")
+        )
+      : React.createElement("div", { className: "small muted",
+          style: { marginBottom: 10 } },
+          ordens.length === 1
+            ? ordens[0].ordem + " · " + (ordens[0].produto || "")
+            : "Nenhuma ordem nesta operação."),
+
+    React.createElement(Field, { label: "Quem produziu" },
+      React.createElement("select", {
+        value: colaboradorId, onChange: e => setColaboradorId(e.target.value)
+      },
+        React.createElement("option", { value: "" }, "escolha..."),
+        escalados.length > 0
+          ? React.createElement("optgroup", { label: "Escalados nesta operação" },
+              escalados.map(c => React.createElement("option",
+                { key: c.id, value: c.id }, c.nome)))
+          : null,
+        outros.length > 0
+          ? React.createElement("optgroup", { label: "Outros do setor" },
+              outros.map(c => React.createElement("option",
+                { key: c.id, value: c.id }, c.nome)))
+          : null
+      ),
+      escalados.length === 0
+        ? React.createElement("div", { className: "small muted" },
+            "Ninguém escalado nesta operação — o apontamento vale igual, "
+            + "mas escalar antes deixa o plano e o realizado comparáveis.")
+        : null,
+      colaboradorId && !(escala.pessoas || []).includes(colaboradorId)
+        ? React.createElement("div", { className: "small",
+            style: { color: 'var(--warn)' } },
+            "Esta pessoa não estava escalada aqui. O apontamento fica no "
+            + "nome dela, como deve ser.")
+        : null
+    ),
+
+    React.createElement("div", { className: "grid3" },
+      React.createElement(Field, { label: "Peças boas" },
+        React.createElement("input", {
+          type: "number", min: "0", value: boas,
+          onChange: e => setBoas(e.target.value)
+        })),
+      React.createElement(Field, { label: "Rejeitadas" },
+        React.createElement("input", {
+          type: "number", min: "0", value: defeito,
+          onChange: e => setDefeito(e.target.value)
+        })),
+      React.createElement(Field, { label: "Minutos gastos" },
+        React.createElement("input", {
+          type: "number", min: "0", value: minutos,
+          onChange: e => setMinutos(e.target.value)
+        }))
+    ),
+
+    esperado !== null
+      ? React.createElement("div", { className: "small muted",
+          style: { marginBottom: 10 } },
+          "No ritmo " + (ritmo.origem === 'historico' ? "desta pessoa"
+            : ritmo.origem === 'meta' ? "da meta" : "estimado")
+          + " (" + ritmo.porHora + "/h), " + duracao(num(minutos))
+          + " dariam cerca de " + esperado + " peças."
+          + (num(boas) > 0 && Math.abs(num(boas) - esperado) > esperado * 0.3
+              ? " O apontado está bem diferente disso — vale conferir." : ""))
+      : null,
+
+    React.createElement(Field, { label: "Dia" },
+      React.createElement("input", {
+        type: "date", value: data, onChange: e => setData(e.target.value)
+      })),
+
+    React.createElement("div", { className: "modal-actions" },
+      React.createElement("button", { className: "btn ghost", onClick: onClose },
+        "Cancelar"),
+      !ordemId ? React.createElement("div", { className: "small",
+        style: { color: 'var(--warn)' } },
+        "Escolha a ordem para apontar.") : null,
+      ordemId && !tarefa ? React.createElement("div", { className: "small",
+        style: { color: 'var(--danger)' } },
+        "Esta ordem não tem esta operação no roteiro — não dá para apontar aqui.")
+        : null,
+
+      React.createElement("button", {
+        className: "btn accent",
+        disabled: !tarefa || !colaboradorId || num(boas) + num(defeito) <= 0
+          || num(minutos) <= 0,
+        onClick: () => onSalvar({
+          ordemId, tarefaId: tarefa ? tarefa.id : '',
+          colaboradorId,
+          pecasBoas: num(boas), pecasDefeito: num(defeito),
+          minutosGastos: num(minutos), paradas: [], data
+        })
+      }, "Apontar")
+    )
+  );
+}
+
+/* O cronograma do dia: o que já era para ter começado e o que está
+   demorando mais que o previsto. É aqui que a produção começa. */
+function CronogramaDoDia({ db, update, usuario, podeEditar }) {
+  const [data, setData] = React.useState(todayISO());
+  const [concluindo, setConcluindo] = React.useState(null);
+  const c = cronogramaDoDia(db, data);
+
+  const cabecalho = React.createElement("div", { className: "small muted",
+    style: { marginBottom: 12 } },
+    "As operações do dia, na ordem de urgência. Quem já passou da hora de "
+    + "entrar sobe para o topo. Iniciar aqui marca a hora real — é o que "
+    + "permite saber depois se a etapa demorou mais do que devia.");
+
+  const filtro = React.createElement(BarraFiltros, { campos: [
+    { id: 'dia', label: 'Dia', tipo: 'date', valor: data, onChange: setData }
+  ] });
+
+  if (c.vazio)
+    return React.createElement("div", null, cabecalho, filtro,
+      React.createElement(Empty, {
+        text: "Nenhuma programação para " + fmtDate(data)
+          + ". Monte a programação no Balanceamento da carteira."
+      }));
+
+  const cor = c.situacao === 'no prazo' ? 'var(--ok)'
+    : c.situacao === 'atrasado' ? 'var(--danger)' : 'var(--warn)';
+
+  const veredicto = React.createElement("div", {
+    className: "panel", style: { borderColor: cor }
+  },
+    React.createElement("div", { className: "small",
+      style: { fontWeight: 600, color: cor } },
+      c.situacao === 'no prazo' ? "O dia está no ritmo previsto."
+        : c.situacao === 'atrasado'
+          ? c.atrasadas + " operação(ões) já deviam ter começado."
+          : c.excedidas + " operação(ões) estão demorando mais que o previsto."),
+    React.createElement("div", { className: "small muted" },
+      c.concluidas + " concluída(s) · " + c.iniciadas + " em produção · "
+      + c.previstas + " ainda não iniciada(s)")
+  );
+
+  const linha = (it) => {
+    const st = SITUACAO_EXECUCAO.find(x => x.id === it.situacao) || {};
+    return React.createElement("tr", {
+      key: it.id,
+      style: it.atrasoInicio > 0
+        ? { background: 'rgba(176,58,46,.05)' } : undefined
+    },
+      React.createElement("td", { className: "num small" },
+        React.createElement("strong", null, it.horaPrevista),
+        it.duracaoPrevista
+          ? React.createElement("div", { className: "muted" },
+              duracao(it.duracaoPrevista))
+          : null
+      ),
+      React.createElement("td", null,
+        React.createElement("strong", null, it.etapa),
+        React.createElement("div", { className: "small muted" },
+          (it.ordemCodigo || '') + " · " + it.quantidadePrevista + " peça(s)"
+          + (it.automatico ? " · sugerido pelo sistema" : "")),
+        it.alerta
+          ? React.createElement("div", {
+              className: "small",
+              style: { color: it.atrasoInicio > 0 ? 'var(--danger)' : 'var(--warn)',
+                fontWeight: 600 }
+            }, it.alerta)
+          : null
+      ),
+      React.createElement("td", { className: "small" },
+        (it.pessoas || []).map(id => {
+          const p = (db.colaboradores || []).find(x => x.id === id);
+          return p ? p.nome.split(' ')[0] : '?';
+        }).join(', ') || '—',
+        (it.maquinas || []).length > 0
+          ? React.createElement("div", { className: "muted" },
+              (it.maquinas || []).map(id => {
+                const e = (db.equipamentos || []).find(x => x.id === id);
+                return e ? e.nome : '?';
+              }).join(', '))
+          : null
+      ),
+      React.createElement("td", { className: "small" },
+        React.createElement("span", { style: { color: st.cor, fontWeight: 600 } },
+          st.nome || it.situacao),
+        it.iniciadoEm
+          ? React.createElement("div", { className: "muted" },
+              "às " + (fmtHora(it.iniciadoEm)))
+          : null
+      ),
+      podeEditar
+        ? React.createElement("td", { className: "no-print" },
+            it.situacao === 'prevista' && it.bloqueio
+              ? React.createElement("span", { className: "small muted" },
+                  "aguardando")
+              : it.situacao === 'prevista'
+              ? React.createElement("button", {
+                  className: "btn accent sm",
+                  onClick: () => {
+                    let erro = null;
+                    update(d => {
+                      const r = iniciarEtapa(d, c.programacao.id, it.id, {}, usuario);
+                      erro = r.erro || null;
+                      return d;
+                    });
+                    if (erro) alert(erro);
+                  }
+                }, "Iniciar")
+              : it.situacao === 'iniciada'
+                ? React.createElement("button", {
+                    className: "btn ghost sm",
+                    onClick: () => setConcluindo(it)
+                  }, "Concluir")
+                : React.createElement("span", { className: "small muted" },
+                    it.pecasFeitas + " peça(s)"))
+        : null
+    );
+  };
+
+  return React.createElement("div", null,
+    cabecalho, filtro, veredicto,
+
+    React.createElement("div", { className: "panel", style: { padding: 0 } },
+      React.createElement("table", null,
+        React.createElement("thead", null,
+          React.createElement("tr", null,
+            React.createElement("th", { className: "num" }, "Entra às"),
+            React.createElement("th", null, "Operação"),
+            React.createElement("th", null, "Quem faz"),
+            React.createElement("th", null, "Situação"),
+            podeEditar ? React.createElement("th", { style: { width: 96 } }) : null
+          )),
+        React.createElement("tbody", null, c.itens.map(linha)))),
+
+    c.atrasadas > 0
+      ? React.createElement("div", { className: "small muted" },
+          "Operação atrasada não se resolve sozinha: ou entra agora, ou vale "
+          + "registrar a ocorrência e realocar para quem está livre.")
+      : null,
+
+    concluindo
+      ? React.createElement(ConcluirEtapaModal, {
+          db, item: concluindo, programacaoId: c.programacao.id, usuario,
+          onClose: () => setConcluindo(null),
+          onConfirmar: (dados) => {
+            let erro = null;
+            update(d => {
+              const r = concluirEtapa(d, c.programacao.id, concluindo.id,
+                dados, usuario);
+              erro = r.erro || null;
+              return d;
+            });
+            if (erro) alert(erro); else setConcluindo(null);
+          }
+        })
+      : null
+  );
+}
+
+/* Concluir a etapa: quanto saiu, de quem, e o que atrapalhou. */
+function ConcluirEtapaModal({ db, item, usuario, onClose, onConfirmar }) {
+  const [boas, setBoas] = React.useState('');
+  const [defeito, setDefeito] = React.useState('');
+  const [colaboradorId, setColaboradorId] = React.useState(
+    (item.pessoas || [])[0] || '');
+  const [observacao, setObservacao] = React.useState('');
+
+  const decorrido = item.iniciadoEm
+    ? Math.max(1, Math.round((Date.now() - new Date(item.iniciadoEm)) / 60000))
+    : 0;
+  const equipe = (item.pessoas || [])
+    .map(id => (db.colaboradores || []).find(c => c.id === id))
+    .filter(Boolean);
+  const outros = (db.colaboradores || []).filter(c =>
+    c.departamentoId === item.departamentoId && c.status !== 'Inativo' &&
+    !(item.pessoas || []).includes(c.id));
+
+  const previsto = item.quantidadePrevista;
+  const total = num(boas) + num(defeito);
+  const parcial = total > 0 && total < previsto;
+
+  return React.createElement(Modal, {
+    title: "Concluir · " + item.etapa, onClose
+  },
+    React.createElement("div", { className: "small muted", style: { marginBottom: 10 } },
+      "Iniciada às " + (fmtHora(item.iniciadoEm))
+      + " · " + duracao(decorrido) + " até agora"
+      + (item.duracaoPrevista
+          ? " · previsto " + duracao(item.duracaoPrevista) : "")),
+
+    React.createElement("div", { className: "grid3" },
+      React.createElement(Field, { label: "Peças boas" },
+        React.createElement("input", {
+          type: "number", min: "0", value: boas,
+          placeholder: String(previsto),
+          onChange: e => setBoas(e.target.value)
+        })),
+      React.createElement(Field, { label: "Rejeitadas" },
+        React.createElement("input", {
+          type: "number", min: "0", value: defeito,
+          onChange: e => setDefeito(e.target.value)
+        })),
+      React.createElement(Field, { label: "Tempo" },
+        React.createElement("div", { className: "small",
+          style: { paddingTop: 8, fontWeight: 600 } }, duracao(decorrido)),
+        React.createElement("div", { className: "small muted" },
+          "pelo relógio"))),
+
+    equipe.length > 1 || outros.length > 0
+      ? React.createElement(Field, { label: "Quem produziu" },
+          React.createElement("select", {
+            value: colaboradorId, onChange: e => setColaboradorId(e.target.value)
+          },
+            equipe.length > 0
+              ? React.createElement("optgroup", { label: "Escalados" },
+                  equipe.map(c => React.createElement("option",
+                    { key: c.id, value: c.id }, c.nome)))
+              : null,
+            outros.length > 0
+              ? React.createElement("optgroup", { label: "Outros do setor" },
+                  outros.map(c => React.createElement("option",
+                    { key: c.id, value: c.id }, c.nome)))
+              : null))
+      : null,
+
+    parcial
+      ? React.createElement("div", { className: "panel",
+          style: { borderColor: 'var(--warn)', background: 'var(--warn-bg)' } },
+          React.createElement("div", { className: "small" },
+            total + " de " + previsto + " peças. A operação será dada como "
+            + "concluída e as " + (previsto - total) + " restantes voltam para "
+            + "a reprogramação do dia."))
+      : null,
+
+    React.createElement(Field, { label: "Observação" },
+      React.createElement("textarea", {
+        rows: "2", value: observacao,
+        placeholder: "o que atrapalhou, se atrapalhou",
+        onChange: e => setObservacao(e.target.value)
+      })),
+
+    React.createElement("div", { className: "modal-actions" },
+      React.createElement("button", { className: "btn ghost", onClick: onClose },
+        "Cancelar"),
+      React.createElement("button", {
+        className: "btn accent",
+        disabled: total <= 0 || !colaboradorId,
+        onClick: () => onConfirmar({
+          pecasBoas: num(boas), pecasDefeito: num(defeito),
+          colaboradorId, observacao
+        })
+      }, "Concluir operação"))
+  );
+}
+
+function BalanceamentoCarteira({ db, update, usuario, podeEditar }) {
+  const j = jornadaDe(db);
+  const abertas = (db.ordens || []).filter(o =>
+    o.situacao !== 'cancelada' && o.situacao !== 'concluida');
+  /* as ordens entram pela regra dos filtros, não por seleção manual:
+     marcar caixinha uma a uma cansa quando a carteira cresce */
+  const [minutosDia, setMinutosDia] = React.useState(j.produtivo);
+  const [departamentoId, setDepartamentoId] = React.useState('');
+  const [grupoId, setGrupoId] = React.useState('');
+  /* máquinas e pessoas escolhidas pelo nome, não por quantidade */
+  const [maquinas, setMaquinas] = React.useState([]);
+  const [pessoas, setPessoas] = React.useState([]);
+  /* quem faz cada operação: { operacaoId: {pessoas:[], maquinas:[]} } */
+  const [escalasCarteira, setEscalasCarteira] = React.useState({});
+  const [escalando, setEscalando] = React.useState(null);
+  const [apontando, setApontando] = React.useState(null);
+  const [dataProg, setDataProg] = React.useState(todayISO());
+  const [extra, setExtra] = React.useState('0');
+  const [de, setDe] = React.useState('');
+  const [ate, setAte] = React.useState('');
+  const [alocacao, setAlocacao] = React.useState({});
+
+  /* os filtros de período e grupo escolhem quais ordens entram na conta */
+  const naFaixa = o => {
+    if (de && (!o.entrega || o.entrega < de)) return false;
+    if (ate && (!o.entrega || o.entrega > ate)) return false;
+    if (grupoId) {
+      const p = (db.produtos || []).find(x => x.id === o.produtoId);
+      if (!p || p.grupoId !== grupoId) return false;
+    }
+    return true;
+  };
+  const naConta = abertas.filter(naFaixa);
+  const idsFiltrados = naConta.map(o => o.id);
+
+  const disponivel = recursosDisponiveis(db, departamentoId);
+
+  /* só conta quem sabe operar as máquinas do dia */
+  const aptos = maquinas.length > 0
+    ? pessoas.filter(id => maquinasQueOpera(db, id, maquinas).length > 0)
+    : pessoas;
+  /* máquina é recurso do turno: mais gente que máquina não produz mais */
+  const efetivos = maquinas.length > 0
+    ? aptos.slice(0, maquinas.length) : aptos;
+
+  const b = balancearCarteira(db, {
+    ordemIds: idsFiltrados, minutosDia, departamentoId, alocacao,
+    escalas: escalasCarteira,
+    semDistribuir: Object.keys(alocacao).length > 0 ||
+      Object.keys(escalasCarteira).length > 0,
+    recursosInformados: {
+      pessoas: efetivos.length > 0 ? efetivos.length : null,
+      maquinas: maquinas.length > 0 ? maquinas.length : null,
+    }
+  });
+
+  return React.createElement("div", null,
+    React.createElement("div", { className: "small muted", style: { marginBottom: 12 } },
+      "A linha não produz uma referência só. Aqui as ordens escolhidas dividem ",
+      "os mesmos postos — é assim que dá para saber se a fábrica dá conta de ",
+      "tudo que está prometido, e não de uma coisa de cada vez."),
+
+    React.createElement(BarraFiltros, { campos: [
+      { id: 'grupo', label: 'Grupo de produto', tipo: 'select', valor: grupoId,
+        onChange: setGrupoId, opcoes: [{ id: '', nome: 'Todos' }].concat(
+          (db.gruposProduto || []).map(g => ({ id: g.id, nome: g.nome }))) },
+      { id: 'dep', label: 'Departamento', tipo: 'select', valor: departamentoId,
+        onChange: setDepartamentoId, opcoes: [{ id: '', nome: 'Todos' }].concat(
+          (db.departamentos || []).filter(d => d.ativo !== false)
+            .map(d => ({ id: d.id, nome: d.nome }))) },
+      { id: 'de', label: 'Entrega de', tipo: 'date', valor: de, onChange: setDe },
+      { id: 'ate', label: 'Até', tipo: 'date', valor: ate, onChange: setAte },
+      { id: 'min', label: 'Minutos por dia', tipo: 'number', min: '1',
+        valor: minutosDia, onChange: v => setMinutosDia(num(v)) },
+      { id: 'extra', label: 'Hora extra permitida', tipo: 'select',
+        valor: extra, onChange: setExtra,
+        opcoes: [{ id: '0', nome: 'Sem hora extra' },
+          { id: '30', nome: '30 minutos' }, { id: '60', nome: '1 hora' },
+          { id: '120', nome: '2 horas (limite legal)' }],
+        ajuda: num(extra) > 0 ? 'custa mais que hora normal' : '' },
+    ] }),
+
+    React.createElement(SeletorRecursos, {
+      db, tipoAgenda: 'maquina',
+      onEscolherDia: setDataProg, diaAtual: dataProg,
+      titulo: "Máquinas", itens: disponivel.maquinas.map(m => ({
+        id: m.id, nome: m.nome, detalhe: m.codigo || m.tipo || '' })),
+      escolhidos: maquinas, onChange: setMaquinas,
+      vazio: "Nenhuma máquina cadastrada neste setor.",
+      rodape: maquinas.length > 0 && pessoas.length > maquinas.length
+        ? `${pessoas.length} pessoas para ${maquinas.length} máquina(s): ` +
+          `${pessoas.length - maquinas.length} ficaria(m) sem posto.`
+        : null
+    }),
+
+    React.createElement(SeletorRecursos, {
+      db, tipoAgenda: 'pessoa',
+      onEscolherDia: setDataProg, diaAtual: dataProg,
+      titulo: "Colaboradores",
+      itens: disponivel.pessoas.map(c => {
+        const opera = maquinas.length === 0 ||
+          maquinasQueOpera(db, c.id, maquinas).length > 0;
+        return { id: c.id, nome: c.nome,
+          detalhe: opera ? '' : 'não opera',
+          alerta: !opera };
+      }),
+      escolhidos: pessoas, onChange: v => { setPessoas(v); setAlocacao({}); },
+      vazio: "Nenhum colaborador cadastrado neste setor.",
+      rodape: "O ritmo de cada pessoa vem do histórico dela nas operações. " +
+        "Quem aparece como “não opera” não sabe usar nenhuma das máquinas marcadas."
+    }),
+
+    (() => {
+      const prog = programacaoDoDia(db, dataProg);
+      const real = prog ? realizadoDaProgramacao(db, prog) : null;
+      const st = prog ? (STATUS_PROGRAMACAO.find(x => x.id === prog.status) || {}) : null;
+
+      const montarItens = () => b.postos
+        .filter(p => escalasCarteira[p.id] &&
+          (escalasCarteira[p.id].pessoas || []).length > 0)
+        .map(p => ({
+          ordemId: (p.produtos[0] || {}).ordemId || '',
+          ordemCodigo: (p.produtos[0] || {}).ordem || '',
+          etapaId: p.id, etapa: p.etapa,
+          departamentoId: p.departamentoId,
+          pessoas: escalasCarteira[p.id].pessoas,
+          maquinas: escalasCarteira[p.id].maquinas || [],
+          horaInicio: escalasCarteira[p.id].hora || '',
+          quantidadePrevista: p.unitario > 0
+            ? Math.round(p.carga / p.unitario) : 0,
+        }));
+
+      return React.createElement("div", { className: "panel no-print" },
+        React.createElement("div", { className: "row-actions",
+          style: { marginBottom: prog ? 8 : 0 } },
+          React.createElement(Field, { label: "Programar para o dia" },
+            React.createElement("input", {
+              type: "date", value: dataProg,
+              onChange: e => setDataProg(e.target.value)
+            })),
+          React.createElement("span", { style: { flex: 1 } }),
+
+          !prog && React.createElement("button", {
+            className: "btn accent",
+            disabled: montarItens().length === 0,
+            onClick: () => {
+              let erro = null;
+              update(d => {
+                const r = salvarProgramacao(d, { data: dataProg,
+                  itens: montarItens(), minutosDia }, usuario);
+                erro = r.erro || null;
+                return d;
+              });
+              if (erro) alert(erro);
+            }
+          }, "Salvar programação"),
+
+          prog && prog.status === 'rascunho' && React.createElement("button", {
+            className: "btn accent",
+            onClick: () => {
+              let erro = null;
+              update(d => {
+                const r = publicarProgramacao(d, prog.id, usuario);
+                erro = r.erro || null;
+                return d;
+              });
+              if (erro) alert(erro);
+            }
+          }, "Publicar"),
+
+          prog && React.createElement("button", {
+            className: "btn ghost",
+            onClick: () => {
+              if (!confirm(
+                `Encerrar a programação de ${fmtDate(prog.data)} e levar o que ` +
+                `não foi concluído para o próximo dia?\n\n` +
+                `A equipe vem sugerida, mas você pode trocar antes de publicar.`
+              )) return;
+              let msg = null;
+              update(d => {
+                const r = reprogramar(d, prog.id, {}, usuario);
+                msg = r.erro || r.aviso ||
+                  (r.nova ? `${r.pendentes} operação(ões) foram para ` +
+                    `${fmtDate(r.nova.data)} na ${r.nova.codigo}.` : null);
+                return d;
+              });
+              if (msg) alert(msg);
+            }
+          }, "Reprogramar o dia")),
+
+        prog && React.createElement("div", { className: "small" },
+          React.createElement("strong", null, `${prog.codigo} · ${st.nome}`),
+          React.createElement("span", { className: "muted" }, ` — ${st.ajuda}`),
+          real && React.createElement("div", { className: "muted" },
+            `${real.totalFeito} de ${real.totalPrevisto} peças · `,
+            `${real.concluidas} de ${prog.itens.length} operação(ões) concluída(s)`)),
+
+        prog && prog.status === 'publicada' && React.createElement("div", {
+          className: "small muted", style: { marginTop: 6 }
+        }, "A fábrica trabalha por esta programação. Se alguém faltar ou a ",
+          "máquina parar, use “Reprogramar o dia” no fim do turno — ele leva ",
+          "o que não saiu para amanhã e deixa você trocar a equipe."),
+
+        !prog && montarItens().length === 0 && React.createElement("div", {
+          className: "small muted", style: { marginTop: 6 }
+        }, "Escale ao menos uma operação acima para poder salvar a programação."));
+    })(),
+
+    React.createElement("div", { className: "small muted", style: { marginBottom: 10 } },
+      naConta.length === 0
+        ? "Nenhuma ordem em aberto no filtro."
+        : React.createElement(React.Fragment, null,
+            React.createElement("strong", null,
+              `${naConta.length} ordem(ns) na conta`),
+            ": ", naConta.map(o => o.codigo).join(', '),
+            naConta.length < abertas.length &&
+              ` · ${abertas.length - naConta.length} fora do filtro`)),
+
+    b.vazio
+      ? React.createElement(Empty, {
+          text: naConta.length === 0
+            ? "Ajuste os filtros para incluir alguma ordem."
+            : "Nenhuma operação nas ordens filtradas para este setor."
+        })
+      : React.createElement(React.Fragment, null,
+          React.createElement("div", { className: "faixa-dados" },
+            React.createElement("div", { className: "linha-rotulos" },
+              React.createElement("span", null, "Ordens na conta"),
+              React.createElement("span", null, "Carga total"),
+              React.createElement("span", null, "Dias para terminar"),
+              React.createElement("span", null, "Pessoas alocadas"),
+              React.createElement("span", null, "Ocupação média")),
+            React.createElement("div", { className: "linha-valores" },
+              React.createElement("span", null, b.ordens.length,
+                React.createElement("small", null,
+                  b.primeiraEntrega ? `1ª entrega ${fmtDate(b.primeiraEntrega)}` : 'sem prazo')),
+              React.createElement("span", null, duracao(b.cargaTotal),
+                React.createElement("small", null, "de trabalho pela frente")),
+              React.createElement("span", { className: "destaque" },
+                b.diasLinha !== null ? `${b.diasLinha}d` : '—',
+                React.createElement("small", null,
+                  b.gargalo ? `pelo ${b.gargalo.etapa}` : '')),
+              React.createElement("span", null, b.totalPessoas,
+                React.createElement("small", null, "somando os postos")),
+              React.createElement("span", {
+                className: b.ocupacaoMedia !== null && b.ocupacaoMedia < 70 ? "alerta" : ""
+              }, b.ocupacaoMedia !== null ? `${b.ocupacaoMedia}%` : '—',
+                React.createElement("small", null, "do tempo alocado")))),
+
+          b.equipeDividida && React.createElement("div", {
+      className: "panel", style: { borderColor: 'var(--thread)' }
+    },
+      React.createElement("div", { className: "small muted" },
+        React.createElement("strong", null,
+          `${b.equipeDividida.informado} pessoa(s) para `,
+          `${b.equipeDividida.postos} operações — `,
+          `${b.equipeDividida.partidos} delas com menos de uma pessoa. `),
+        "O tempo de cada uma é dividido entre as operações, proporcional ",
+        "ao trabalho. Na prática isso custa trocas de posto, que o prazo ",
+        "abaixo não considera.")),
+
+    b.prazo && React.createElement("div", {
+            className: "panel",
+            style: b.prazo.cabe
+              ? { borderColor: 'var(--ok)', background: 'var(--ok-bg)' }
+              : { borderColor: 'var(--danger)', background: 'rgba(176,58,46,.06)' }
+          },
+            React.createElement("div", {
+              className: "small",
+              style: { fontWeight: 600, color: b.prazo.cabe ? 'var(--ok)' : 'var(--danger)' }
+            },
+              b.prazo.cabe
+                ? `Tudo fica pronto em ${fmtDate(b.prazo.data)} — antes da primeira entrega.`
+                : `Tudo só fica pronto em ${fmtDate(b.prazo.data)}, depois da entrega de ${fmtDate(b.primeiraEntrega)}.`),
+            React.createElement("div", { className: "small muted" },
+              b.prazo.cabe
+                ? "Considerando as ordens escolhidas e as pessoas alocadas."
+                : "Reforce o gargalo, tire ordem da conta ou renegocie o prazo.")),
+
+          b.excedidos.length > 0 && React.createElement("div", {
+            className: "panel", style: { borderColor: 'var(--danger)' }
+          },
+            React.createElement("div", {
+              className: "small", style: { fontWeight: 600, color: 'var(--danger)' }
+            }, "Alocação acima do que a fábrica tem:"),
+            b.excedidos.map(p => React.createElement("div", {
+              key: p.id, className: "small muted"
+            }, `${p.etapa} (${p.setor}): ${p.pessoas} pessoa(s) alocada(s), `,
+              `mas o setor tem ${p.recursos.pessoas} pessoa(s)`,
+              p.recursos.maquinas > 0 ? ` e ${p.recursos.maquinas} máquina(s)` : '',
+              `. Planejar com gente que não existe é planejar no papel.`))),
+
+          React.createElement("div", { className: "panel", style: { padding: 0 } },
+            React.createElement("table", null,
+              React.createElement("thead", null,
+                React.createElement("tr", null,
+                  React.createElement("th", null, "Operação"),
+                  React.createElement("th", { className: "num" }, "Carga"),
+                  React.createElement("th", null, "Quem faz"),
+                  React.createElement("th", { className: "num" }, "Dias"),
+                  React.createElement("th", null, "Vem de"))),
+              React.createElement("tbody", null,
+                b.postos.slice().sort((x, y) => y.minutos - x.minutos).map(p =>
+                  React.createElement("tr", {
+                    key: p.id,
+                    style: p.gargalo || (b.gargalo && p.id === b.gargalo.id)
+                      ? { background: 'var(--warn-bg)' } : undefined
+                  },
+                    React.createElement("td", null,
+                      React.createElement("strong", null, p.etapa),
+                      React.createElement("div", { className: "small muted" }, p.setor),
+                      b.gargalo && p.id === b.gargalo.id &&
+                        React.createElement("div", {
+                          className: "small", style: { color: 'var(--warn)', fontWeight: 600 }
+                        }, "gargalo da carteira")),
+                    React.createElement("td", { className: "num" }, duracao(p.carga)),
+                    React.createElement("td", null,
+                      /* quem faz esta operação: escolhido aqui, não abstraído
+                         num número de pessoas */
+                      React.createElement("button", {
+                        className: "btn ghost sm",
+                        onClick: () => setEscalando(p.id)
+                      }, p.escala ? "Trocar" : "Escalar"),
+                      /* Apontar saiu daqui: iniciar é no cronograma,
+                         concluir é em apontamentos. A carteira planeja;
+                         a execução acontece nas outras duas telas. */
+                      p.escala
+                        ? React.createElement("div", { className: "small",
+                            style: { marginTop: 4 } },
+                            p.escala.membros.map(m => m.nome.split(' ')[0]).join(', '),
+                            React.createElement("div", { className: "muted" },
+                              `${p.escala.porHora}/h`,
+                              p.escala.baseReal < 100
+                                ? ` · base real ${p.escala.baseReal}%` : ''),
+                            (escalasCarteira[p.id] || {}).maquinas &&
+                              (escalasCarteira[p.id].maquinas || []).length > 0 &&
+                              React.createElement("div", { className: "muted" },
+                                (escalasCarteira[p.id].maquinas || []).map(mid => {
+                                  const eq = (db.equipamentos || []).find(e => e.id === mid);
+                                  return eq ? eq.nome : '';
+                                }).filter(Boolean).join(', ')))
+                        : React.createElement("div", { className: "small muted",
+                            style: { marginTop: 4 } },
+                            `${p.recursos.pessoas} disponível(is)`,
+                            p.recursos.maquinas > 0
+                              ? ` · ${p.recursos.maquinas} máquina(s)` : '')),
+                    React.createElement("td", { className: "num" },
+                      React.createElement("strong", null,
+                        p.dias !== null ? `${p.dias}d` : '—')),
+                    React.createElement("td", { className: "small muted" },
+                      p.produtos.map(x => x.ordem).join(', ')))))),
+
+          React.createElement("div", { className: "small muted" },
+            "A carga soma o que falta produzir em cada ordem, não o total dela — ",
+            "o que já saiu não disputa mais a linha."),
+
+          React.createElement(ResumoDoDia, {
+            db, balanceamento: b, escalas: escalasCarteira,
+            minutosDia, extra, maquinas
+          }),
+
+          apontando && React.createElement(ApontarNaOperacao, {
+            db, posto: apontando,
+            escala: (escalasCarteira[apontando.id] || {}),
+            usuario,
+            onClose: () => setApontando(null),
+            onSalvar: (dados) => {
+              let erro = null;
+              update(d => {
+                const r = apontarProducao(d, dados, usuario);
+                erro = r.erro || null;
+                return d;
+              });
+              if (erro) alert(erro); else setApontando(null);
+            }
+          }),
+
+          escalando && (() => {
+            const p = b.postos.find(x => x.id === escalando);
+            if (!p) return null;
+            const esc = escalasCarteira[p.id] || { pessoas: [], maquinas: [] };
+            return React.createElement(EscalaDaOperacao, {
+              posto: { id: p.id, etapa: p.etapa, etapaId: p.id,
+                departamentoId: p.departamentoId,
+                tempoUnitario: p.unitario, unitario: p.unitario,
+                carga: p.carga },
+              db, escala: esc.pessoas, maquinas: esc.maquinas,
+              opcoesEscala: { data: esc.data || dataProg, hora: esc.hora },
+              produtoId: (p.produtos[0] || {}).produtoId, update, usuario,
+              onChange: v => setEscalasCarteira(e => ({ ...e, [p.id]: v })),
+              onClose: () => setEscalando(null)
+            });
+          })())));
+}
+
+/* Escolher quem vai para cada posto, vendo o que cada um já rendeu ali. */
+function EscalaDaOperacao({ posto, db, escala, maquinas, onChange, onClose,
+  update, usuario, produtoId, opcoesEscala }) {
+  const opc = { produtoId, equipamentoId: (maquinas || [])[0] };
+  const cands = candidatosDaEtapa(db, posto.departamentoId, posto.etapaId,
+    posto.tempoUnitario, opc);
+  const rec = recursosDoSetor(posto.departamentoId, db);
+  const media = mediaDaEtapa(db, posto.etapaId);
+  const meta = metaVigente(db, posto.etapaId, produtoId);
+  const escolhidos = escala || [];
+  const maqEscolhidas = maquinas || [];
+  const dataEsc = (opcoesEscala || {}).data || '';
+  const horaEsc = (opcoesEscala || {}).hora || '';
+  const cap = capacidadeDaEquipe(db, escolhidos, posto.etapaId,
+    posto.tempoUnitario, opc);
+
+  /* Abrir a aferição já preenchida: quem vai ser medido, em qual
+     operação, com qual máquina. O resto o supervisor completa na
+     tela de aferição. */
+  const aferir = colaboradorId => {
+    if (!update) return;
+    let erro = null, codigo = null;
+    update(d => {
+      const r = novaAfericao(d, {
+        colaboradorId, etapaId: posto.etapaId,
+        departamentoId: posto.departamentoId,
+        produtoId: produtoId || '',
+        equipamentoId: maqEscolhidas[0] || ''
+      }, usuario);
+      erro = r.erro || null;
+      codigo = r.afericao ? r.afericao.codigo : null;
+      return d;
+    });
+    if (erro) alert(erro);
+    else alert(`Aferição ${codigo} aberta.\n\n` +
+      `Ela aparece em Produção → Análise → Aferição e metas, na fase de ` +
+      `preparação. Enquanto não for concluída, o cálculo desta pessoa ` +
+      `continua sendo estimativa.`);
+  };
+
+  const alternar = id => onChange({
+    pessoas: escolhidos.includes(id)
+      ? escolhidos.filter(x => x !== id) : [...escolhidos, id],
+    maquinas: maqEscolhidas, data: dataEsc, hora: horaEsc
+  });
+  const alternarMaquina = id => onChange({
+    pessoas: escolhidos,
+    maquinas: maqEscolhidas.includes(id)
+      ? maqEscolhidas.filter(x => x !== id) : [...maqEscolhidas, id],
+    data: dataEsc, hora: horaEsc
+  });
+
+  const faltaGente = maqEscolhidas.length > escolhidos.length;
+  const sobraGente = escolhidos.length > maqEscolhidas.length && maqEscolhidas.length > 0;
+
+  return React.createElement(Modal, {
+    title: `Equipe · ${posto.etapa}`, onClose, wide: true
+  },
+    React.createElement("div", { className: "small muted", style: { marginBottom: 12 } },
+      "Escolha quem vai fazer esta operação. O número ao lado de cada nome é o ",
+      "que a pessoa já produziu aqui, pelos apontamentos — não uma estimativa. ",
+      "Quem nunca fez aparece com a média da fábrica."),
+
+    /* Quando esta operação entra. O cronograma usa esta hora para
+       saber se já era para ter começado. */
+    React.createElement("div", { className: "grid3", style: { marginBottom: 12 } },
+      React.createElement(Field, { label: "Entra em" },
+        React.createElement("input", {
+          type: "datetime-local",
+          value: (dataEsc || todayISO()) + 'T'
+            + (horaEsc || jornadaDe(db).inicio),
+          onChange: e => {
+            const [dd, hh] = String(e.target.value || '').split('T');
+            onChange({
+              pessoas: escolhidos, maquinas: maqEscolhidas,
+              data: dd || dataEsc, hora: (hh || '').slice(0, 5) || horaEsc
+            });
+          }
+        }),
+        React.createElement("div", { className: "small muted" },
+          "dia e hora em que esta operação entra na linha")),
+      React.createElement(Field, { label: "Deve levar" },
+        React.createElement("div", { className: "small",
+          style: { paddingTop: 8, fontWeight: 600 } },
+          (() => {
+            const capH = cap.vazia ? 0 : cap.porHora;
+            const pecas = posto.unitario > 0
+              ? Math.round(posto.carga / posto.unitario) : 0;
+            if (!capH || !pecas) return '—';
+            return duracao((pecas / capH) * 60);
+          })()),
+        React.createElement("div", { className: "small muted" },
+          "no ritmo desta equipe"))),
+
+    rec.listaMaquinas.length > 0 && React.createElement(React.Fragment, null,
+      React.createElement("div", { className: "etp-rot", style: { marginBottom: 6 } },
+        `Máquinas (${maqEscolhidas.length} de ${rec.listaMaquinas.length})`),
+      React.createElement("div", { className: "gente-grade", style: { marginBottom: 14 } },
+        rec.listaMaquinas.map(m => React.createElement("label", {
+          key: m.id,
+          className: "gente-check" + (maqEscolhidas.includes(m.id) ? " on" : "")
+        },
+          React.createElement("input", {
+            type: "checkbox", checked: maqEscolhidas.includes(m.id),
+            onChange: () => alternarMaquina(m.id)
+          }),
+          React.createElement("span", null,
+            React.createElement("strong", null, m.nome),
+            React.createElement("span", { className: "small muted" },
+              m.codigo || m.tipo || '')))))),
+
+    React.createElement("div", { className: "etp-rot", style: { marginBottom: 6 } },
+      `Colaboradores (${escolhidos.length} de ${cands.length})`),
+
+    (faltaGente || sobraGente) && React.createElement("div", {
+      className: "panel", style: { borderColor: 'var(--warn)',
+        background: 'var(--warn-bg)', marginBottom: 10 }
+    },
+      React.createElement("div", { className: "small" },
+        faltaGente
+          ? `${maqEscolhidas.length} máquina(s) para ${escolhidos.length} pessoa(s) — ` +
+            `${maqEscolhidas.length - escolhidos.length} ficaria(m) parada(s).`
+          : `${escolhidos.length} pessoa(s) para ${maqEscolhidas.length} máquina(s) — ` +
+            `${escolhidos.length - maqEscolhidas.length} sem máquina para trabalhar.`)),
+
+    cands.length === 0
+      ? React.createElement(Empty, {
+          text: "Nenhum colaborador cadastrado neste setor."
+        })
+      : React.createElement("div", { className: "escala-lista" },
+          cands.map(c => {
+            const on = escolhidos.includes(c.colaborador.id);
+            const d = c.desempenho;
+            return React.createElement("label", {
+              key: c.colaborador.id, className: "escala-item" + (on ? " on" : "")
+            },
+              React.createElement("input", {
+                type: "checkbox", checked: on,
+                onChange: () => alternar(c.colaborador.id)
+              }),
+              React.createElement("span", { className: "escala-nome" }, c.nome),
+              React.createElement("span", { className: "escala-num" },
+                React.createElement("strong", null, `${c.porHora}/h`),
+                React.createElement("span", { className: "small muted" },
+                  d.semDados ? 'estimado pela média'
+                    : `${d.apontamentos} apontamento(s)`)),
+              c.contraMedia !== null && React.createElement("span", {
+                className: "escala-comp",
+                style: { color: c.contraMedia >= 0 ? 'var(--ok)' : 'var(--warn)' }
+              }, c.contraMedia >= 0 ? `+${c.contraMedia}%` : `${c.contraMedia}%`),
+              d.qualidade !== null && React.createElement("span", {
+                className: "small muted escala-qual"
+              }, `${d.qualidade}% boas`),
+              c.precisaAferir && exigeAfericao(db, posto.departamentoId) &&
+                update && React.createElement("button", {
+                className: "btn ghost sm escala-aferir",
+                title: meta
+                  ? `A meta da operação é ${meta.valorHora}/h — aferir mostra se esta pessoa a alcança`
+                  : "Abrir uma aferição para medir esta pessoa nesta operação",
+                onClick: ev => { ev.preventDefault(); ev.stopPropagation();
+                  aferir(c.colaborador.id); }
+              }, c.afericaoEmAndamento ? "aferindo…" : "Aferir"),
+              !c.precisaAferir && c.afericao && React.createElement("span", {
+                className: "small muted escala-qual"
+              }, c.afericao.codigo));
+          })),
+
+    !media.semDados && React.createElement("div", {
+      className: "small muted", style: { marginTop: 8 }
+    },
+      `A média da fábrica nesta operação é ${media.porHora}/h, `,
+      `de ${media.pessoas} pessoa(s) que já a fizeram. `,
+      "A comparação ao lado do nome é contra esse número."),
+
+    !cap.vazia && React.createElement("div", { className: "faixa-dados",
+      style: { marginTop: 12, marginBottom: 0 } },
+      React.createElement("div", { className: "linha-rotulos" },
+        React.createElement("span", null, "Equipe escolhida"),
+        React.createElement("span", null, "Capacidade"),
+        React.createElement("span", null, "Ciclo"),
+        React.createElement("span", null, "Base do cálculo")),
+      React.createElement("div", { className: "linha-valores" },
+        React.createElement("span", null, cap.pessoas,
+          React.createElement("small", null, "pessoa(s)")),
+        React.createElement("span", { className: "destaque" }, `${cap.porHora}/h`,
+          React.createElement("small", null, "somando o ritmo de cada um")),
+        React.createElement("span", null, duracao(cap.ciclo),
+          React.createElement("small", null, "por peça")),
+        React.createElement("span", {
+          className: cap.baseReal < 50 ? "alerta" : ""
+        }, `${cap.baseReal}%`,
+          React.createElement("small", null,
+            `${cap.comHistorico} de ${cap.pessoas} com histórico`)))),
+
+    !cap.vazia && cap.aAferir.length > 0 && React.createElement("div", {
+      className: "panel", style: { borderColor: 'var(--warn)',
+        background: 'var(--warn-bg)', marginTop: 10 }
+    },
+      React.createElement("div", { className: "small", style: { fontWeight: 600 } },
+        `${cap.aAferir.length} pessoa(s) na equipe sem medição nesta operação.`),
+      React.createElement("div", { className: "small muted" },
+        cap.aAferir.map(m => m.nome).join(', ') +
+        ". O ritmo delas é estimativa. Aferir leva algumas horas e troca o " +
+        "chute por número medido — vale a pena antes de prometer prazo com " +
+        "base nesta equipe.")),
+
+    !exigeAfericao(db, posto.departamentoId) && React.createElement("div", {
+      className: "small muted", style: { marginTop: 8 }
+    }, "Este setor não trabalha com aferição: a referência de ritmo vem ",
+      "do que a jornada entregou, pelos apontamentos. Aferição com ",
+      "cronômetro faz sentido onde a operação se repete peça a peça — ",
+      "quem define isso é o cadastro do departamento."),
+
+    meta && exigeAfericao(db, posto.departamentoId) &&
+      React.createElement("div", { className: "small muted",
+      style: { marginTop: 8 } },
+      `Existe meta aferida para esta operação: ${meta.valorHora}/h. `,
+      "Ela é usada no cálculo de quem ainda não tem histórico próprio — ",
+      "mas é a meta da operação, não a capacidade da pessoa. Aferir quem ",
+      "nunca fez mostra se ela alcança esse ritmo."),
+
+    React.createElement("div", { className: "modal-actions" },
+      React.createElement("button", { className: "btn accent", onClick: onClose },
+        "Pronto"))
+  );
+}
+
+function BalanceamentoLinha({ produto, db, update, usuario }) {
+  const j = jornadaDe(db);
+  const [minutosDia, setMinutosDia] = React.useState(j.produtivo);
+  const [demanda, setDemanda] = React.useState('');
+  const [alocacao, setAlocacao] = React.useState({});
+  const [simulando, setSimulando] = React.useState(false);
+  const [departamentoId, setDepartamentoId] = React.useState('');
+  const [maquinas, setMaquinas] = React.useState([]);
+  const [pessoas, setPessoas] = React.useState([]);
+  /* quem foi escalado para cada posto: { postoId: {pessoas:[], maquinas:[]} } */
+  const [escalas, setEscalas] = React.useState({});
+  const [escalando, setEscalando] = React.useState(null);
+
+  const disponivel = recursosDisponiveis(db, departamentoId);
+
+  const b = balancearLinha(produto, db, {
+    escalas,
+    minutosDia, alocacao, demandaDia: num(demanda) || null,
+    departamentoId,
+    /* mexeu na tabela? então a mão do usuário manda */
+    alocacaoManual: Object.keys(alocacao).length > 0,
+    recursosInformados: {
+      pessoas: (() => {
+        const aptos = maquinas.length > 0
+          ? pessoas.filter(id => maquinasQueOpera(db, id, maquinas).length > 0)
+          : pessoas;
+        const efetivos = maquinas.length > 0
+          ? aptos.slice(0, maquinas.length) : aptos;
+        return efetivos.length > 0 ? efetivos.length : null;
+      })(),
+      maquinas: maquinas.length > 0 ? maquinas.length : null,
+    }
+  });
+
+  if (b.vazio) {
+    return React.createElement(Empty, {
+      text: "Este produto ainda não tem processo produtivo. Sem as operações, não há linha para balancear."
+    });
+  }
+
+  const s = sugerirBalanceamento(produto, db, { minutosDia, alocacao });
+  const dim = num(demanda) > 0
+    ? dimensionarLinha(produto, db, { minutosDia, demandaDia: num(demanda) })
+    : null;
+
+  const mudarPessoas = (id, valor) => {
+    setAlocacao(a => ({ ...a, [id]: Math.max(1, num(valor)) }));
+    setSimulando(true);
+  };
+
+  return React.createElement("div", null,
+    React.createElement("div", { className: "small muted", style: { marginBottom: 12 } },
+      "A linha produz no ritmo da operação mais lenta. Quem vem antes ou depois ",
+      "dela espera — e essa espera é paga sem virar peça. Aqui dá para ver onde ",
+      "a linha trava e simular o efeito de mexer nas pessoas."),
+
+    React.createElement(BarraFiltros, { campos: [
+      { id: 'dep', label: 'Departamento', tipo: 'select', valor: departamentoId,
+        onChange: setDepartamentoId, opcoes: [{ id: '', nome: 'Todos' }].concat(
+          (db.departamentos || []).filter(d => d.ativo !== false)
+            .map(d => ({ id: d.id, nome: d.nome }))) },
+      { id: 'demanda', label: 'Precisa por dia', tipo: 'number', min: '0',
+        valor: demanda, onChange: setDemanda, placeholder: 'opcional' },
+      { id: 'min', label: 'Minutos por dia', tipo: 'number', min: '1',
+        valor: minutosDia, onChange: v => setMinutosDia(num(v)) },
+    ] }),
+
+    React.createElement(SeletorRecursos, {
+      db, tipoAgenda: 'maquina',
+      titulo: "Máquinas", itens: disponivel.maquinas.map(m => ({
+        id: m.id, nome: m.nome, detalhe: m.codigo || m.tipo || '' })),
+      escolhidos: maquinas, onChange: setMaquinas,
+      vazio: "Nenhuma máquina cadastrada neste setor."
+    }),
+
+    React.createElement(SeletorRecursos, {
+      db, tipoAgenda: 'pessoa',
+      titulo: "Colaboradores",
+      itens: disponivel.pessoas.map(c => {
+        const opera = maquinas.length === 0 ||
+          maquinasQueOpera(db, c.id, maquinas).length > 0;
+        return { id: c.id, nome: c.nome,
+          detalhe: opera ? '' : 'não opera', alerta: !opera };
+      }),
+      escolhidos: pessoas,
+      onChange: v => { setPessoas(v); setAlocacao({}); setSimulando(false); },
+      vazio: "Nenhum colaborador cadastrado neste setor.",
+      rodape: "Marque quem trabalha nesta linha. O ritmo de cada um vem do " +
+        "histórico dele; quem nunca fez a operação usa a meta ou a média."
+    }),
+
+    simulando && React.createElement("div", { className: "row-actions",
+      style: { marginBottom: 10 } },
+      React.createElement("span", { className: "small muted", style: { flex: 1 } },
+        "Você está simulando uma alocação diferente da cadastrada."),
+      React.createElement("button", {
+        className: "btn ghost sm",
+        onClick: () => { setAlocacao({}); setSimulando(false); }
+      }, "Voltar ao real")),
+
+    React.createElement("div", { className: "faixa-dados" },
+      React.createElement("div", { className: "linha-rotulos" },
+        React.createElement("span", null, "Sai por dia"),
+        React.createElement("span", null, "Pessoas na linha"),
+        React.createElement("span", null, "Equilíbrio da linha"),
+        React.createElement("span", null, "Espera por dia")),
+      React.createElement("div", { className: "linha-valores" },
+        React.createElement("span", { className: "destaque" }, b.saidaDia,
+          React.createElement("small", null,
+            `${b.saidaHora}/hora · ciclo ${duracao(b.cicloLinha)}`)),
+        React.createElement("span", null, b.totalPessoas,
+          React.createElement("small", null,
+            `${(b.saidaDia / Math.max(1, b.totalPessoas)).toFixed(0)} peças por pessoa`)),
+        React.createElement("span", {
+          className: b.eficiencia !== null && b.eficiencia < 70 ? "alerta" : ""
+        }, b.eficiencia !== null ? `${b.eficiencia}%` : '—',
+          React.createElement("small", null, "do tempo pago vira peça")),
+        React.createElement("span", null, duracao(b.minutosOciososDia),
+          React.createElement("small", null,
+            `${(b.minutosOciososDia / Math.max(1, minutosDia)).toFixed(1)} pessoa(s) parada(s)`)))),
+
+    b.equipeDividida && React.createElement("div", {
+      className: "panel", style: { borderColor: 'var(--thread)' }
+    },
+      React.createElement("div", { className: "small muted" },
+        React.createElement("strong", null,
+          `${b.equipeDividida.informado} pessoa(s) para `,
+          `${b.equipeDividida.postos} operações — `,
+          `${b.equipeDividida.partidos} delas com menos de uma pessoa. `),
+        "A conta divide o tempo de cada uma entre as operações, ",
+        "proporcional ao trabalho — é o que acontece quando a costureira ",
+        "faz duas coisas em sequência. Na prática isso custa trocas de ",
+        "posto, que o cálculo não considera.")),
+
+    b.takt !== null && React.createElement("div", {
+      className: "panel",
+      style: b.atende
+        ? { borderColor: 'var(--ok)', background: 'var(--ok-bg)' }
+        : { borderColor: 'var(--danger)', background: 'rgba(176,58,46,.06)' }
+    },
+      React.createElement("div", { className: "small", style: { fontWeight: 600,
+        color: b.atende ? 'var(--ok)' : 'var(--danger)' } },
+        b.atende
+          ? `A linha dá conta: ${b.saidaDia} peças contra ${b.demandaDia} necessárias.`
+          : `Faltam ${b.faltaPorDia} peças por dia.`),
+      React.createElement("div", { className: "small muted" },
+        `Cada peça precisa sair a cada ${duracao(b.takt)} para dar conta ` +
+        `da demanda. Hoje a linha entrega uma a cada `,
+        `${duracao(b.cicloLinha)}`,
+        b.atende ? '.' : ` — ${duracao(b.cicloLinha - b.takt)} acima do necessário.`)),
+
+    React.createElement("div", { className: "panel", style: { padding: 0 } },
+      React.createElement("table", null,
+        React.createElement("thead", null,
+          React.createElement("tr", null,
+            React.createElement("th", null, "Operação"),
+            React.createElement("th", { className: "num" }, "Tempo"),
+            React.createElement("th", { className: "num" }, "Pessoas"),
+            React.createElement("th", { className: "num" }, "Disponível"),
+            React.createElement("th", { className: "num" }, "Ciclo"),
+            React.createElement("th", null, "Ocupação"),
+            React.createElement("th", { className: "num" }, "Espera/dia"))),
+        React.createElement("tbody", null,
+          b.postos.map(p => React.createElement("tr", {
+            key: p.id,
+            style: p.gargalo ? { background: 'var(--warn-bg)' } : undefined
+          },
+            React.createElement("td", null,
+              React.createElement("strong", null, `${p.ordem}. ${p.etapa}`),
+              React.createElement("div", { className: "small muted" },
+                p.setor, p.equipamento ? ` · ${p.equipamento}` : ''),
+              p.gargalo && React.createElement("div", {
+                className: "small", style: { color: 'var(--warn)', fontWeight: 600 }
+              }, "trava a linha")),
+            React.createElement("td", { className: "num small" },
+              duracao(p.tempoUnitario)),
+            React.createElement("td", { className: "num" },
+              React.createElement("input", {
+                type: "number", min: "1", value: p.pessoas,
+                style: {
+                  width: 58, textAlign: 'right',
+                  borderColor: p.excede ? 'var(--danger)' : undefined
+                },
+                onChange: e => mudarPessoas(p.id, e.target.value)
+              }),
+              p.pessoas !== p.pessoasOriginais && React.createElement("div", {
+                className: "small muted"
+              }, `era ${p.pessoasOriginais}`)),
+            React.createElement("td", { className: "num small muted" },
+              React.createElement("button", {
+                className: "btn ghost sm",
+                onClick: () => setEscalando(p.id)
+              }, p.escala ? "Trocar equipe" : "Escalar"),
+              p.escala && React.createElement("div", { style: { marginTop: 3 } },
+                p.escala.membros.map(m => m.nome.split(' ')[0]).join(', '),
+                React.createElement("div", null,
+                  `base real ${p.escala.baseReal}%`)),
+              !p.escala && React.createElement("div", { style: { marginTop: 3 } },
+                p.recursos ? `${p.recursos.pessoas} disponível(is)` : '—',
+                p.recursos && p.recursos.maquinas > 0 && React.createElement("div", null,
+                  `${p.recursos.maquinas} máquina(s)`)),
+              p.excede && React.createElement("div", {
+                style: { color: 'var(--danger)', fontWeight: 600 }
+              }, "acima do limite")),
+            React.createElement("td", { className: "num" },
+              React.createElement("strong", null, duracao(p.ciclo)),
+              React.createElement("div", { className: "small muted" },
+                `${p.porHora}/h`)),
+            React.createElement("td", null,
+              React.createElement("span", { className: "trilho", style: { display: 'block' } },
+                React.createElement("span", {
+                  className: "preenche",
+                  style: {
+                    width: `${p.ocupacao}%`,
+                    background: p.gargalo ? 'var(--thread)'
+                      : p.ocupacao < 60 ? 'var(--danger)' : 'var(--ok)'
+                  }
+                })),
+              React.createElement("span", { className: "small muted" }, `${p.ocupacao}%`)),
+            React.createElement("td", { className: "num small muted" },
+              p.minutosPerdidosDia > 0 ? duracao(p.minutosPerdidosDia) : '—'))))),
+
+    (() => {
+      const meta = metaHoraDaLinha(b.postos, { minutosDia, demandaDia: num(demanda) || null });
+      if (!meta) return null;
+      const faltam = meta.postos.filter(x => !x.atende);
+      return React.createElement("div", { className: "panel" },
+        React.createElement("h3", { style: { marginTop: 0 } },
+          `Meta por hora para equilibrar: ${meta.alvoHora}/h`),
+        React.createElement("div", { className: "small muted", style: { marginBottom: 8 } },
+          meta.origem === 'demanda'
+            ? `Vem da demanda de ${num(demanda)} peças por dia.`
+            : "Vem do gargalo atual — é o ritmo que a linha consegue hoje. Informe a demanda acima para calcular pela necessidade."),
+        React.createElement("table", null,
+          React.createElement("thead", null,
+            React.createElement("tr", null,
+              React.createElement("th", null, "Operação"),
+              React.createElement("th", { className: "num" }, "Faz"),
+              React.createElement("th", { className: "num" }, "Meta"),
+              React.createElement("th", { className: "num" }, "Folga"),
+              React.createElement("th", null, ""))),
+          React.createElement("tbody", null,
+            meta.postos.map(x => React.createElement("tr", { key: x.id },
+              React.createElement("td", null, x.etapa),
+              React.createElement("td", { className: "num" }, `${x.atual}/h`),
+              React.createElement("td", { className: "num" }, `${x.meta}/h`),
+              React.createElement("td", {
+                className: "num",
+                style: { color: x.atende ? 'var(--ok)' : 'var(--warn)', fontWeight: 600 }
+              }, x.folga > 0 ? `+${x.folga}` : x.folga),
+              React.createElement("td", { className: "small muted" },
+                x.atende ? 'dá conta'
+                  : `faltam ${x.faltamPessoas} pessoa(s) no ritmo atual`))))),
+        faltam.length === 0 && React.createElement("div", {
+          className: "small muted", style: { marginTop: 8 }
+        }, "Todas as operações alcançam a meta. A linha está equilibrada para este ritmo."));
+    })(),
+
+    s.melhor && React.createElement("div", { className: "panel", style: { borderColor: 'var(--thread)' } },
+      React.createElement("h3", { style: { marginTop: 0 } }, "Onde colocar a próxima pessoa"),
+      s.sugestoes.map((x, i) => React.createElement("div", {
+        key: x.posto.id, className: "small", style: { marginBottom: 6 }
+      },
+        React.createElement("strong", null,
+          i === 0 ? "→ " : "   ", x.posto.etapa),
+        `: ${x.posto.pessoas} → ${x.pessoasDepois} pessoa(s) leva a linha de `,
+        `${x.saidaAntes} para ${x.saidaDepois} peças/dia `,
+        React.createElement("strong", null, `(+${x.ganho})`),
+        x.ganhoPercentual !== null && ` · +${x.ganhoPercentual}%`)),
+      React.createElement("div", { className: "small muted", style: { marginTop: 8 } },
+        "Reforçar o gargalo funciona até ele deixar de ser o gargalo. Depois ",
+        "disso, a pessoa a mais não faz a linha andar mais rápido.")),
+
+    s.podeReduzir.length > 0 && React.createElement("div", { className: "panel" },
+      React.createElement("h3", { style: { marginTop: 0 } }, "Onde sobra gente"),
+      s.podeReduzir.map(x => React.createElement("div", {
+        key: x.posto.id, className: "small", style: { marginBottom: 5 }
+      },
+        React.createElement("strong", null, x.posto.etapa),
+        `: ${x.posto.pessoas} → ${x.pessoasDepois} pessoa(s) sem perder produção `,
+        React.createElement("span", { className: "muted" },
+          `(ocupação de ${x.posto.ocupacao}%)`))),
+      React.createElement("div", { className: "small muted", style: { marginTop: 8 } },
+        "Tirar de onde sobra e pôr no gargalo costuma render mais que contratar. ",
+        "Confira antes se a pessoa sabe fazer a outra operação.")),
+
+    escalando && (() => {
+      const p = b.postos.find(x => x.id === escalando);
+      if (!p) return null;
+      const passo = (produto.processo || []).find(x => x.id === p.id);
+      const esc = escalas[p.id] || { pessoas: [], maquinas: [] };
+      return React.createElement(EscalaDaOperacao, {
+        posto: { ...p, etapaId: passo ? passo.etapaId : null,
+          departamentoId: passo ? passo.departamentoId : null },
+        db, escala: esc.pessoas, maquinas: esc.maquinas,
+        produtoId: produto.id, update, usuario,
+        onChange: v => setEscalas(e => ({ ...e, [p.id]: v })),
+        onClose: () => setEscalando(null)
+      });
+    })(),
+
+    dim && !dim.erro && React.createElement("div", { className: "panel" },
+      React.createElement("h3", { style: { marginTop: 0 } },
+        `Para produzir ${dim.demanda} por dia`),
+      React.createElement("div", { className: "painel-meta" },
+        React.createElement("div", null,
+          React.createElement("div", { className: "k" }, "Uma peça a cada"),
+          React.createElement("div", { className: "v", style: { fontSize: 15 } },
+            duracao(dim.takt))),
+        React.createElement("div", null,
+          React.createElement("div", { className: "k" }, "Pessoas hoje"),
+          React.createElement("div", { className: "v" }, dim.totalAtual)),
+        React.createElement("div", { className: "destaque" },
+          React.createElement("div", { className: "k" }, "Pessoas necessárias"),
+          React.createElement("div", { className: "v" }, dim.total)),
+        React.createElement("div", null,
+          React.createElement("div", { className: "k" }, "Diferença"),
+          React.createElement("div", { className: "v" },
+            dim.diferenca > 0 ? `+${dim.diferenca}` : dim.diferenca))),
+      React.createElement("table", { style: { marginTop: 10 } },
+        React.createElement("tbody", null,
+          dim.postos.filter(p => p.diferenca !== 0).map(p =>
+            React.createElement("tr", { key: p.id },
+              React.createElement("td", null, p.etapa),
+              React.createElement("td", { className: "num small" },
+                `${p.pessoas} → ${p.necessario}`),
+              React.createElement("td", { className: "num small muted" },
+                p.diferenca > 0 ? `+${p.diferenca}` : p.diferenca))))),
+      dim.postos.every(p => p.diferenca === 0) && React.createElement("div", {
+        className: "small muted"
+      }, "A linha atual já atende esta demanda.")))
+  );
+}
+
+/* O caminho da peça pela fábrica: trabalhar e esperar. */
+function LeadTimeProduto({ produto, db, update, usuario, podeEditar }) {
+  const j = jornadaDe(db);
+  const [quantidade, setQuantidade] = React.useState(100);
+  const [minutosDia, setMinutosDia] = React.useState(j.produtivo);
+  const [ajustando, setAjustando] = React.useState(false);
+
+  const lt = leadTimeProduto(produto, db, { quantidade, minutosDia });
+  if (lt.vazio) {
+    return React.createElement(Empty, {
+      text: "Este produto não tem processo produtivo. Sem as operações, não há caminho a percorrer."
+    });
+  }
+  const prev = previsaoComFila(produto, db, { quantidade, minutosDia });
+  const cal = calibrarFila(db, produto.id);
+
+  return React.createElement("div", null,
+    React.createElement("div", { className: "small muted", style: { marginBottom: 12 } },
+      "Somar o tempo das operações dá o tempo de trabalho, não o tempo de ",
+      "atravessar a fábrica. Entre uma operação e outra a peça espera — na fila ",
+      "do setor, o lote juntar, a máquina liberar. É essa espera que faz a data ",
+      "prometida não bater."),
+
+    React.createElement("div", { className: "grid3" },
+      React.createElement(Field, { label: "Quantidade da ordem" },
+        React.createElement("input", {
+          type: "number", min: "1", value: quantidade,
+          onChange: e => setQuantidade(Math.max(1, num(e.target.value)))
+        })),
+      React.createElement(Field, { label: "Minutos por dia" },
+        React.createElement("input", {
+          type: "number", min: "1", value: minutosDia,
+          onChange: e => setMinutosDia(num(e.target.value))
+        })),
+      podeEditar && React.createElement(Field, { label: " " },
+        React.createElement("button", {
+          className: "btn ghost", onClick: () => setAjustando(true)
+        }, "Ajustar esperas"))),
+
+    /* Duas linhas: os rótulos em cima, os números embaixo. Lado a lado
+       fica mais fácil comparar do que em cartões separados. */
+    React.createElement("div", { className: "faixa-dados" },
+      React.createElement("div", { className: "linha-rotulos" },
+        React.createElement("span", null, "Tempo de trabalho"),
+        React.createElement("span", null, "Tempo de espera"),
+        React.createElement("span", null, "Lead time"),
+        React.createElement("span", null, "Tempo sendo trabalhada")),
+      React.createElement("div", { className: "linha-valores" },
+        React.createElement("span", null, duracao(lt.totalProcesso),
+          React.createElement("small", null,
+            `${(lt.totalProcesso / minutosDia).toFixed(1)} dia(s)`)),
+        React.createElement("span", { className: "alerta" }, duracao(lt.totalFila),
+          React.createElement("small", null, `${lt.proporcaoFila}% do total`)),
+        React.createElement("span", { className: "destaque" }, `${lt.totalDias} dias`,
+          React.createElement("small", null, "atravessar a fábrica")),
+        React.createElement("span", null, `${lt.eficienciaFluxo}%`,
+          React.createElement("small", null, "a peça é trabalhada")))),
+
+    prev.diasDeEspera > 0 && React.createElement("div", {
+      className: "panel", style: { borderColor: 'var(--warn)', background: 'var(--warn-bg)' }
+    },
+      React.createElement("div", { className: "small", style: { fontWeight: 600 } },
+        `A espera acrescenta ${prev.diasDeEspera} dia(s) à data de entrega.`),
+      React.createElement("div", { className: "small muted" },
+        `Contando só o trabalho, a ordem ficaria pronta em `,
+        React.createElement("strong", null, fmtDate(prev.dataSemFila)),
+        `. Contando a fábrica como ela é, `,
+        React.createElement("strong", null, fmtDate(prev.data)),
+        `. Prometer a primeira data é prometer o que não se cumpre.`)),
+
+    React.createElement("div", { className: "panel", style: { padding: 0 } },
+      React.createElement("table", null,
+        React.createElement("thead", null,
+          React.createElement("tr", null,
+            React.createElement("th", null, "Etapa"),
+            React.createElement("th", { className: "num" }, "Trabalho"),
+            React.createElement("th", { className: "num" }, "Espera"),
+            React.createElement("th", null, "Proporção"),
+            React.createElement("th", { className: "num" }, "Total"))),
+        React.createElement("tbody", null,
+          lt.etapas.map(e => {
+            const pFila = e.total > 0 ? (e.fila / e.total * 100) : 0;
+            return React.createElement("tr", { key: e.ordem },
+              React.createElement("td", null,
+                React.createElement("strong", null, `${e.ordem}. ${e.etapa}`),
+                React.createElement("div", { className: "small muted" }, e.setor)),
+              React.createElement("td", { className: "num" }, duracao(e.processo)),
+              React.createElement("td", { className: "num" },
+                e.fila > 0 ? duracao(e.fila) : '—',
+                e.fila > 0 && React.createElement("div", { className: "small muted" },
+                  `${e.filaHoras}h de fila`)),
+              React.createElement("td", null,
+                React.createElement("span", { className: "trilho", style: { display: 'block' } },
+                  React.createElement("span", {
+                    className: "preenche",
+                    style: { width: `${100 - pFila}%`, background: 'var(--ok)' }
+                  })),
+                React.createElement("span", { className: "small muted" },
+                  pFila > 0 ? `${(100 - pFila).toFixed(0)}% trabalho` : 'só trabalho')),
+              React.createElement("td", { className: "num" },
+                React.createElement("strong", null, duracao(e.total))));
+          }))),
+
+    !cal.vazio && React.createElement("div", {
+      className: "panel",
+      style: { borderColor: cal.ajuste === 'ok' ? 'var(--ok)' : 'var(--thread)' }
+    },
+      React.createElement("h3", { style: { marginTop: 0 } },
+        "O previsto bate com o que aconteceu?"),
+      React.createElement("div", { className: "painel-meta" },
+        React.createElement("div", null,
+          React.createElement("div", { className: "k" }, "Previsto"),
+          React.createElement("div", { className: "v" }, `${cal.previsto.dias}d`)),
+        React.createElement("div", null,
+          React.createElement("div", { className: "k" }, "Real (mediana)"),
+          React.createElement("div", { className: "v" }, `${cal.real.mediana}d`)),
+        React.createElement("div", null,
+          React.createElement("div", { className: "k" }, "Diferença"),
+          React.createElement("div", { className: "v" },
+            `${cal.diferenca > 0 ? '+' : ''}${cal.diferenca}d`)),
+        React.createElement("div", null,
+          React.createElement("div", { className: "k" }, "Ordens medidas"),
+          React.createElement("div", { className: "v" }, cal.real.amostra))),
+      React.createElement("div", { className: "small muted", style: { marginTop: 8 } },
+        cal.ajuste === 'ok'
+          ? "A espera configurada está batendo com a realidade."
+          : cal.ajuste === 'aumentar'
+            ? `As ordens estão levando ${cal.diferenca} dia(s) a mais que o previsto. A espera configurada está baixa — aumente, ou a data prometida vai continuar errando.`
+            : `As ordens estão saindo ${Math.abs(cal.diferenca)} dia(s) antes do previsto. A espera configurada está alta — dá para prometer prazo menor.`,
+        !cal.confiavel && ` Atenção: só ${cal.real.amostra} ordem(ns) medida(s) — pouco para concluir.`)),
+
+    cal.vazio && cal.aviso && React.createElement("div", { className: "panel" },
+      React.createElement("div", { className: "small muted" }, cal.aviso)),
+
+    ajustando && React.createElement(FilasModal, {
+      db, update, usuario, onClose: () => setAjustando(false)
+    }))
+  );
+}
+
+function FilasModal({ db, update, usuario, onClose }) {
+  const atual = db.parametrosFila || {};
+  const [filas, setFilas] = React.useState({ ...atual });
+  const set = (k, v) => setFilas(p => ({ ...p, [k]: num(v) }));
+
+  return React.createElement(Modal, {
+    title: "Tempo de espera entre setores", onClose, wide: true
+  },
+    React.createElement("div", { className: "small muted", style: { marginBottom: 12 } },
+      "Quanto tempo, em média, uma peça espera antes de começar a ser ",
+      "trabalhada em cada setor. Se você não sabe o número, comece com 4 horas ",
+      "e deixe as primeiras ordens mostrarem o real — o sistema compara e avisa ",
+      "quando o valor está errado."),
+
+    React.createElement(Field, { label: "Padrão para todos os setores (horas)" },
+      React.createElement("input", {
+        type: "number", min: "0", step: "0.5", style: { maxWidth: 140 },
+        value: filas.padrao !== undefined ? filas.padrao : FILA_PADRAO_HORAS,
+        onChange: e => set('padrao', e.target.value)
+      })),
+
+    React.createElement("div", { className: "etp-rot", style: { marginTop: 12, marginBottom: 6 } },
+      "Ou por setor, quando a diferença importa"),
+    React.createElement("div", { className: "grid2" },
+      (db.departamentos || []).filter(d => d.ativo !== false).map(dep =>
+        React.createElement(Field, { key: dep.id, label: dep.nome },
+          React.createElement("input", {
+            type: "number", min: "0", step: "0.5",
+            placeholder: `${filas.padrao !== undefined ? filas.padrao : FILA_PADRAO_HORAS} (padrão)`,
+            value: filas[dep.id] !== undefined ? filas[dep.id] : '',
+            onChange: e => {
+              const v = e.target.value;
+              setFilas(p => {
+                const n = { ...p };
+                if (v === '') delete n[dep.id]; else n[dep.id] = num(v);
+                return n;
+              });
+            }
+          })))),
+
+    React.createElement("div", { className: "small muted", style: { marginTop: 10 } },
+      "Setor que trabalha por lote grande — estamparia, bordado, terceirizado — ",
+      "costuma ter espera bem maior. Vale medir antes de estimar."),
+
+    React.createElement("div", { className: "modal-actions" },
+      React.createElement("button", { className: "btn ghost", onClick: onClose }, "Cancelar"),
+      React.createElement("button", {
+        className: "btn accent",
+        onClick: () => {
+          update(d => { salvarFilas(d, filas, usuario); return d; });
+          onClose();
+        }
+      }, "Salvar"))
+  );
+}
+
+function CustosFixos({ db, update, usuario, podeEditar }) {
+  const [editando, setEditando] = React.useState(null);
+  const [config, setConfig] = React.useState(false);
+  const tx = taxaCustoIndireto(db);
+  const cap = tx.capacidade;
+
+  return React.createElement("div", null,
+    React.createElement("div", { className: "small muted", style: { marginBottom: 12 } },
+      "Aluguel, energia, manutenção e supervisão existem mesmo quando a fábrica ",
+      "está parada. Dividir esses custos pelos minutos de produção dá quanto ",
+      "cada peça carrega de fábrica — e é o que faltava para o custo ser o custo."),
+
+    React.createElement("div", { className: "cards" },
+      React.createElement("div", { className: "card" },
+        React.createElement("div", { className: "k" }, "Custo fixo mensal"),
+        React.createElement("div", { className: "v" }, money(tx.total)),
+        React.createElement("div", { className: "small muted" },
+          `${tx.lista.length} item(ns)`)),
+      React.createElement("div", { className: "card" },
+        React.createElement("div", { className: "k" }, "Capacidade do mês"),
+        React.createElement("div", { className: "v" },
+          cap.minutosReais.toLocaleString('pt-BR')),
+        React.createElement("div", { className: "small muted" },
+          `minutos · ${cap.pessoas} pessoa(s) · ${cap.ocupacao}% de ocupação`)),
+      React.createElement("div", { className: "card destaque" },
+        React.createElement("div", { className: "k" }, "Custo por minuto"),
+        React.createElement("div", { className: "v" },
+          tx.porMinuto > 0 ? `R$ ${tx.porMinuto.toFixed(4)}` : '—'),
+        React.createElement("div", { className: "small muted" },
+          tx.porHora > 0 ? `${money(tx.porHora)} por hora de fábrica` : 'sem base')),
+      React.createElement("div", { className: "card" },
+        React.createElement("div", { className: "k" }, "Numa peça de 10 min"),
+        React.createElement("div", { className: "v" },
+          tx.porMinuto > 0 ? money(tx.porMinuto * 10) : '—'),
+        React.createElement("div", { className: "small muted" }, "só de fábrica"))),
+
+    tx.avisos.length > 0 && React.createElement("div", { className: "panel", style: { borderColor: 'var(--warn)', background: 'var(--warn-bg)' } },
+      tx.avisos.map((a, i) => React.createElement("div", {
+        key: i, className: "small muted", style: { marginBottom: 4 }
+      }, a))),
+
+    React.createElement("div", { className: "row-actions", style: { marginBottom: 10 } },
+      podeEditar && React.createElement("button", {
+        className: "btn accent sm",
+        onClick: () => setEditando({ tipo: 'instalacao', ativo: true })
+      }, "+ Custo fixo"),
+      podeEditar && React.createElement("button", {
+        className: "btn ghost sm", onClick: () => setConfig(true)
+      }, "Ajustar capacidade"),
+      React.createElement("span", { style: { flex: 1 } })),
+
+    tx.lista.length === 0
+      ? React.createElement(Empty, {
+          text: "Nenhum custo fixo cadastrado. Sem eles, o custo do produto fica incompleto."
+        })
+      : React.createElement("div", { className: "panel", style: { padding: 0 } },
+          React.createElement("table", null,
+            React.createElement("thead", null,
+              React.createElement("tr", null,
+                React.createElement("th", null, "Custo"),
+                React.createElement("th", null, "Tipo"),
+                React.createElement("th", { className: "num" }, "Por mês"),
+                React.createElement("th", { className: "num" }, "Por minuto"),
+                React.createElement("th", { className: "num" }, "Peso"),
+                podeEditar && React.createElement("th", { style: { width: 70 } }))),
+            React.createElement("tbody", null,
+              (db.custosFixos || []).map(c => {
+                const inativo = c.ativo === false;
+                const peso = tx.total > 0 && !inativo
+                  ? (num(c.valorMensal) / tx.total * 100) : 0;
+                return React.createElement("tr", {
+                  key: c.id, style: inativo ? { opacity: .5 } : undefined
+                },
+                  React.createElement("td", null,
+                    React.createElement("strong", null, c.nome),
+                    c.observacao && React.createElement("div", { className: "small muted" },
+                      c.observacao),
+                    inativo && React.createElement("div", { className: "small muted" },
+                      "fora da conta")),
+                  React.createElement("td", { className: "small" },
+                    tipoCustoFixo(c.tipo).nome),
+                  React.createElement("td", { className: "num" }, money(c.valorMensal)),
+                  React.createElement("td", { className: "num small" },
+                    cap.minutosReais > 0 && !inativo
+                      ? `R$ ${(num(c.valorMensal) / cap.minutosReais).toFixed(4)}` : '—'),
+                  React.createElement("td", { className: "num small" },
+                    peso > 0 ? `${peso.toFixed(1)}%` : '—'),
+                  podeEditar && React.createElement("td", null,
+                    React.createElement("button", {
+                      className: "btn-ic", onClick: () => setEditando({ ...c })
+                    }, "✎"),
+                    React.createElement("button", {
+                      className: "btn-ic ic-danger",
+                      onClick: () => {
+                        if (!confirm(`Remover "${c.nome}" da conta de custos?`)) return;
+                        update(d => { removerCustoFixo(d, c.id, usuario); return d; });
+                      }
+                    }, "×")));
+              })))),
+
+    tx.porTipo.length > 0 && React.createElement("div", { className: "panel" },
+      React.createElement("h3", null, "Para onde vai o custo fixo"),
+      tx.porTipo.map(t => React.createElement("div", {
+        key: t.id, className: "barra-linha"
+      },
+        React.createElement("span", { className: "rot" }, t.nome),
+        React.createElement("span", { className: "trilho" },
+          React.createElement("span", {
+            className: "preenche",
+            style: { width: `${(t.total / tx.porTipo[0].total * 100)}%` }
+          })),
+        React.createElement("span", { className: "qtd" }, money(t.total)))),
+      React.createElement("div", { className: "small muted", style: { marginTop: 8 } },
+        "O maior deles costuma ser o melhor lugar para procurar economia — ",
+        "mas confira se dá para mexer antes de contar com isso.")),
+
+    editando && React.createElement(CustoFixoModal, {
+      custo: editando, update, usuario, onClose: () => setEditando(null)
+    }),
+    config && React.createElement(CapacidadeModal, {
+      db, update, usuario, onClose: () => setConfig(false)
+    })
+  );
+}
+
+function CustoFixoModal({ custo, update, usuario, onClose }) {
+  const [f, setF] = React.useState({ ...custo });
+  const set = (k, v) => setF(p => ({ ...p, [k]: v }));
+
+  return React.createElement(Modal, {
+    title: custo.id ? "Editar custo fixo" : "Novo custo fixo", onClose
+  },
+    React.createElement(Field, { label: "Do que se trata *" },
+      React.createElement("input", {
+        value: f.nome || '', autoFocus: true,
+        placeholder: "ex: aluguel do galpão",
+        onChange: e => set('nome', e.target.value)
+      })),
+    React.createElement(Field, { label: "Tipo" },
+      React.createElement("select", {
+        value: f.tipo, onChange: e => set('tipo', e.target.value)
+      },
+        TIPOS_CUSTO_FIXO.map(t => React.createElement("option", {
+          key: t.id, value: t.id
+        }, t.nome)))),
+    React.createElement("div", { className: "small muted", style: { marginTop: -6, marginBottom: 10 } },
+      tipoCustoFixo(f.tipo).ajuda),
+    React.createElement(Field, { label: "Valor por mês *" },
+      React.createElement("input", {
+        type: "number", min: "0", step: "0.01", style: { maxWidth: 180 },
+        value: f.valorMensal || '',
+        onChange: e => set('valorMensal', e.target.value)
+      })),
+    React.createElement("div", { className: "small muted", style: { marginTop: -6, marginBottom: 10 } },
+      "Use a média dos últimos meses. Conta que varia muito — energia no ",
+      "verão, por exemplo — vale usar o valor mais alto: errar para cima no ",
+      "custo é menos perigoso que errar para baixo."),
+    React.createElement(Field, { label: "Observação" },
+      React.createElement("input", {
+        value: f.observacao || '',
+        onChange: e => set('observacao', e.target.value)
+      })),
+    React.createElement("label", { className: "check" },
+      React.createElement("input", {
+        type: "checkbox", checked: f.ativo !== false,
+        onChange: e => set('ativo', e.target.checked)
+      }),
+      React.createElement("span", null, "Entra na conta do custo")),
+    React.createElement("div", { className: "modal-actions" },
+      React.createElement("button", { className: "btn ghost", onClick: onClose }, "Cancelar"),
+      React.createElement("button", {
+        className: "btn accent",
+        disabled: !String(f.nome || '').trim() || !(num(f.valorMensal) > 0),
+        onClick: () => {
+          let erro = null;
+          update(d => { const r = salvarCustoFixo(d, f, usuario); erro = r.erro || null; return d; });
+          if (erro) alert(erro); else onClose();
+        }
+      }, "Salvar"))
+  );
+}
+
+function CapacidadeModal({ db, update, usuario, onClose }) {
+  const atual = db.parametrosCustoIndireto || {};
+  const [ocupacao, setOcupacao] = React.useState(
+    num(atual.ocupacao) || OCUPACAO_PADRAO);
+  const [dias, setDias] = React.useState(
+    num(atual.diasUteis) || num((db.parametrosMaoDeObra || {}).diasUteis) || DIAS_UTEIS_MES);
+
+  const previa = capacidadeProdutivaMes({ ...db,
+    parametrosCustoIndireto: { ocupacao, diasUteis: dias } });
+  const total = (db.custosFixos || []).filter(c => c.ativo !== false)
+    .reduce((s, c) => s + num(c.valorMensal), 0);
+
+  return React.createElement(Modal, { title: "Capacidade da fábrica", onClose, wide: true },
+    React.createElement("div", { className: "small muted", style: { marginBottom: 12 } },
+      "É por este número que o custo fixo é dividido. Quanto menor a ",
+      "capacidade, mais caro fica cada minuto — e é por isso que fábrica ",
+      "vazia tem custo por peça mais alto."),
+
+    React.createElement("div", { className: "grid2" },
+      React.createElement(Field, { label: "Dias úteis por mês" },
+        React.createElement("input", {
+          type: "number", min: "1", max: "31", value: dias,
+          onChange: e => setDias(num(e.target.value))
+        })),
+      React.createElement(Field, { label: "Ocupação real (%)" },
+        React.createElement("input", {
+          type: "number", min: "1", max: "100", value: ocupacao,
+          onChange: e => setOcupacao(num(e.target.value))
+        }))),
+
+    React.createElement("div", { className: "small muted", style: { marginTop: -6, marginBottom: 12 } },
+      React.createElement("strong", null, "Sobre a ocupação: "),
+      "ninguém produz 100% do tempo disponível. Falta material, troca-se de ",
+      "produto, a máquina para. Se você não sabe o número, 85% é um ponto de ",
+      "partida razoável — e o próprio sistema vai mostrar o real conforme os ",
+      "apontamentos entrarem."),
+
+    React.createElement("div", { className: "painel-meta" },
+      React.createElement("div", null,
+        React.createElement("div", { className: "k" }, "Pessoas na produção"),
+        React.createElement("div", { className: "v" }, previa.pessoas)),
+      React.createElement("div", null,
+        React.createElement("div", { className: "k" }, "Minutos teóricos"),
+        React.createElement("div", { className: "v", style: { fontSize: 15 } },
+          previa.minutosTeoricos.toLocaleString('pt-BR'))),
+      React.createElement("div", null,
+        React.createElement("div", { className: "k" }, "Minutos reais"),
+        React.createElement("div", { className: "v", style: { fontSize: 15 } },
+          previa.minutosReais.toLocaleString('pt-BR'))),
+      React.createElement("div", { className: "destaque" },
+        React.createElement("div", { className: "k" }, "Custo por minuto"),
+        React.createElement("div", { className: "v", style: { fontSize: 15 } },
+          previa.minutosReais > 0
+            ? `R$ ${(total / previa.minutosReais).toFixed(4)}` : '—'))),
+
+    React.createElement("div", { className: "modal-actions" },
+      React.createElement("button", { className: "btn ghost", onClick: onClose }, "Cancelar"),
+      React.createElement("button", {
+        className: "btn accent",
+        onClick: () => {
+          update(d => {
+            d.parametrosCustoIndireto = { ...(d.parametrosCustoIndireto || {}),
+              ocupacao, diasUteis: dias };
+            registrarLog(d, usuario, 'custo.capacidade',
+              `ocupação ${ocupacao}% · ${dias} dias`);
+            return d;
+          });
+          onClose();
+        }
+      }, "Salvar"))
+  );
+}
+
 function GrupoCanal({
   db,
   update,
@@ -18403,6 +24965,9 @@ function GrupoCanal({
   }, {
     id: 'indicadores',
     label: 'Indicadores'
+  }, {
+    id: 'vagas',
+    label: `Vagas (${vagasAbertas(db).length})`
   }, {
     id: 'qrcodes',
     label: 'QR Codes'
@@ -18434,6 +24999,11 @@ function GrupoCanal({
   }), sub === 'indicadores' && /*#__PURE__*/React.createElement(CanalIndicadores, {
     db: db,
     usuario: usuario
+  }), sub === 'vagas' && /*#__PURE__*/React.createElement(GestaoVagas, {
+    db: db,
+    update: update,
+    usuario: usuario,
+    podeEditar: pode('config') || pode('tratar')
   }), sub === 'qrcodes' && /*#__PURE__*/React.createElement(CanalQRCodes, {
     db: db,
     update: update,
@@ -18493,36 +25063,22 @@ function CanalTratamento({
     const criticas = abertas.filter(m => m.prioridade === 'critica');
     const novas = abertas.filter(m => m.status === 'recebido');
     if (abertas.length === 0) return null;
-    return /*#__PURE__*/React.createElement("div", {
-      className: "cards",
-      style: {
-        marginBottom: 12
-      }
-    }, /*#__PURE__*/React.createElement("div", {
-      className: "card"
-    }, /*#__PURE__*/React.createElement("div", {
-      className: "k"
-    }, "Em aberto"), /*#__PURE__*/React.createElement("div", {
-      className: "v"
-    }, abertas.length), /*#__PURE__*/React.createElement("div", {
-      className: "small muted"
-    }, novas.length, " sem leitura")), /*#__PURE__*/React.createElement("div", {
-      className: "card" + (criticas.length ? ' alerta' : '')
-    }, /*#__PURE__*/React.createElement("div", {
-      className: "k"
-    }, "Críticas"), /*#__PURE__*/React.createElement("div", {
-      className: "v"
-    }, criticas.length), /*#__PURE__*/React.createElement("div", {
-      className: "small muted"
-    }, "prazo de 1 dia")), /*#__PURE__*/React.createElement("div", {
-      className: "card" + (atrasadas.length ? ' alerta' : '')
-    }, /*#__PURE__*/React.createElement("div", {
-      className: "k"
-    }, "Fora do prazo"), /*#__PURE__*/React.createElement("div", {
-      className: "v"
-    }, atrasadas.length), /*#__PURE__*/React.createElement("div", {
-      className: "small muted"
-    }, atrasadas.length ? 'precisam de resposta' : 'tudo em dia')));
+    return /*#__PURE__*/React.createElement("div", { className: "faixa-dados" },
+    /*#__PURE__*/React.createElement("div", { className: "linha-rotulos" },
+      /*#__PURE__*/React.createElement("span", null, "Em aberto"),
+      /*#__PURE__*/React.createElement("span", null, "Críticas"),
+      /*#__PURE__*/React.createElement("span", null, "Fora do prazo")),
+    /*#__PURE__*/React.createElement("div", { className: "linha-valores" },
+      
+      /*#__PURE__*/React.createElement("span", null,
+        abertas.length,
+        /*#__PURE__*/React.createElement("small", null, novas.length, " sem leitura")),
+      /*#__PURE__*/React.createElement("span", { className: (criticas.length ? 'alerta' : '') },
+        criticas.length,
+        /*#__PURE__*/React.createElement("small", null, "prazo de 1 dia")),
+      /*#__PURE__*/React.createElement("span", { className: (atrasadas.length ? 'alerta' : '') },
+        atrasadas.length,
+        /*#__PURE__*/React.createElement("small", null, atrasadas.length ? 'precisam de resposta' : 'tudo em dia'))));
   })(), /*#__PURE__*/React.createElement("div", {
     className: "small muted",
     style: {
@@ -18657,7 +25213,7 @@ function CanalDetalhe({
     className: "eyebrow"
   }, cat.icone, " ", cat.nome), /*#__PURE__*/React.createElement("h2", null, m.protocolo), /*#__PURE__*/React.createElement("div", {
     className: "small muted"
-  }, "aberta em ", fmtDate(String(m.criadaEm || '').slice(0, 10)), ' · ', m.anonima ? 'anônima' : `${m.nome || 'sem nome'}${m.matricula ? ' · ' + m.matricula : ''}`))), m.sinalUrgencia && ABERTOS_CANAL.includes(m.status) && /*#__PURE__*/React.createElement("div", {
+  }, "aberta em ", fmtDataHora(m.criadaEm), ' · ', m.anonima ? 'anônima' : `${m.nome || 'sem nome'}${m.matricula ? ' · ' + m.matricula : ''}`))), m.sinalUrgencia && ABERTOS_CANAL.includes(m.status) && /*#__PURE__*/React.createElement("div", {
     className: "panel",
     style: {
       borderColor: 'var(--danger)',
@@ -18897,7 +25453,7 @@ function CanalDetalhe({
     className: "canal-resposta" + (i.interno ? ' interno' : '')
   }, /*#__PURE__*/React.createElement("div", {
     className: "small muted"
-  }, fmtDate(String(i.quando || '').slice(0, 10)), " · ", i.quem, i.interno && ' · nota interna'), /*#__PURE__*/React.createElement("div", {
+  }, fmtDataHora(i.quando), " · ", i.quem, i.interno && ' · nota interna'), /*#__PURE__*/React.createElement("div", {
     className: "small"
   }, i.texto))), podeEditar && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(Field, {
     label: "Escrever"
@@ -18949,7 +25505,7 @@ function CanalDetalhe({
     style: {
       width: 150
     }
-  }, h.quem, /*#__PURE__*/React.createElement("div", null, fmtDate(String(h.quando || '').slice(0, 10)))))))), /*#__PURE__*/React.createElement("div", {
+  }, h.quem, /*#__PURE__*/React.createElement("div", null, fmtDataHora(h.quando))))))), /*#__PURE__*/React.createElement("div", {
     className: "small muted",
     style: {
       marginTop: 6
@@ -19691,7 +26247,9 @@ function AfericoesLista({
     style: {
       marginBottom: 10
     }
-  }, "Comece pela ordem ou pelo produto — as operações sugeridas são as do processo produtivo dele, na ordem em que acontecem."), /*#__PURE__*/React.createElement("div", {
+  }, "Comece pela ordem ou pelo produto — as operações sugeridas são as do processo produtivo dele, na ordem em que acontecem. ",
+    "Só aparecem operações de setores que trabalham com aferição; nos ",
+    "demais a meta sai da jornada."), /*#__PURE__*/React.createElement("div", {
     className: "grid2"
   }, /*#__PURE__*/React.createElement(Field, {
     label: "Ordem de produção"
@@ -19760,7 +26318,11 @@ function AfericoesLista({
       }
     }, /*#__PURE__*/React.createElement("option", {
       value: ""
-    }, "— escolha a operação —"), doProduto.map((x, i) => /*#__PURE__*/React.createElement("option", {
+    }, "— escolha a operação —"), doProduto
+      /* aferição é dos setores que medem peça a peça; nos demais a meta
+         sai da jornada e não há o que cronometrar */
+      .filter(x => exigeAfericao(db, x.passo.departamentoId))
+      .map((x, i) => /*#__PURE__*/React.createElement("option", {
       key: x.passo.id,
       value: x.etapa.id
     }, i + 1, ". ", x.etapa.nome, x.setor ? ` (${x.setor})` : ''))) : /*#__PURE__*/React.createElement("select", {
@@ -19775,7 +26337,9 @@ function AfericoesLista({
       }
     }, /*#__PURE__*/React.createElement("option", {
       value: ""
-    }, "— escolha a operação —"), (db.departamentos || []).map(dp => {
+    }, "— escolha a operação —"), (db.departamentos || [])
+      /* só os setores que trabalham com aferição aparecem aqui */
+      .filter(dp => exigeAfericao(db, dp.id)).map(dp => {
       const doSetor = (db.etapas || []).filter(e => e.departamentoId === dp.id && e.ativo !== false);
       if (doSetor.length === 0) return null;
       return /*#__PURE__*/React.createElement("optgroup", {
@@ -20877,7 +27441,7 @@ function MetasLista({
     style: {
       width: 150
     }
-  }, h.quem, /*#__PURE__*/React.createElement("div", null, fmtDate(String(h.quando || '').slice(0, 10))))))))), editar && /*#__PURE__*/React.createElement(Modal, {
+  }, h.quem, /*#__PURE__*/React.createElement("div", null, fmtDataHora(h.quando)))))))), editar && /*#__PURE__*/React.createElement(Modal, {
     title: "Alterar meta",
     onClose: () => setEditar(null)
   }, /*#__PURE__*/React.createElement("div", {
@@ -21570,7 +28134,7 @@ function AndamentoDaOrdem({
       }
     }, "meta ", proj.porHora, "/h")), /*#__PURE__*/React.createElement("td", {
       className: "small"
-    }, e.concluida ? '🟢 pronta' : e.produzidas > 0 ? '🟡 em curso' : e.emEspera > 0 ? '🔴 parada' : '· aguardando'), podeEditar && /*#__PURE__*/React.createElement("td", null, !e.concluida && /*#__PURE__*/React.createElement("button", {
+    }, e.concluida ? '🟢 pronta' : e.produzidas > 0 ? '🟡 em curso' : e.emEspera > 0 ? '🔴 parada' : '· aguardando'), false && /*#__PURE__*/React.createElement("td", null, !e.concluida && /*#__PURE__*/React.createElement("button", {
       className: "btn ghost sm",
       onClick: () => setApontar({
         ordemId: ordem.id,
@@ -21653,7 +28217,12 @@ function AndamentoDaOrdem({
     style: {
       marginTop: 6
     }
-  }, rvp.naoExplicado, " peça(s) de diferença sem causa registrada. Apontar as paradas com motivo fecha essa conta."))), ordem.situacao === 'concluida' && /*#__PURE__*/React.createElement(FechamentoOrdem, {
+  }, rvp.naoExplicado, " peça(s) de diferença sem causa registrada. Apontar as paradas com motivo fecha essa conta."))), podeEditar && ordem.situacao !== 'concluida' && /*#__PURE__*/React.createElement("div", {
+    className: "small muted no-print",
+    style: { marginTop: 8 }
+  }, "Para apontar produção, use Produção → Programação → Balanceamento da ",
+    "carteira: lá a operação já vem com quem foi escalado e com a máquina."),
+    ordem.situacao === 'concluida' && /*#__PURE__*/React.createElement(FechamentoOrdem, {
     ordem: ordem,
     db: db
   }), apontar && /*#__PURE__*/React.createElement(ApontarProducaoModal, {
@@ -21983,41 +28552,25 @@ function TorreDeControle({
     style: {
       marginBottom: 10
     }
-  }, "O que está em produção agora, com a previsão calculada pelo ritmo real de cada etapa."), /*#__PURE__*/React.createElement("div", {
-    className: "cards"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "card"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "k"
-  }, "Ordens abertas"), /*#__PURE__*/React.createElement("div", {
-    className: "v"
-  }, p.abertas), /*#__PURE__*/React.createElement("div", {
-    className: "small muted"
-  }, p.emAndamento, " com produção")), /*#__PURE__*/React.createElement("div", {
-    className: "card" + (p.atrasadas ? ' alerta' : '')
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "k"
-  }, "Vão passar da entrega"), /*#__PURE__*/React.createElement("div", {
-    className: "v"
-  }, p.atrasadas), /*#__PURE__*/React.createElement("div", {
-    className: "small muted"
-  }, "pelo ritmo de agora")), /*#__PURE__*/React.createElement("div", {
-    className: "card"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "k"
-  }, "Produção de hoje"), /*#__PURE__*/React.createElement("div", {
-    className: "v"
-  }, p.producaoHoje), /*#__PURE__*/React.createElement("div", {
-    className: "small muted"
-  }, p.defeitoHoje, " rejeitada(s)")), /*#__PURE__*/React.createElement("div", {
-    className: "card destaque"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "k"
-  }, "Parada hoje"), /*#__PURE__*/React.createElement("div", {
-    className: "v"
-  }, duracao(p.paradaHoje)), /*#__PURE__*/React.createElement("div", {
-    className: "small muted"
-  }, p.minutosHoje > 0 ? `de ${duracao(p.minutosHoje)} apontados` : 'sem apontamento'))), p.gargalos.length > 0 && /*#__PURE__*/React.createElement("div", {
+  }, "O que está em produção agora, com a previsão calculada pelo ritmo real de cada etapa."), /*#__PURE__*/React.createElement("div", { className: "faixa-dados" },
+    /*#__PURE__*/React.createElement("div", { className: "linha-rotulos" },
+      /*#__PURE__*/React.createElement("span", null, "Ordens abertas"),
+      /*#__PURE__*/React.createElement("span", null, "Vão passar da entrega"),
+      /*#__PURE__*/React.createElement("span", null, "Produção de hoje"),
+      /*#__PURE__*/React.createElement("span", null, "Parada hoje")),
+    /*#__PURE__*/React.createElement("div", { className: "linha-valores" },
+      /*#__PURE__*/React.createElement("span", null, p.abertas,
+        /*#__PURE__*/React.createElement("small", null, p.emAndamento, " com produção")),
+      /*#__PURE__*/React.createElement("span", {
+        className: p.atrasadas ? 'alerta' : ''
+      }, p.atrasadas,
+        /*#__PURE__*/React.createElement("small", null, "pelo ritmo de agora")),
+      /*#__PURE__*/React.createElement("span", null, p.producaoHoje,
+        /*#__PURE__*/React.createElement("small", null, p.defeitoHoje, " rejeitada(s)")),
+      /*#__PURE__*/React.createElement("span", { className: "destaque" },
+        duracao(p.paradaHoje),
+        /*#__PURE__*/React.createElement("small", null,
+          p.minutosHoje > 0 ? `de ${duracao(p.minutosHoje)} apontados` : 'sem apontamento')))), p.gargalos.length > 0 && /*#__PURE__*/React.createElement("div", {
     className: "panel",
     style: {
       borderColor: 'var(--warn)',
@@ -22361,6 +28914,44 @@ function RelatorioAfericao({
 
 /* O painel da engenharia: o que está pronto, o que falta e em que
    versão o produto está. */
+/* A engenharia como faixa: em que pé está o produto, sempre à vista. */
+function FaixaEngenharia({ produto, db, update, usuario, podeEditar, aberta }) {
+  const ck = checklistEngenharia(produto, db);
+  const st = statusProduto(statusDoProduto(produto));
+  const versoes = versoesDoProduto(db, produto.id);
+  const mud = engenhariaMudou(produto, db);
+  const cor = st.produz ? 'var(--ok)'
+    : (st.id === 'bloqueado' || st.id === 'obsoleto') ? 'var(--danger)' : 'var(--warn)';
+
+  /* na aba de identidade o painel completo já aparece abaixo; aqui
+     basta a régua */
+  if (aberta) return null;
+
+  return React.createElement("div", { className: "faixa-eng" },
+    React.createElement("div", { className: "faixa-item" },
+      React.createElement("span", { className: "k" }, "Situação"),
+      React.createElement("span", { className: "v", style: { color: cor } }, st.nome)),
+    React.createElement("div", { className: "faixa-item" },
+      React.createElement("span", { className: "k" }, "Engenharia"),
+      React.createElement("span", { className: "v" }, `${ck.percentual}%`)),
+    React.createElement("div", { className: "faixa-barra" },
+      React.createElement("span", {
+        className: "preenche",
+        style: {
+          width: `${ck.percentual}%`,
+          background: ck.pronto ? 'var(--ok)' : 'var(--thread)'
+        }
+      })),
+    React.createElement("div", { className: "faixa-item" },
+      React.createElement("span", { className: "k" }, "Versão"),
+      React.createElement("span", { className: "v" },
+        versoes.length ? versoes[0].codigo : '—')),
+    !ck.pronto && React.createElement("div", { className: "faixa-falta" },
+      "falta: ", ck.pendentesObrigatorios.map(i => i.nome.toLowerCase()).join(', ')),
+    mud.mudou && !mud.semVersao && React.createElement("div", { className: "faixa-falta" },
+      "mudou desde a ", mud.versao.codigo));
+}
+
 function EngenhariaDoProduto({
   produto,
   db,
@@ -22530,7 +29121,7 @@ function EngenhariaDoProduto({
       onClick: () => setVerVersao(v)
     }, /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement("strong", null, v.codigo), /*#__PURE__*/React.createElement("div", {
       className: "small muted"
-    }, fmtDate(String(v.criadaEm || '').slice(0, 10))), usada > 0 && /*#__PURE__*/React.createElement("div", {
+    }, fmtDataHora(v.criadaEm)), usada > 0 && /*#__PURE__*/React.createElement("div", {
       className: "small muted"
     }, usada, " ordem(ns)")), /*#__PURE__*/React.createElement("td", {
       className: "small"
@@ -22556,7 +29147,7 @@ function EngenhariaDoProduto({
     style: {
       width: 140
     }
-  }, h.quem, /*#__PURE__*/React.createElement("div", null, fmtDate(String(h.quando || '').slice(0, 10))))))))), mudarSt && /*#__PURE__*/React.createElement(Modal, {
+  }, h.quem, /*#__PURE__*/React.createElement("div", null, fmtDataHora(h.quando)))))))), mudarSt && /*#__PURE__*/React.createElement(Modal, {
     title: `Mudar para ${statusProduto(mudarSt.para).nome}`,
     onClose: () => setMudarSt(null)
   }, /*#__PURE__*/React.createElement("div", {
@@ -22651,7 +29242,7 @@ function EngenhariaDoProduto({
     style: {
       marginBottom: 10
     }
-  }, verVersao.motivo || 'versão inicial', " ·", ' ', fmtDate(String(verVersao.criadaEm || '').slice(0, 10)), " ·", ' ', verVersao.criadaPor), /*#__PURE__*/React.createElement("div", {
+  }, verVersao.motivo || 'versão inicial', " ·", ' ', fmtDataHora(verVersao.criadaEm), " ·", ' ', verVersao.criadaPor), /*#__PURE__*/React.createElement("div", {
     className: "painel-meta"
   }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
     className: "k"
@@ -22934,6 +29525,10 @@ function RelatoriosCanal({
     className: "v"
   }, r.anonimas)), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("span", {
     className: "k"
+  }, "Reconhecimentos"), /*#__PURE__*/React.createElement("span", {
+    className: "v"
+  }, r.reconhecimentos)), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("span", {
+    className: "k"
   }, "Fora do prazo"), /*#__PURE__*/React.createElement("span", {
     className: "v"
   }, r.atrasadas)), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("span", {
@@ -22963,11 +29558,11 @@ function RelatoriosCanal({
       }
     }, /*#__PURE__*/React.createElement("td", null, m.protocolo, m.anonima && /*#__PURE__*/React.createElement("div", {
       className: "rel-mini"
-    }, "anônima")), /*#__PURE__*/React.createElement("td", null, fmtDate(String(m.criadaEm || '').slice(0, 10))), /*#__PURE__*/React.createElement("td", null, categoriaCanal(m.categoria).nome, m.sensivel && /*#__PURE__*/React.createElement("div", {
+    }, "anônima")), /*#__PURE__*/React.createElement("td", null, fmtDataHora(m.criadaEm)), /*#__PURE__*/React.createElement("td", null, categoriaCanal(m.categoria).nome, m.sensivel && /*#__PURE__*/React.createElement("div", {
       className: "rel-mini"
     }, "restrito")), /*#__PURE__*/React.createElement("td", null, dp ? dp.nome : '—'), /*#__PURE__*/React.createElement("td", null, esconder ? /*#__PURE__*/React.createElement("span", {
       className: "rel-oculto"
-    }, "texto não incluído neste relatório") : /*#__PURE__*/React.createElement(React.Fragment, null, String(m.descricao || '').slice(0, 90), String(m.descricao || '').length > 90 ? '…' : '')), /*#__PURE__*/React.createElement("td", null, statusCanal(m.status).nome), /*#__PURE__*/React.createElement("td", null, p.atrasada ? /*#__PURE__*/React.createElement("strong", null, "venceu ", fmtDate(p.limite)) : fmtDate(p.limite)));
+    }, "texto não incluído neste relatório") : /*#__PURE__*/React.createElement(React.Fragment, null, String(m.descricao || '').slice(0, 90), String(m.descricao || '').length > 90 ? '…' : '')), /*#__PURE__*/React.createElement("td", null, statusCanal(m.status).nome), /*#__PURE__*/React.createElement("td", null, p.semPrazo ? '—' : p.atrasada ? /*#__PURE__*/React.createElement("strong", null, "venceu ", fmtDate(p.limite)) : fmtDate(p.limite)));
   })))), /*#__PURE__*/React.createElement("div", {
     className: "rel-bloco"
   }, /*#__PURE__*/React.createElement("div", {
@@ -23065,11 +29660,11 @@ function RelatorioManifestacao({
     className: "rel-codigo"
   }, /*#__PURE__*/React.createElement("div", null, m.protocolo), /*#__PURE__*/React.createElement("div", {
     className: "small"
-  }, fmtDate(String(m.criadaEm || '').slice(0, 10))))), /*#__PURE__*/React.createElement("div", {
+  }, fmtDataHora(m.criadaEm)))), /*#__PURE__*/React.createElement("div", {
     className: "rel-bloco"
   }, /*#__PURE__*/React.createElement("div", {
     className: "rel-grade"
-  }, linha('Situação', statusCanal(m.status).nome), linha('Prioridade', `${prioridadeCanal(m.prioridade).marca} ` + prioridadeCanal(m.prioridade).nome), linha('Setor', dp ? dp.nome : ''), linha('Local', m.local), linha('Quando aconteceu', fmtDate(m.dataOcorrencia)), linha('Frequência', m.frequencia), linha('Impacto', m.impacto), linha('Prazo', `${fmtDate(p.limite)}${p.atrasada ? ' — vencido' : ''}`), linha('Identificação', m.anonima ? 'Anônima' : `${m.nome || 'sem nome'}${m.matricula ? ' · ' + m.matricula : ''}`), linha('Pediu retorno', m.querRetorno ? 'Sim' : 'Não'))), /*#__PURE__*/React.createElement("div", {
+  }, linha('Situação', statusCanal(m.status).nome), linha('Prioridade', `${prioridadeCanal(m.prioridade).marca} ` + prioridadeCanal(m.prioridade).nome), linha('Setor', dp ? dp.nome : ''), linha('Local', m.local), linha('Quando aconteceu', fmtDate(m.dataOcorrencia)), linha('Frequência', m.frequencia), linha('Impacto', m.impacto), linha('Prazo', p.semPrazo ? 'não se aplica' : `${fmtDate(p.limite)}${p.atrasada ? ' — vencido' : ''}`), linha('Identificação', m.anonima ? 'Anônima' : `${m.nome || 'sem nome'}${m.matricula ? ' · ' + m.matricula : ''}`), linha('Pediu retorno', m.querRetorno ? 'Sim' : 'Não'))), /*#__PURE__*/React.createElement("div", {
     className: "rel-bloco"
   }, /*#__PURE__*/React.createElement("div", {
     className: "rel-rot"
@@ -23122,7 +29717,7 @@ function RelatorioManifestacao({
     }
   }, /*#__PURE__*/React.createElement("div", {
     className: "rel-mini"
-  }, fmtDate(String(i.quando || '').slice(0, 10)), " · ", i.quem, i.interno ? ' · nota interna' : ' · enviado ao colaborador'), /*#__PURE__*/React.createElement("div", {
+  }, fmtDataHora(i.quando), " · ", i.quem, i.interno ? ' · nota interna' : ' · enviado ao colaborador'), /*#__PURE__*/React.createElement("div", {
     style: {
       fontSize: 12
     }
@@ -23136,11 +29731,660 @@ function RelatorioManifestacao({
     key: h.id
   }, /*#__PURE__*/React.createElement("td", null, h.o_que, h.nota && /*#__PURE__*/React.createElement("div", {
     className: "rel-mini"
-  }, h.nota)), /*#__PURE__*/React.createElement("td", null, h.quem), /*#__PURE__*/React.createElement("td", null, fmtDate(String(h.quando || '').slice(0, 10)))))))), /*#__PURE__*/React.createElement("div", {
+  }, h.nota)), /*#__PURE__*/React.createElement("td", null, h.quem), /*#__PURE__*/React.createElement("td", null, fmtDataHora(h.quando))))))), /*#__PURE__*/React.createElement("div", {
     className: "rel-aviso"
   }, m.anonima ? 'Esta manifestação foi feita de forma anônima. O sistema não guarda ' + 'nome, matrícula nem vínculo com o cadastro — não há como identificar ' + 'quem escreveu, e tentar descobrir contraria o propósito do canal.' : 'Manifestação identificada. Trate a identidade de quem relatou com o ' + 'mesmo cuidado que espera para a sua.'), /*#__PURE__*/React.createElement("div", {
     className: "rel-rodape"
   }, m.protocolo, " · gerado em ", fmtDate(todayISO()))));
+}
+
+/* As vagas como o colaborador vê: o que existe e o caminho para indicar. */
+function VagasParaColaborador({
+  db,
+  update,
+  usuario
+}) {
+  const [indicando, setIndicando] = useState(null);
+  const [pronto, setPronto] = useState(null);
+  const abertas = vagasAbertas(db);
+  if (pronto) {
+    return /*#__PURE__*/React.createElement("div", {
+      className: "canal-pronto"
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "canal-selo"
+    }, "✓"), /*#__PURE__*/React.createElement("h2", null, "Indicação registrada"), /*#__PURE__*/React.createElement("p", {
+      className: "small muted"
+    }, "O RH vai entrar em contato com ", pronto.nomeCandidato, ". Você recebe retorno pelo protocolo abaixo, seja qual for o resultado."), /*#__PURE__*/React.createElement("div", {
+      className: "canal-protocolo"
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "k"
+    }, "Protocolo"), /*#__PURE__*/React.createElement("strong", null, pronto.protocolo)), /*#__PURE__*/React.createElement("button", {
+      className: "btn accent",
+      onClick: () => setPronto(null)
+    }, "Voltar às vagas"));
+  }
+  if (indicando) {
+    return /*#__PURE__*/React.createElement(FormIndicacao, {
+      vaga: indicando,
+      db: db,
+      update: update,
+      usuario: usuario,
+      onCancelar: () => setIndicando(null),
+      onPronto: r => {
+        setIndicando(null);
+        setPronto(r);
+      }
+    });
+  }
+  return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    className: "canal-cabecalho"
+  }, /*#__PURE__*/React.createElement("h2", null, "🤝 Vagas abertas"), /*#__PURE__*/React.createElement("p", {
+    className: "small muted"
+  }, "Conhece alguém que se daria bem aqui? Indique. Quem já trabalha na fábrica sabe melhor do que qualquer anúncio o que a função exige.")), abertas.length === 0 ? /*#__PURE__*/React.createElement(Empty, {
+    text: "Nenhuma vaga aberta no momento."
+  }) : /*#__PURE__*/React.createElement("div", {
+    className: "vagas-lista"
+  }, abertas.map(v => {
+    const dp = (db.departamentos || []).find(x => x.id === v.departamentoId);
+    return /*#__PURE__*/React.createElement("div", {
+      key: v.id,
+      className: "vaga-card"
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "vaga-topo"
+    }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+      className: "vaga-titulo"
+    }, v.titulo), /*#__PURE__*/React.createElement("div", {
+      className: "small muted"
+    }, dp ? dp.nome : 'setor a definir', " · ", v.tipo, " · ", v.turno, num(v.vagas) > 1 && ` · ${v.vagas} vagas`)), /*#__PURE__*/React.createElement("span", {
+      className: "tag"
+    }, v.codigo)), v.descricao && /*#__PURE__*/React.createElement("div", {
+      className: "small",
+      style: {
+        marginTop: 8
+      }
+    }, v.descricao), v.requisitos && /*#__PURE__*/React.createElement("div", {
+      className: "small muted",
+      style: {
+        marginTop: 6
+      }
+    }, /*#__PURE__*/React.createElement("strong", null, "O que precisa:"), " ", v.requisitos), v.experiencia && /*#__PURE__*/React.createElement("div", {
+      className: "small muted",
+      style: {
+        marginTop: 3
+      }
+    }, /*#__PURE__*/React.createElement("strong", null, "Experiência:"), " ", v.experiencia), /*#__PURE__*/React.createElement("button", {
+      className: "btn accent sm",
+      style: {
+        marginTop: 10
+      },
+      onClick: () => setIndicando(v)
+    }, "Indicar alguém"));
+  })));
+}
+
+/* O formulário de indicação. O cuidado central: o contato é de outra
+   pessoa, que não está aqui para concordar. */
+function FormIndicacao({
+  vaga,
+  db,
+  update,
+  usuario,
+  onCancelar,
+  onPronto
+}) {
+  const [f, setF] = useState({
+    vagaId: vaga.id,
+    nomeCandidato: '',
+    contato: '',
+    experiencia: '',
+    relacao: '',
+    observacao: '',
+    nomeIndicador: usuario ? usuario.nome : '',
+    colaboradorId: usuario ? usuario.id || '' : '',
+    avisou: false
+  });
+  const set = (k, v) => setF(p => ({
+    ...p,
+    [k]: v
+  }));
+  const dp = (db.departamentos || []).find(x => x.id === vaga.departamentoId);
+  return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("button", {
+    className: "btn ghost sm",
+    onClick: onCancelar
+  }, "← Voltar às vagas"), /*#__PURE__*/React.createElement("div", {
+    className: "canal-cabecalho"
+  }, /*#__PURE__*/React.createElement("h2", null, "Indicar para ", vaga.titulo), /*#__PURE__*/React.createElement("p", {
+    className: "small muted"
+  }, dp ? dp.nome : 'setor a definir', " · ", vaga.tipo, " · ", vaga.turno)), /*#__PURE__*/React.createElement("div", {
+    className: "panel",
+    style: {
+      borderColor: 'var(--thread)',
+      background: 'var(--warn-bg)'
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "small"
+  }, /*#__PURE__*/React.createElement("strong", null, "Antes de continuar:"), " converse com a pessoa. Você vai passar o nome e o contato dela para o RH, e ninguém gosta de receber ligação de emprego sem saber por quê. Se ela topou, siga.")), /*#__PURE__*/React.createElement("div", {
+    className: "grid2"
+  }, /*#__PURE__*/React.createElement(Field, {
+    label: "Nome de quem você indica *"
+  }, /*#__PURE__*/React.createElement("input", {
+    value: f.nomeCandidato,
+    autoFocus: true,
+    onChange: e => set('nomeCandidato', e.target.value)
+  })), /*#__PURE__*/React.createElement(Field, {
+    label: "Telefone ou e-mail dela *"
+  }, /*#__PURE__*/React.createElement("input", {
+    value: f.contato,
+    placeholder: "(11) 90000-0000",
+    onChange: e => set('contato', e.target.value)
+  }))), /*#__PURE__*/React.createElement(Field, {
+    label: "Experiência que ela tem"
+  }, /*#__PURE__*/React.createElement("input", {
+    value: f.experiencia,
+    placeholder: "ex: trabalhou 3 anos com overlock",
+    onChange: e => set('experiencia', e.target.value)
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "grid2"
+  }, /*#__PURE__*/React.createElement(Field, {
+    label: "Como vocês se conhecem"
+  }, /*#__PURE__*/React.createElement("input", {
+    value: f.relacao,
+    placeholder: "ex: trabalhamos juntos, é minha vizinha",
+    onChange: e => set('relacao', e.target.value)
+  })), /*#__PURE__*/React.createElement(Field, {
+    label: "Seu nome *"
+  }, /*#__PURE__*/React.createElement("input", {
+    value: f.nomeIndicador,
+    onChange: e => set('nomeIndicador', e.target.value)
+  }))), /*#__PURE__*/React.createElement(Field, {
+    label: "Quer dizer mais alguma coisa sobre ela?"
+  }, /*#__PURE__*/React.createElement("textarea", {
+    rows: 3,
+    value: f.observacao,
+    placeholder: "o que faz você achar que ela se daria bem aqui",
+    onChange: e => set('observacao', e.target.value)
+  })), /*#__PURE__*/React.createElement("label", {
+    className: "check"
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "checkbox",
+    checked: f.avisou,
+    onChange: e => set('avisou', e.target.checked)
+  }), /*#__PURE__*/React.createElement("span", null, "Já falei com a pessoa e ela sabe que está sendo indicada")), /*#__PURE__*/React.createElement("div", {
+    className: "small muted",
+    style: {
+      marginTop: 8
+    }
+  }, "A sua indicação não garante a contratação, mas garante que o RH vai falar com ela e te dar um retorno."), /*#__PURE__*/React.createElement("div", {
+    className: "modal-actions"
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "btn ghost",
+    onClick: onCancelar
+  }, "Cancelar"), /*#__PURE__*/React.createElement("button", {
+    className: "btn accent",
+    disabled: !f.avisou || String(f.nomeCandidato).trim().length < 3 || String(f.contato).trim().length < 8 || !String(f.nomeIndicador).trim(),
+    onClick: () => {
+      let erro = null,
+        feito = null;
+      update(d => {
+        const r = registrarIndicacao(d, f, usuario);
+        erro = r.erro || null;
+        feito = r.indicacao || null;
+        return d;
+      });
+      if (erro) alert(erro);else onPronto(feito);
+    }
+  }, "Enviar indicação")));
+}
+
+/* A tela do RH: cadastrar vagas e cuidar das indicações. */
+function GestaoVagas({
+  db,
+  update,
+  usuario,
+  podeEditar
+}) {
+  const [aba, setAba] = useState('vagas');
+  const [editando, setEditando] = useState(null);
+  const [abrindo, setAbrindo] = useState(null);
+  const p = painelVagas(db);
+  return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    className: "cards"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "k"
+  }, "Vagas abertas"), /*#__PURE__*/React.createElement("div", {
+    className: "v"
+  }, p.abertas), /*#__PURE__*/React.createElement("div", {
+    className: "small muted"
+  }, p.postosAbertos, " posto(s)")), /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "k"
+  }, "Indicações"), /*#__PURE__*/React.createElement("div", {
+    className: "v"
+  }, p.indicacoes), /*#__PURE__*/React.createElement("div", {
+    className: "small muted"
+  }, p.contratados, " contratado(s)")), /*#__PURE__*/React.createElement("div", {
+    className: "card" + (p.semRetorno ? ' alerta' : '')
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "k"
+  }, "Sem contato ainda"), /*#__PURE__*/React.createElement("div", {
+    className: "v"
+  }, p.semRetorno), /*#__PURE__*/React.createElement("div", {
+    className: "small muted"
+  }, "esperando o RH")), /*#__PURE__*/React.createElement("div", {
+    className: "card" + (p.paradas ? ' alerta' : '')
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "k"
+  }, "Paradas há mais de 7 dias"), /*#__PURE__*/React.createElement("div", {
+    className: "v"
+  }, p.paradas), /*#__PURE__*/React.createElement("div", {
+    className: "small muted"
+  }, "quem indicou está esperando"))), p.paradas > 0 && /*#__PURE__*/React.createElement("div", {
+    className: "panel",
+    style: {
+      borderColor: 'var(--warn)',
+      background: 'var(--warn-bg)'
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "small",
+    style: {
+      color: 'var(--warn)',
+      fontWeight: 600
+    }
+  }, p.paradas, " indicação(ões) sem movimento há mais de uma semana."), /*#__PURE__*/React.createElement("div", {
+    className: "small muted"
+  }, "Quem indicou colocou a própria reputação no meio e está esperando notícia. Mesmo \"não seguiu\" é melhor que silêncio.")), /*#__PURE__*/React.createElement(SubTabs, {
+    active: aba,
+    onChange: setAba,
+    tabs: [{
+      id: 'vagas',
+      label: `Vagas (${(db.vagas || []).length})`
+    }, {
+      id: 'indicacoes',
+      label: `Indicações (${(db.indicacoes || []).length})`
+    }]
+  }), aba === 'vagas' && /*#__PURE__*/React.createElement(React.Fragment, null, podeEditar && /*#__PURE__*/React.createElement("div", {
+    className: "row-actions",
+    style: {
+      marginBottom: 10
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      flex: 1
+    }
+  }), /*#__PURE__*/React.createElement("button", {
+    className: "btn accent sm",
+    onClick: () => setEditando({
+      tipo: TIPOS_VAGA[0],
+      turno: TURNOS_VAGA[3],
+      vagas: 1,
+      status: 'aberta'
+    })
+  }, "+ Vaga")), (db.vagas || []).length === 0 ? /*#__PURE__*/React.createElement(Empty, {
+    text: "Nenhuma vaga cadastrada."
+  }) : /*#__PURE__*/React.createElement("div", {
+    className: "panel",
+    style: {
+      padding: 0
+    }
+  }, /*#__PURE__*/React.createElement("table", null, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("th", null, "Vaga"), /*#__PURE__*/React.createElement("th", null, "Setor"), /*#__PURE__*/React.createElement("th", null, "Tipo"), /*#__PURE__*/React.createElement("th", {
+    className: "num"
+  }, "Postos"), /*#__PURE__*/React.createElement("th", {
+    className: "num"
+  }, "Indicações"), /*#__PURE__*/React.createElement("th", null, "Situação"), podeEditar && /*#__PURE__*/React.createElement("th", {
+    style: {
+      width: 60
+    }
+  }))), /*#__PURE__*/React.createElement("tbody", null, (db.vagas || []).map(v => {
+    const dp = (db.departamentos || []).find(x => x.id === v.departamentoId);
+    const st = statusVaga(v.status);
+    const qtd = indicacoesDaVaga(db, v.id).length;
+    return /*#__PURE__*/React.createElement("tr", {
+      key: v.id
+    }, /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement("strong", null, v.titulo), /*#__PURE__*/React.createElement("div", {
+      className: "small muted"
+    }, v.codigo)), /*#__PURE__*/React.createElement("td", {
+      className: "small"
+    }, dp ? dp.nome : '—'), /*#__PURE__*/React.createElement("td", {
+      className: "small"
+    }, v.tipo), /*#__PURE__*/React.createElement("td", {
+      className: "num"
+    }, v.vagas), /*#__PURE__*/React.createElement("td", {
+      className: "num"
+    }, qtd), /*#__PURE__*/React.createElement("td", {
+      className: "small"
+    }, /*#__PURE__*/React.createElement("span", {
+      style: {
+        color: st.recebe ? 'var(--ok)' : undefined
+      }
+    }, st.nome)), podeEditar && /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement("button", {
+      className: "btn-ic",
+      onClick: () => setEditando({
+        ...v
+      })
+    }, "✎")));
+  }))))), aba === 'indicacoes' && ((db.indicacoes || []).length === 0 ? /*#__PURE__*/React.createElement(Empty, {
+    text: "Nenhuma indicação recebida."
+  }) : /*#__PURE__*/React.createElement("div", {
+    className: "panel",
+    style: {
+      padding: 0
+    }
+  }, /*#__PURE__*/React.createElement("table", null, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("th", null, "Protocolo"), /*#__PURE__*/React.createElement("th", null, "Indicado"), /*#__PURE__*/React.createElement("th", null, "Vaga"), /*#__PURE__*/React.createElement("th", null, "Quem indicou"), /*#__PURE__*/React.createElement("th", null, "Situação"), podeEditar && /*#__PURE__*/React.createElement("th", {
+    style: {
+      width: 90
+    }
+  }))), /*#__PURE__*/React.createElement("tbody", null, (db.indicacoes || []).slice().reverse().map(i => {
+    const st = statusIndicacao(i.status);
+    const ultimo = (i.historico || []).map(h => h.quando).sort().pop() || i.criadaEm;
+    const dias = (() => {
+      const d0 = dataValida(ultimo);
+      return d0 ? Math.floor((Date.now() - d0) / 86400000) : null;
+    })();
+    return /*#__PURE__*/React.createElement("tr", {
+      key: i.id
+    }, /*#__PURE__*/React.createElement("td", {
+      className: "small"
+    }, i.protocolo, /*#__PURE__*/React.createElement("div", {
+      className: "muted"
+    }, fmtDataHora(i.criadaEm))), /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement("strong", null, i.nomeCandidato), /*#__PURE__*/React.createElement("div", {
+      className: "small muted"
+    }, i.contato)), /*#__PURE__*/React.createElement("td", {
+      className: "small"
+    }, i.vagaTitulo), /*#__PURE__*/React.createElement("td", {
+      className: "small"
+    }, i.nomeIndicador), /*#__PURE__*/React.createElement("td", {
+      className: "small"
+    }, st.nome, !st.fim && dias !== null && dias > 7 && /*#__PURE__*/React.createElement("div", {
+      style: {
+        color: 'var(--warn)'
+      }
+    }, "parada há ", dias, "d")), podeEditar && /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement("button", {
+      className: "btn ghost sm",
+      onClick: () => setAbrindo(i.id)
+    }, "Abrir")));
+  }))))), editando && /*#__PURE__*/React.createElement(VagaModal, {
+    vaga: editando,
+    db: db,
+    update: update,
+    usuario: usuario,
+    onClose: () => setEditando(null)
+  }), abrindo && /*#__PURE__*/React.createElement(IndicacaoModal, {
+    id: abrindo,
+    db: db,
+    update: update,
+    usuario: usuario,
+    onClose: () => setAbrindo(null)
+  }));
+}
+function VagaModal({
+  vaga,
+  db,
+  update,
+  usuario,
+  onClose
+}) {
+  const [f, setF] = useState({
+    ...vaga
+  });
+  const set = (k, v) => setF(p => ({
+    ...p,
+    [k]: v
+  }));
+  const pendentes = vaga.id ? indicacoesDaVaga(db, vaga.id).filter(i => !statusIndicacao(i.status).fim).length : 0;
+  return /*#__PURE__*/React.createElement(Modal, {
+    title: vaga.id ? `Vaga ${vaga.codigo}` : 'Nova vaga',
+    onClose: onClose,
+    wide: true
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "grid2"
+  }, /*#__PURE__*/React.createElement(Field, {
+    label: "Cargo *"
+  }, /*#__PURE__*/React.createElement("input", {
+    value: f.titulo || '',
+    autoFocus: true,
+    placeholder: "ex: Costureira de máquina reta",
+    onChange: e => set('titulo', e.target.value)
+  })), /*#__PURE__*/React.createElement(Field, {
+    label: "Setor"
+  }, /*#__PURE__*/React.createElement("select", {
+    value: f.departamentoId || '',
+    onChange: e => set('departamentoId', e.target.value)
+  }, /*#__PURE__*/React.createElement("option", {
+    value: ""
+  }, "— a definir —"), (db.departamentos || []).filter(d => d.ativo !== false).map(d => /*#__PURE__*/React.createElement("option", {
+    key: d.id,
+    value: d.id
+  }, d.nome))))), /*#__PURE__*/React.createElement("div", {
+    className: "grid3"
+  }, /*#__PURE__*/React.createElement(Field, {
+    label: "Tipo"
+  }, /*#__PURE__*/React.createElement("select", {
+    value: f.tipo,
+    onChange: e => set('tipo', e.target.value)
+  }, TIPOS_VAGA.map(x => /*#__PURE__*/React.createElement("option", {
+    key: x,
+    value: x
+  }, x)))), /*#__PURE__*/React.createElement(Field, {
+    label: "Turno"
+  }, /*#__PURE__*/React.createElement("select", {
+    value: f.turno,
+    onChange: e => set('turno', e.target.value)
+  }, TURNOS_VAGA.map(x => /*#__PURE__*/React.createElement("option", {
+    key: x,
+    value: x
+  }, x)))), /*#__PURE__*/React.createElement(Field, {
+    label: "Quantas pessoas"
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "number",
+    min: "1",
+    value: f.vagas || 1,
+    onChange: e => set('vagas', e.target.value)
+  }))), /*#__PURE__*/React.createElement(Field, {
+    label: "O que a pessoa vai fazer"
+  }, /*#__PURE__*/React.createElement("textarea", {
+    rows: 3,
+    value: f.descricao || '',
+    placeholder: "descreva com as palavras do dia a dia, não de anúncio",
+    onChange: e => set('descricao', e.target.value)
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "grid2"
+  }, /*#__PURE__*/React.createElement(Field, {
+    label: "O que precisa"
+  }, /*#__PURE__*/React.createElement("input", {
+    value: f.requisitos || '',
+    placeholder: "ex: saber usar overlock e galoneira",
+    onChange: e => set('requisitos', e.target.value)
+  })), /*#__PURE__*/React.createElement(Field, {
+    label: "Experiência"
+  }, /*#__PURE__*/React.createElement("input", {
+    value: f.experiencia || '',
+    placeholder: "ex: 1 ano na função",
+    onChange: e => set('experiencia', e.target.value)
+  }))), vaga.id && /*#__PURE__*/React.createElement(Field, {
+    label: "Situação"
+  }, /*#__PURE__*/React.createElement("select", {
+    value: f.status,
+    onChange: e => set('status', e.target.value)
+  }, STATUS_VAGA.map(x => /*#__PURE__*/React.createElement("option", {
+    key: x.id,
+    value: x.id
+  }, x.nome)))), vaga.id && f.status !== vaga.status && !statusVaga(f.status).recebe && pendentes > 0 && /*#__PURE__*/React.createElement("div", {
+    className: "panel",
+    style: {
+      borderColor: 'var(--warn)',
+      background: 'var(--warn-bg)'
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "small"
+  }, "Existem ", pendentes, " indicação(ões) sem desfecho nesta vaga. Fechar a vaga não fecha elas — dê o retorno a quem indicou antes de esquecer.")), /*#__PURE__*/React.createElement("div", {
+    className: "small muted"
+  }, "A faixa salarial fica de fora do anúncio de propósito: divulgar valor no chão de fábrica levanta comparação com quem já está na função. O RH informa na conversa."), /*#__PURE__*/React.createElement("div", {
+    className: "modal-actions"
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "btn ghost",
+    onClick: onClose
+  }, "Cancelar"), /*#__PURE__*/React.createElement("button", {
+    className: "btn accent",
+    disabled: !String(f.titulo || '').trim(),
+    onClick: () => {
+      let erro = null;
+      update(d => {
+        const r = salvarVaga(d, f, usuario);
+        erro = r.erro || null;
+        if (!erro && vaga.id && f.status !== vaga.status) mudarStatusVaga(d, vaga.id, f.status, '', usuario);
+        return d;
+      });
+      if (erro) alert(erro);else onClose();
+    }
+  }, "Salvar")));
+}
+function IndicacaoModal({
+  id,
+  db,
+  update,
+  usuario,
+  onClose
+}) {
+  const i = (db.indicacoes || []).find(x => x.id === id);
+  const [mover, setMover] = useState('');
+  const [nota, setNota] = useState('');
+  const [retorno, setRetorno] = useState('');
+  if (!i) return null;
+  const st = statusIndicacao(i.status);
+  return /*#__PURE__*/React.createElement(Modal, {
+    title: `${i.protocolo} · ${i.nomeCandidato}`,
+    onClose: onClose,
+    wide: true
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "painel-meta"
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    className: "k"
+  }, "Vaga"), /*#__PURE__*/React.createElement("div", {
+    className: "v",
+    style: {
+      fontSize: 14
+    }
+  }, i.vagaTitulo)), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    className: "k"
+  }, "Contato"), /*#__PURE__*/React.createElement("div", {
+    className: "v",
+    style: {
+      fontSize: 14
+    }
+  }, i.contato)), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    className: "k"
+  }, "Indicado por"), /*#__PURE__*/React.createElement("div", {
+    className: "v",
+    style: {
+      fontSize: 14
+    }
+  }, i.nomeIndicador)), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    className: "k"
+  }, "Situação"), /*#__PURE__*/React.createElement("div", {
+    className: "v",
+    style: {
+      fontSize: 14
+    }
+  }, st.nome))), i.experiencia && /*#__PURE__*/React.createElement("div", {
+    className: "small",
+    style: {
+      marginTop: 10
+    }
+  }, /*#__PURE__*/React.createElement("strong", null, "Experiência:"), " ", i.experiencia), i.relacao && /*#__PURE__*/React.createElement("div", {
+    className: "small muted"
+  }, "Conhecem-se: ", i.relacao), i.observacao && /*#__PURE__*/React.createElement("div", {
+    className: "small",
+    style: {
+      marginTop: 6
+    }
+  }, i.observacao), /*#__PURE__*/React.createElement("div", {
+    className: "small muted",
+    style: {
+      marginTop: 10,
+      marginBottom: 10
+    }
+  }, i.nomeCandidato, " soube que estava sendo indicado(a) — quem indicou confirmou isso ao enviar."), !st.fim && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+    className: "etp-rot"
+  }, "Mover para"), /*#__PURE__*/React.createElement("div", {
+    className: "grid2"
+  }, /*#__PURE__*/React.createElement(Field, {
+    label: "Situação"
+  }, /*#__PURE__*/React.createElement("select", {
+    value: mover,
+    onChange: e => setMover(e.target.value)
+  }, /*#__PURE__*/React.createElement("option", {
+    value: ""
+  }, "— escolha —"), STATUS_INDICACAO.filter(x => x.id !== i.status).map(x => /*#__PURE__*/React.createElement("option", {
+    key: x.id,
+    value: x.id
+  }, x.nome)))), /*#__PURE__*/React.createElement(Field, {
+    label: mover === 'nao_seguiu' ? 'Motivo *' : 'Nota'
+  }, /*#__PURE__*/React.createElement("input", {
+    value: nota,
+    onChange: e => setNota(e.target.value),
+    placeholder: mover === 'nao_seguiu' ? 'o que quem indicou vai ler' : ''
+  }))), /*#__PURE__*/React.createElement("button", {
+    className: "btn accent sm",
+    disabled: !mover,
+    onClick: () => {
+      let erro = null;
+      update(d => {
+        const r = moverIndicacao(d, id, mover, nota, usuario);
+        erro = r.erro || null;
+        return d;
+      });
+      if (erro) alert(erro);else {
+        setMover('');
+        setNota('');
+      }
+    }
+  }, "Mover")), /*#__PURE__*/React.createElement("div", {
+    className: "etp-rot",
+    style: {
+      marginTop: 14
+    }
+  }, "Retorno para quem indicou"), /*#__PURE__*/React.createElement("div", {
+    className: "row-actions"
+  }, /*#__PURE__*/React.createElement("input", {
+    value: retorno,
+    style: {
+      flex: 1
+    },
+    placeholder: `o que ${i.nomeIndicador} vai ler`,
+    onChange: e => setRetorno(e.target.value)
+  }), /*#__PURE__*/React.createElement("button", {
+    className: "btn ghost sm",
+    disabled: !retorno.trim(),
+    onClick: () => {
+      update(d => {
+        responderIndicacao(d, id, retorno, usuario);
+        return d;
+      });
+      setRetorno('');
+    }
+  }, "Enviar")), (i.retornos || []).map(r => /*#__PURE__*/React.createElement("div", {
+    key: r.id,
+    className: "small muted",
+    style: {
+      marginTop: 6
+    }
+  }, fmtDataHora(r.quando), " · ", r.quem, ": ", r.texto)), /*#__PURE__*/React.createElement("div", {
+    className: "etp-rot",
+    style: {
+      marginTop: 14
+    }
+  }, "Histórico"), (i.historico || []).map(h => /*#__PURE__*/React.createElement("div", {
+    key: h.id,
+    className: "small muted"
+  }, fmtDataHora(h.quando), " · ", h.o_que, h.nota && ` — ${h.nota}`)), /*#__PURE__*/React.createElement("div", {
+    className: "modal-actions"
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "btn ghost",
+    onClick: onClose
+  }, "Fechar")));
 }
 
 /* ---------------- Ficha técnica ----------------
@@ -23279,7 +30523,7 @@ function FichaTecnica({
       textAlign: 'right'
     },
     className: "small muted"
-  }, /*#__PURE__*/React.createElement("div", null, "Emitida em ", fmtDate(todayISO())), produto.criadoEm && /*#__PURE__*/React.createElement("div", null, "Cadastrado em ", fmtDate(produto.criadoEm.slice(0, 10))), usuario && /*#__PURE__*/React.createElement("div", null, usuario.nome))), /*#__PURE__*/React.createElement("div", {
+  }, /*#__PURE__*/React.createElement("div", null, "Emitida em ", fmtDate(todayISO())), produto.criadoEm && /*#__PURE__*/React.createElement("div", null, "Cadastrado em ", fmtDate(produto.criadoEm)), usuario && /*#__PURE__*/React.createElement("div", null, usuario.nome))), /*#__PURE__*/React.createElement("div", {
     className: "ficha-secao"
   }, /*#__PURE__*/React.createElement("h4", null, "Identificação"), /*#__PURE__*/React.createElement("table", null, /*#__PURE__*/React.createElement("tbody", null, /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("td", {
     style: {
@@ -23669,7 +30913,18 @@ function FichaTecnica({
     className: "num"
   }, money(c.custoTecido))), /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("td", null, "Mão de obra"), /*#__PURE__*/React.createElement("td", {
     className: "num"
-  }, money(mo.total))), /*#__PURE__*/React.createElement("tr", {
+  }, money(mo.total))), (() => {
+    /* o custo da fábrica entra na ficha: sem ele, "custo por peça" é
+       uma parte do custo com nome de total */
+    const ind = custoIndiretoProduto(produto, db);
+    return /*#__PURE__*/React.createElement("tr", null,
+      /*#__PURE__*/React.createElement("td", null, "Custo da fábrica",
+        !ind.configurado && /*#__PURE__*/React.createElement("div", {
+          className: "small muted"
+        }, "não cadastrado — o total está incompleto")),
+      /*#__PURE__*/React.createElement("td", { className: "num" },
+        ind.configurado ? money(ind.custo) : '—'));
+  })(), /*#__PURE__*/React.createElement("tr", {
     className: "ficha-total"
   }, /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement("strong", null, "Custo por peça")), /*#__PURE__*/React.createElement("td", {
     className: "num"
@@ -23677,7 +30932,7 @@ function FichaTecnica({
     style: {
       fontSize: 16
     }
-  }, money(c.custoTecido + mo.total))))))), /*#__PURE__*/React.createElement("div", {
+  }, money(custoCompletoProduto(produto, db).total))))))), /*#__PURE__*/React.createElement("div", {
     className: "ficha-secao"
   }, /*#__PURE__*/React.createElement("h4", null, "Instruções de produção"), podeEditar ? /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
     className: "grid2 no-print"
@@ -26003,118 +33258,6 @@ function gravarRisco(d, dados, usuario, produtoId) {
   return reg;
 }
 
-/* ---------------- Riscos ---------------- */
-function TelaRiscos({
-  db,
-  update,
-  usuario,
-  podeEditar
-}) {
-  const [sel, setSel] = useState(null);
-  const [analise, setAnalise] = useState(null); // análise recém-importada
-
-  function salvar(dados) {
-    let novoId = null;
-    update(d => {
-      novoId = gravarRisco(d, dados, usuario).id;
-      return d;
-    });
-    setAnalise(null);
-    if (novoId) setSel(novoId);
-  }
-  function remover(r) {
-    if (!confirm(`Remover o risco ${r.codigo}?`)) return;
-    update(d => {
-      d.riscos = d.riscos.filter(x => x.id !== r.id);
-      return d;
-    });
-  }
-  if (analise) return /*#__PURE__*/React.createElement(AnaliseRisco, {
-    analise: analise,
-    db: db,
-    update: update,
-    usuario: usuario,
-    onCancelar: () => setAnalise(null),
-    onSalvar: salvar
-  });
-  if (sel) return /*#__PURE__*/React.createElement(RiscoSalvo, {
-    riscoId: sel,
-    db: db,
-    update: update,
-    usuario: usuario,
-    podeEditar: podeEditar,
-    onVoltar: () => setSel(null)
-  });
-  return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
-    className: "page-head"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "eyebrow"
-  }, (db.riscos || []).length, " modelagem(ns)"), podeEditar && /*#__PURE__*/React.createElement(BotaoImportarPLT, {
-    onAnalisado: setAnalise
-  })), /*#__PURE__*/React.createElement("div", {
-    className: "small muted",
-    style: {
-      marginBottom: 12
-    }
-  }, "O arquivo é interpretado geometricamente — comandos, coordenadas e contornos — não desenhado como imagem. O que não for reconhecido é apontado, não inventado."), (db.riscos || []).length === 0 ? /*#__PURE__*/React.createElement(Empty, {
-    text: "Nenhuma modelagem importado. Suba um arquivo PLT do seu encaixe."
-  }) : /*#__PURE__*/React.createElement("div", {
-    className: "panel",
-    style: {
-      padding: 0
-    }
-  }, /*#__PURE__*/React.createElement("table", null, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("th", null, "Modelagem"), /*#__PURE__*/React.createElement("th", null, "Produto"), /*#__PURE__*/React.createElement("th", null, "Arquivo"), /*#__PURE__*/React.createElement("th", {
-    className: "num"
-  }, "Largura"), /*#__PURE__*/React.createElement("th", {
-    className: "num"
-  }, "Comprimento"), /*#__PURE__*/React.createElement("th", {
-    className: "num"
-  }, "Peças"), /*#__PURE__*/React.createElement("th", {
-    className: "num"
-  }, "Aproveitamento"), /*#__PURE__*/React.createElement("th", {
-    style: {
-      width: 70
-    }
-  }))), /*#__PURE__*/React.createElement("tbody", null, (db.riscos || []).map(r => /*#__PURE__*/React.createElement("tr", {
-    key: r.id
-  }, /*#__PURE__*/React.createElement("td", {
-    className: "small"
-  }, /*#__PURE__*/React.createElement("strong", null, r.codigo), r.nome && /*#__PURE__*/React.createElement("div", {
-    className: "muted"
-  }, r.nome)), /*#__PURE__*/React.createElement("td", {
-    className: "small"
-  }, (() => {
-    const p = (db.produtos || []).find(x => x.id === r.produtoId);
-    return p ? /*#__PURE__*/React.createElement("span", null, montarNomeProduto(p, db) || p.codigo) : /*#__PURE__*/React.createElement("span", {
-      className: "muted"
-    }, "sem produto");
-  })()), /*#__PURE__*/React.createElement("td", {
-    className: "small muted"
-  }, r.arquivo), /*#__PURE__*/React.createElement("td", {
-    className: "num"
-  }, r.larguraTecidoM, " m"), /*#__PURE__*/React.createElement("td", {
-    className: "num"
-  }, r.comprimentoM, " m"), /*#__PURE__*/React.createElement("td", {
-    className: "num"
-  }, r.totalPecas), /*#__PURE__*/React.createElement("td", {
-    className: "num"
-  }, /*#__PURE__*/React.createElement("strong", {
-    style: {
-      color: num(r.aproveitamento) >= 75 ? 'var(--ok)' : 'var(--warn)'
-    }
-  }, r.aproveitamento, "%")), /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement("div", {
-    className: "acoes-icone"
-  }, /*#__PURE__*/React.createElement("button", {
-    className: "btn-ic ic-accent",
-    title: "Abrir",
-    onClick: () => setSel(r.id)
-  }, "👁"), podeEditar && /*#__PURE__*/React.createElement("button", {
-    className: "btn-ic ic-danger",
-    onClick: () => remover(r)
-  }, "×")))))))));
-}
-
-/* ---- Cadastros ---- */
 function GrupoCadastros({
   db,
   update,
@@ -26603,7 +33746,7 @@ function LogColaboradores({
     key: l.id
   }, /*#__PURE__*/React.createElement("td", {
     className: "small muted"
-  }, l.quando), /*#__PURE__*/React.createElement("td", {
+  }, fmtDataHora(l.quando)), /*#__PURE__*/React.createElement("td", {
     className: "small"
   }, /*#__PURE__*/React.createElement("strong", null, l.quem)), /*#__PURE__*/React.createElement("td", {
     className: "small"
@@ -26837,6 +33980,8 @@ function ColaboradorModal({
     perfil: 'Colaborador',
     ...ENDERECO_VAZIO,
     observacoes: '',
+    /* máquinas que sabe operar; vazio = ainda não informado */
+    equipamentos: [],
     ...col
   });
   const set = (k, v) => setF(prev => ({
@@ -27134,7 +34279,58 @@ function ColaboradorModal({
     }, "aplicar"));
   })(), /*#__PURE__*/React.createElement("div", {
     className: "small muted"
-  }, f.perfil === 'Administrador' && 'Administrador: acesso total ao sistema.', f.perfil === 'Gestor' && 'Gestor: acesso restrito — não vê cadastros de colaboradores/clientes nem dados financeiros.', f.perfil === 'Colaborador' && 'Colaborador: acesso somente ao módulo de Produção.', !temSenhaDefinida(f) && ' · O colaborador define a própria senha no primeiro acesso; ela nunca é digitada aqui.')), /*#__PURE__*/React.createElement(EnderecoFields, {
+  }, f.perfil === 'Administrador' && 'Administrador: acesso total ao sistema.', f.perfil === 'Gestor' && 'Gestor: acesso restrito — não vê cadastros de colaboradores/clientes nem dados financeiros.', f.perfil === 'Colaborador' && 'Colaborador: acesso somente ao módulo de Produção.', !temSenhaDefinida(f) && ' · O colaborador define a própria senha no primeiro acesso; ela nunca é digitada aqui.')), (() => {
+    /* O que a pessoa sabe operar. Sem isso o planejamento distribui
+       tarefa para quem não consegue fazer — e a data não bate por um
+       motivo que ninguém identifica. */
+    const doSetor = (db.equipamentos || []).filter(e =>
+      e.ativo !== false && e.departamentoId === f.departamentoId);
+    const lista = Array.isArray(f.equipamentos) ? f.equipamentos : [];
+    if (!f.departamentoId)
+      return /*#__PURE__*/React.createElement(Field, { label: "Máquinas que opera" },
+        /*#__PURE__*/React.createElement("div", { className: "small muted" },
+          "Escolha o setor acima para ver as máquinas disponíveis."));
+    if (doSetor.length === 0)
+      return /*#__PURE__*/React.createElement(Field, { label: "Máquinas que opera" },
+        /*#__PURE__*/React.createElement("div", { className: "small muted" },
+          "Nenhuma máquina cadastrada neste setor."));
+    return /*#__PURE__*/React.createElement("div", null,
+      /*#__PURE__*/React.createElement("div", { className: "etp-rot",
+        style: { marginBottom: 6 } },
+        `Máquinas que opera (${lista.length} de ${doSetor.length})`),
+      /*#__PURE__*/React.createElement("div", { className: "gente-grade" },
+        doSetor.map(e => /*#__PURE__*/React.createElement("label", {
+          key: e.id,
+          className: "gente-check" + (lista.includes(e.id) ? " on" : "")
+        },
+          /*#__PURE__*/React.createElement("input", {
+            type: "checkbox", checked: lista.includes(e.id),
+            onChange: () => set('equipamentos', lista.includes(e.id)
+              ? lista.filter(x => x !== e.id) : [...lista, e.id])
+          }),
+          /*#__PURE__*/React.createElement("span", null,
+            /*#__PURE__*/React.createElement("strong", null, e.nome),
+            /*#__PURE__*/React.createElement("span", { className: "small muted" },
+              e.codigo || e.tipo || ''))))),
+      /*#__PURE__*/React.createElement("div", { className: "small muted",
+        style: { marginTop: 6, marginBottom: 10 } },
+        lista.length === 0
+          ? "Nada marcado significa \"ainda não informado\" — o planejamento " +
+            "considera que a pessoa pode operar qualquer máquina do setor. " +
+            "Marque o que ela realmente faz para o cálculo ficar honesto."
+          : "O planejamento só dará a esta pessoa tarefas nas máquinas " +
+            "marcadas. Quem opera mais de uma é mais fácil de encaixar."),
+      /*#__PURE__*/React.createElement("div", { className: "row-actions",
+        style: { marginBottom: 12 } },
+        /*#__PURE__*/React.createElement("button", {
+          type: "button", className: "btn ghost sm",
+          onClick: () => set('equipamentos', doSetor.map(e => e.id))
+        }, "Marcar todas"),
+        lista.length > 0 && /*#__PURE__*/React.createElement("button", {
+          type: "button", className: "btn ghost sm",
+          onClick: () => set('equipamentos', [])
+        }, "Limpar")));
+  })(), /*#__PURE__*/React.createElement(EnderecoFields, {
     f: f,
     set: set
   }), /*#__PURE__*/React.createElement(Field, {
@@ -27344,7 +34540,58 @@ function ClienteModal({
     type: "email",
     value: f.email,
     onChange: e => set('email', e.target.value)
-  }))), /*#__PURE__*/React.createElement(EnderecoFields, {
+  }))), (() => {
+    /* O que a pessoa sabe operar. Sem isso o planejamento distribui
+       tarefa para quem não consegue fazer — e a data não bate por um
+       motivo que ninguém identifica. */
+    const doSetor = (db.equipamentos || []).filter(e =>
+      e.ativo !== false && e.departamentoId === f.departamentoId);
+    const lista = Array.isArray(f.equipamentos) ? f.equipamentos : [];
+    if (!f.departamentoId)
+      return /*#__PURE__*/React.createElement(Field, { label: "Máquinas que opera" },
+        /*#__PURE__*/React.createElement("div", { className: "small muted" },
+          "Escolha o setor acima para ver as máquinas disponíveis."));
+    if (doSetor.length === 0)
+      return /*#__PURE__*/React.createElement(Field, { label: "Máquinas que opera" },
+        /*#__PURE__*/React.createElement("div", { className: "small muted" },
+          "Nenhuma máquina cadastrada neste setor."));
+    return /*#__PURE__*/React.createElement("div", null,
+      /*#__PURE__*/React.createElement("div", { className: "etp-rot",
+        style: { marginBottom: 6 } },
+        `Máquinas que opera (${lista.length} de ${doSetor.length})`),
+      /*#__PURE__*/React.createElement("div", { className: "gente-grade" },
+        doSetor.map(e => /*#__PURE__*/React.createElement("label", {
+          key: e.id,
+          className: "gente-check" + (lista.includes(e.id) ? " on" : "")
+        },
+          /*#__PURE__*/React.createElement("input", {
+            type: "checkbox", checked: lista.includes(e.id),
+            onChange: () => set('equipamentos', lista.includes(e.id)
+              ? lista.filter(x => x !== e.id) : [...lista, e.id])
+          }),
+          /*#__PURE__*/React.createElement("span", null,
+            /*#__PURE__*/React.createElement("strong", null, e.nome),
+            /*#__PURE__*/React.createElement("span", { className: "small muted" },
+              e.codigo || e.tipo || ''))))),
+      /*#__PURE__*/React.createElement("div", { className: "small muted",
+        style: { marginTop: 6, marginBottom: 10 } },
+        lista.length === 0
+          ? "Nada marcado significa \"ainda não informado\" — o planejamento " +
+            "considera que a pessoa pode operar qualquer máquina do setor. " +
+            "Marque o que ela realmente faz para o cálculo ficar honesto."
+          : "O planejamento só dará a esta pessoa tarefas nas máquinas " +
+            "marcadas. Quem opera mais de uma é mais fácil de encaixar."),
+      /*#__PURE__*/React.createElement("div", { className: "row-actions",
+        style: { marginBottom: 12 } },
+        /*#__PURE__*/React.createElement("button", {
+          type: "button", className: "btn ghost sm",
+          onClick: () => set('equipamentos', doSetor.map(e => e.id))
+        }, "Marcar todas"),
+        lista.length > 0 && /*#__PURE__*/React.createElement("button", {
+          type: "button", className: "btn ghost sm",
+          onClick: () => set('equipamentos', [])
+        }, "Limpar")));
+  })(), /*#__PURE__*/React.createElement(EnderecoFields, {
     f: f,
     set: set
   }), /*#__PURE__*/React.createElement(Field, {
