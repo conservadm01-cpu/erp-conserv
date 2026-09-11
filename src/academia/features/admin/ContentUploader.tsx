@@ -207,7 +207,7 @@ export function ContentUploaderPage() {
             <Icon name="upload" size={22} className="text-ink-600 shrink-0" />
             <div className="min-w-0 flex-1">
               <div className="text-[14px] font-semibold">
-                {file ? file.name : "Enviar arquivo (PDF, DOCX, PPTX, TXT, imagem, vídeo)"}
+                {file ? file.name : "Enviar arquivo (PDF, DOCX, PPTX, TXT, imagem ou vídeo)"}
               </div>
               <div className="text-[12.5px] text-ink-600">
                 {file ? `${formatBytes(file.size)} · ${extraction?.sections.length ?? 0} trecho(s) extraídos` : "O texto é extraído no seu navegador — o arquivo não sai do dispositivo nesta etapa."}
@@ -216,7 +216,16 @@ export function ContentUploaderPage() {
             <input
               type="file"
               className="hidden"
-              accept=".pdf,.docx,.doc,.pptx,.txt,.md,.csv,image/*,video/*"
+              /*
+               * Lista explícita, com o PDF na frente. Com "image/*" o
+               * Windows montava um filtro gigante que começava em *.tif:
+               * a janela parecia pedir TIFF e o PDF se perdia no meio.
+               */
+              accept={[
+                ".pdf", ".docx", ".doc", ".pptx", ".ppt", ".txt", ".md", ".csv", ".rtf", ".odt",
+                ".jpg", ".jpeg", ".png", ".webp", ".gif",
+                ".mp4", ".webm", ".mov",
+              ].join(",")}
               onChange={(e) => {
                 const picked = e.target.files?.[0];
                 if (picked) void handleFile(picked);

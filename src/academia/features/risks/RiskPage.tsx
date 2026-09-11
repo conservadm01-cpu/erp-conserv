@@ -148,7 +148,7 @@ export function RiskReportPage() {
               <span className="text-[13.5px] text-ink-600">{photo ? "Foto anexada — tocar para trocar" : "Anexar foto do local"}</span>
               <input
                 type="file"
-                accept="image/*"
+                accept=".jpg,.jpeg,.png,.webp"
                 className="hidden"
                 onChange={async (e) => {
                   const file = e.target.files?.[0];

@@ -340,12 +340,21 @@ pdfjs e devolve um trecho por página — é daí que vem o localizador
 `página N` que o SOURCE_ID guarda. PDF digitalizado (só imagem) não tem
 texto: nesse caso a tela pede para colar o conteúdo, sem fingir que leu.
 
-O pdfjs trabalha num arquivo auxiliar separado (`pdf.worker`). Ele vai
-para `assets/` no build normal; para hospedagem estática use
-`npm run build:publicacao`, que além dos caminhos relativos reescreve os
-bytes de controle crus desse arquivo (publicadores de página os recusam, e
-sem o arquivo a leitura de PDF cai fora). A varredura de navegador cobre
-esse caminho de ponta a ponta com um PDF gerado na hora.
+O pdfjs normalmente trabalha num processo à parte (worker). A Academia
+registra o ajudante do pdfjs no próprio thread da página: a leitura
+funciona igual onde o navegador bloqueia a criação de worker (página
+embutida, publicada, quadro isolado) e não depende de nenhum arquivo
+extra ser publicado junto. O custo é desprezível — 40 páginas saem em
+0,2 s, e a análise que vem depois já roda no mesmo thread. A leitura
+também desliga a avaliação dinâmica de código (`isEvalSupported: false`),
+que a política de segurança das páginas publicadas proíbe.
+
+A varredura cobre esse caminho de ponta a ponta com um PDF gerado na
+hora, inclusive com a criação de worker bloqueada.
+
+**Campo de arquivo**: a lista do `accept` é explícita, com o PDF na
+frente. Com `image/*` o Windows montava um filtro que começava em
+`*.tif` — a janela parecia pedir TIFF e o PDF se perdia no meio.
 
 ### Ordem de leitura do banco
 

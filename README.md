@@ -173,8 +173,8 @@ npm run build:publicacao        # gera dist-publicacao/ com caminhos relativos
 
 Use este build quando a aplicação não for ficar na raiz do domínio (uma
 pasta, uma pré-visualização hospedada). Ele também reescreve os bytes de
-controle crus do arquivo auxiliar do leitor de PDF, que alguns
-publicadores recusam — sem ele a leitura de PDF fica de fora.
+controle crus que vêm no leitor de PDF, porque alguns publicadores de
+página recusam arquivos com esses bytes.
 
 ### Sem Supabase configurado
 

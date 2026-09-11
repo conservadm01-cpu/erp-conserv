@@ -315,6 +315,40 @@ if (await fonte.count()) {
 }
 check("a página do PDF fica registrada como fonte", /página \d+/i.test(await page.locator("body").innerText()));
 
+// O mesmo PDF, agora com a criação de worker BLOQUEADA — é o que o
+// navegador faz numa página publicada ou embutida. A leitura tem de
+// continuar funcionando, porque roda no thread da própria página.
+{
+  const semWorker = await navegador.newPage({ viewport: { width: 1280, height: 900 } });
+  await semWorker.addInitScript(() => {
+    Object.defineProperty(window, "Worker", {
+      configurable: true,
+      value: function () { throw new Error("worker bloqueado pelo navegador"); },
+    });
+  });
+  try {
+    await entrar(semWorker, "Coordenação de Treinamento");
+    await semWorker.goto(`${URL_BASE}#/admin/conteudos/novo`, { waitUntil: "networkidle" });
+    await semWorker.waitForTimeout(600);
+    await semWorker.locator('input[type="file"]').setInputFiles({
+      name: "pressao-do-pe-calcador.pdf",
+      mimeType: "application/pdf",
+      buffer: montarPdf(PAGINAS_EXEMPLO),
+    });
+    await semWorker.waitForFunction(() => {
+      const m = document.body.innerText.match(/(\d+) trecho\(s\) extraídos/);
+      return !!m && Number(m[1]) > 0;
+    }, null, { timeout: 60000 });
+    const trechos = await semWorker.evaluate(
+      () => document.body.innerText.match(/(\d+) trecho\(s\) extraídos/)?.[1] ?? "0",
+    );
+    check("PDF é lido mesmo sem poder criar worker (página publicada)", Number(trechos) > 0, `${trechos} trecho(s)`);
+  } catch (e) {
+    check("PDF é lido mesmo sem poder criar worker (página publicada)", false, String(e.message).split("\n")[0]);
+  }
+  await semWorker.close();
+}
+
 // =====================================================================
 // REGRESSÕES — defeitos já corrigidos que não podem voltar
 // =====================================================================
