@@ -52,7 +52,7 @@ src/academia/
 │   └── text.ts                ← tokenização, frases, definições, similaridade
 ├── data/
 │   ├── adapters/              ← Supabase · window.storage · localStorage · memória
-│   ├── db.ts                  ← banco reativo (carrega tudo em 1 requisição)
+│   ├── db.ts                  ← banco reativo (1 requisição; leitura em ordem estável)
 │   ├── schema.ts              ← as 33 "tabelas"
 │   ├── defaults.ts            ← configurações padrão (XP, níveis, IA, certificado)
 │   ├── repositories/          ← catálogo, pessoas, aprendizagem, gamificação, ops
@@ -63,14 +63,16 @@ src/academia/
 │   ├── gamification/          ← XP, níveis, badges
 │   ├── learning/              ← progresso, adaptativo, "aprender no posto"
 │   ├── handbook/              ← gerador de apostilas
+│   ├── risk/                  ← registro de risco (com a regra do anonimato)
 │   ├── notification/ · audit/
 ├── auth/                      ← sessão, senha (ponto de troca) e permissões
 ├── state/                     ← hooks reativos, boot do banco, avisos (toasts)
 ├── router/                    ← roteador por hash (#/...)
 ├── ui/                        ← primitivos, layout responsivo, personagens, blocos
 ├── features/                  ← telas (colaborador e administração)
+│   └── admin/AdminArea.tsx    ← área administrativa em pedaço separado (lazy)
 ├── integrations/erp/          ← contrato da integração com o ERP ConServ
-└── __tests__/                 ← teste de integração dos motores (npm run test:academia)
+└── __tests__/                 ← integração dos motores + integridade do conteúdo
 ```
 
 ---
@@ -307,8 +309,34 @@ que alimenta recomendação de curso, painel do gestor e relatórios.
 
 ```bash
 npm install
-npm run dev          # ERP: /  ·  Academia: /academia.html
-npm run typecheck    # TypeScript estrito
-npm run test:academia# 63 verificações de integração dos motores
-npm run build        # gera as duas aplicações
+npm run dev             # ERP: /  ·  Academia: /academia.html
+npm run typecheck       # TypeScript estrito
+npm run test:academia   # 93 verificações dos motores + integridade do conteúdo
+npm run build           # gera as duas aplicações
 ```
+
+Varredura no navegador (opcional, precisa do Playwright):
+
+```bash
+npm i -D playwright && npx playwright install chromium   # uma vez
+npm run build && npm run preview                         # num terminal
+npm run smoke:academia                                   # noutro terminal
+```
+
+A varredura abre todas as telas (computador e celular, colaborador e
+administração) procurando erro de JavaScript, tela em branco, rolagem
+horizontal, botão sem nome acessível, campo sem rótulo e id repetido;
+depois roda os fluxos de ponta a ponta (aula, quiz, jogo, registro de
+risco, análise de material novo) e as **regressões** já corrigidas —
+link compartilhado que sobrevive ao login, perfis de demonstração
+estáveis, progresso após o F5, impressão da apostila e do certificado,
+foco no diálogo e aviso de falha de gravação.
+
+### Ordem de leitura do banco
+
+`db.list()` devolve a coleção **ordenada por ID**. O armazenamento
+(localStorage, Supabase) não garante a ordem das chaves: sem essa
+ordenação as listas mudavam de posição a cada recarregamento e um
+`slice(0, n)` passava a mostrar outros registros. Quem precisa de outra
+ordem (ordem do módulo, data, pontuação) ordena explicitamente no
+repositório.

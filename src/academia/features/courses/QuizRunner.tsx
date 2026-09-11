@@ -34,6 +34,10 @@ export function QuizRunnerPage({ quizId, courseId }: { quizId: string; courseId?
   const [result, setResult] = useState<QuizResult | null>(null);
   const [secondsLeft, setSecondsLeft] = useState<number | null>(null);
   const questionStart = useRef(Date.now());
+  // Trava contra envio duplicado: sem ela, o efeito do cronômetro podia
+  // chamar submit() de novo antes do estado `result` ser commitado,
+  // gravando duas tentativas e lançando XP duas vezes.
+  const enviado = useRef(false);
 
   const quiz = useQuery(() => catalogRepo.quiz(quizId), [quizId]);
 
@@ -43,6 +47,7 @@ export function QuizRunnerPage({ quizId, courseId }: { quizId: string; courseId?
     setIndex(0);
     setAnswers([]);
     setResult(null);
+    enviado.current = false;
     setSecondsLeft(ready?.quiz.timeLimitSec ?? null);
     questionStart.current = Date.now();
   }, [quizId]);
@@ -85,7 +90,8 @@ export function QuizRunnerPage({ quizId, courseId }: { quizId: string; courseId?
   }
 
   function submit() {
-    if (!prepared || !employee || result) return;
+    if (!prepared || !employee || result || enviado.current) return;
+    enviado.current = true;
     const complete = prepared.questions.map((q) => answered.get(q.id) ?? { questionId: q.id, optionId: null, timeSec: 0 });
     const outcome = quizEngine.submit(prepared, employee.id, complete, courseId);
     setResult(outcome);

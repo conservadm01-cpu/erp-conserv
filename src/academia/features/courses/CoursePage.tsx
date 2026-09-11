@@ -139,6 +139,23 @@ export function CoursePage({ courseId }: { courseId: string }) {
             </div>
           </div>
 
+          {!quiz && lessonsFinished && (
+            <Card className="p-4 sm:p-5 border-jade/40 bg-jade/5">
+              <div className="flex items-start gap-3">
+                <span className="shrink-0 grid place-items-center w-11 h-11 rounded-xl bg-jade text-linen-50">
+                  <Icon name="check-circle" size={22} />
+                </span>
+                <div>
+                  <h3 className="font-bold text-[15.5px]">Curso concluído</h3>
+                  <p className="text-[13.5px] text-ink-600 mt-0.5">
+                    Este curso não tem avaliação final: a conclusão acontece ao terminar todas as aulas.
+                    {certificate ? " Seu certificado já foi emitido." : ""}
+                  </p>
+                </div>
+              </div>
+            </Card>
+          )}
+
           {quiz && (
             <Card className={cn("p-4 sm:p-5", lessonsFinished ? "border-copper/40 bg-copper/5" : "")}>
               <div className="flex items-start gap-3">
@@ -230,7 +247,7 @@ export function CoursePage({ courseId }: { courseId: string }) {
                     <div className="font-semibold text-navy-900 leading-snug">{source.name}</div>
                     <div className="text-ink-600">{source.institution} · {source.type}</div>
                     {source.url && (
-                      <a href={source.url} target="_blank" rel="noreferrer" className="text-navy underline break-all text-[12px]">
+                      <a href={source.url} target="_blank" rel="noreferrer" className="inline-block py-1 text-navy underline break-all text-[12px]">
                         {source.url}
                       </a>
                     )}

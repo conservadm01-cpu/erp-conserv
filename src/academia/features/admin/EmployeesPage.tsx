@@ -15,7 +15,7 @@ import { Button } from "../../ui/primitives/Button";
 import { Chip, StatusChip } from "../../ui/primitives/Chip";
 import { Icon } from "../../ui/primitives/Icon";
 import { Avatar } from "../../ui/primitives/Avatar";
-import { TextInput, Select, Field } from "../../ui/primitives/Field";
+import { TextInput, Select } from "../../ui/primitives/Field";
 import { LevelMeter, ProgressBar } from "../../ui/primitives/Progress";
 import { EmptyState, StatTile } from "../../ui/primitives/Feedback";
 import { formatDate } from "../../core/dates";
@@ -32,7 +32,7 @@ export function EmployeesPage() {
         subtitle="Quem está se desenvolvendo, em quê e o que falta."
         icon="users"
       />
-      <TextInput className="mb-4 sm:max-w-md" value={term} onChange={(e) => setTerm(e.target.value)} placeholder="Buscar por nome, matrícula ou cargo…" />
+      <TextInput className="mb-4 sm:max-w-md" aria-label="Buscar colaborador" value={term} onChange={(e) => setTerm(e.target.value)} placeholder="Buscar por nome, matrícula ou cargo…" />
 
       <div className="space-y-2.5">
         {employees.map((employee) => {
@@ -150,13 +150,13 @@ export function EmployeeDetailPage({ employeeId }: { employeeId: string }) {
         <Card className="p-4">
           <SectionTitle hint="Matricular em um curso publicado.">Matrículas</SectionTitle>
           <div className="flex gap-2 mb-3">
-            <Select value={assigning} onChange={(e) => setAssigning(e.target.value)}>
+            <Select value={assigning} aria-label="Curso para matricular o colaborador" onChange={(e) => setAssigning(e.target.value)}>
               <option value="">Escolha um curso…</option>
               {courses.map((course) => <option key={course.id} value={course.id}>{course.title}</option>)}
             </Select>
             <Button
               icon="plus"
-              disabled={!assigning || !can("people.edit") && !can("competency.assess")}
+              disabled={!assigning || (!can("people.edit") && !can("competency.assess"))}
               onClick={() => {
                 progressEngine.enroll(employee.id, assigning, "gestor");
                 toast.success("Colaborador matriculado");
@@ -225,17 +225,17 @@ export function EmployeeDetailPage({ employeeId }: { employeeId: string }) {
                   <span className="text-[13.5px] flex-1 min-w-0 truncate">{item.name}</span>
                   <LevelMeter level={item.level} target={item.target} size="sm" />
                   {can("competency.assess") && (
-                    <Field label="" className="w-[132px]">
-                      <Select
-                        value={String(item.level || "")}
-                        onChange={(e) => assess(item.competencyId, Number(e.target.value) as CompetencyLevel)}
-                      >
-                        <option value="">avaliar…</option>
-                        {[1, 2, 3, 4, 5, 6].map((n) => (
-                          <option key={n} value={n}>{n} · {LEVEL_NAMES[n as CompetencyLevel]}</option>
-                        ))}
-                      </Select>
-                    </Field>
+                    <Select
+                      className="w-[150px] shrink-0"
+                      aria-label={`Avaliar nível de ${item.name}`}
+                      value={String(item.level || "")}
+                      onChange={(e) => assess(item.competencyId, Number(e.target.value) as CompetencyLevel)}
+                    >
+                      <option value="">avaliar…</option>
+                      {[1, 2, 3, 4, 5, 6].map((n) => (
+                        <option key={n} value={n}>{n} · {LEVEL_NAMES[n as CompetencyLevel]}</option>
+                      ))}
+                    </Select>
                   )}
                 </li>
               ))}

@@ -69,13 +69,16 @@ export function LessonPage({ courseId, lessonId }: { courseId: string; lessonId:
     if (result.lessonXp > 0) toast.xp(result.lessonXp, `Aula: ${lesson.title}`);
     if (result.leveledUp) toast.levelUp(xpEngine.level(employee.id).name);
     toast.badges(result.newBadges);
+    if (result.certificate) {
+      toast.success("Curso concluído e certificado emitido!", `Código ${result.certificate.code}`);
+    }
   };
 
   return (
     <div className="max-w-3xl mx-auto">
       {/* Cabeçalho da aula */}
       <div className="mb-4">
-        <Link to={`/curso/${course.id}`} className="inline-flex items-center gap-1.5 text-[13px] font-semibold text-ink-600 hover:text-navy mb-2">
+        <Link to={`/curso/${course.id}`} className="inline-flex items-center gap-1.5 py-1.5 text-[13px] font-semibold text-ink-600 hover:text-navy mb-1">
           <Icon name="arrow-left" size={15} />
           {course.title}
         </Link>
@@ -137,7 +140,9 @@ export function LessonPage({ courseId, lessonId }: { courseId: string; lessonId:
                 ? "Boa! Fechou essa parte. Quer descobrir mais? A próxima aula continua de onde paramos."
                 : quiz
                   ? "Você fechou o conteúdo. Agora mostre na prática: faça o quiz rápido."
-                  : "Você concluiu todas as aulas deste curso. Hora da avaliação final."}
+                  : course.finalQuizId
+                    ? "Você concluiu todas as aulas deste curso. Hora da avaliação final."
+                    : "Você concluiu todas as aulas deste curso. Parabéns — curso fechado!"}
             </CharacterSpeech>
             <div className="mt-4 flex flex-wrap gap-2">
               {quiz && (
@@ -149,9 +154,13 @@ export function LessonPage({ courseId, lessonId }: { courseId: string; lessonId:
                 <Button icon="arrow-right" variant={quiz ? "secondary" : "primary"} onClick={() => navigate(`/curso/${course.id}/aula/${next.id}`)}>
                   Próxima aula: {next.title.length > 28 ? `${next.title.slice(0, 28)}…` : next.title}
                 </Button>
-              ) : (
+              ) : course.finalQuizId ? (
                 <Button icon="clipboard" variant="copper" onClick={() => navigate(`/curso/${course.id}`)}>
                   Ir para a avaliação final
+                </Button>
+              ) : (
+                <Button icon="award" variant="copper" onClick={() => navigate("/certificados")}>
+                  Ver meus certificados
                 </Button>
               )}
               <Button variant="ghost" onClick={() => navigate(`/curso/${course.id}`)}>Voltar ao curso</Button>

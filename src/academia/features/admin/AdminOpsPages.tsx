@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { AppSettings, RiskReport, RiskStatus } from "../../core/types";
 import {
   auditRepo, catalogRepo, certificateRepo, competencyRepo, gamificationRepo, learningRepo, notificationRepo,
@@ -11,7 +11,7 @@ import { useToast } from "../../state/ToastContext";
 import { useBoot } from "../../state/DatabaseProvider";
 import { certificateEngine } from "../../engines/certificate/CertificateEngine";
 import { competencyEngine } from "../../engines/competency/CompetencyEngine";
-import { notificationEngine } from "../../engines/notification/NotificationEngine";
+import { RISK_FLOW, riskEngine } from "../../engines/risk/RiskEngine";
 import { erpBridge } from "../../integrations/erp/ErpBridge";
 import { PageHeader } from "../../ui/layout/AppShell";
 import { Card, SectionTitle } from "../../ui/primitives/Card";
@@ -133,8 +133,6 @@ export function CertificatesAdminPage() {
 // =====================================================================
 // RISCOS REPORTADOS (painel do gestor, seção 19)
 // =====================================================================
-const RISK_FLOW: RiskStatus[] = ["aberto", "em_analise", "acao_definida", "resolvido", "encerrado"];
-
 export function RisksAdminPage() {
   const { employee } = useAuth();
   const toast = useToast();
@@ -153,25 +151,9 @@ export function RisksAdminPage() {
 
   const list = filter === "abertos" ? data.open : filter === "criticos" ? data.critical : filter === "encerrados" ? data.closed : data.all;
 
-  const advance = (report: RiskReport, status: RiskStatus, note: string) => {
+  const advance = (report: RiskReport, status: RiskStatus, note: string, actionPlan?: RiskReport["actionPlan"]) => {
     if (!employee) return;
-    const updated: RiskReport = {
-      ...report,
-      status,
-      timeline: [...report.timeline, { at: nowIso(), status, note, byId: employee.id, byName: employee.name }],
-      closedAt: status === "encerrado" || status === "resolvido" ? nowIso() : report.closedAt,
-    };
-    riskRepo.save(updated);
-    auditRepo.log({ actorId: employee.id, actorName: employee.name, action: `risk.${status}`, entity: "risk_reports", entityId: report.id, detail: `${report.code}: ${note}` });
-    if (report.employeeId) {
-      notificationEngine.notifyEmployee(
-        report.employeeId,
-        `Seu registro ${report.code} foi atualizado`,
-        `Status: ${status.replace(/_/g, " ")} — ${note}`,
-        "risco",
-        "/risco",
-      );
-    }
+    const updated = riskEngine.advance(report, status, note, employee, actionPlan);
     setSelected(updated);
     toast.success("Risco atualizado");
   };
@@ -224,9 +206,9 @@ export function RisksAdminPage() {
 function RiskModal({ report, onClose, onAdvance }: {
   report: RiskReport;
   onClose: () => void;
-  onAdvance: (report: RiskReport, status: RiskStatus, note: string) => void;
+  onAdvance: (report: RiskReport, status: RiskStatus, note: string, actionPlan?: RiskReport["actionPlan"]) => void;
 }) {
-  const [status, setStatus] = useState<RiskStatus>(RISK_FLOW[Math.min(RISK_FLOW.indexOf(report.status) + 1, RISK_FLOW.length - 1)]);
+  const [status, setStatus] = useState<RiskStatus>(riskEngine.nextStatus(report.status));
   const [note, setNote] = useState("");
   const [plan, setPlan] = useState(report.actionPlan ?? { what: "", who: "", when: "", done: false });
 
@@ -244,10 +226,10 @@ function RiskModal({ report, onClose, onAdvance }: {
             icon="check"
             disabled={note.trim().length < 5}
             onClick={() => {
-              if (plan.what.trim()) {
-                riskRepo.save({ ...report, actionPlan: { what: plan.what, who: plan.who, when: plan.when || nowIso(), done: plan.done } });
-              }
-              onAdvance(report, status, note);
+              const actionPlan = plan.what.trim()
+                ? { what: plan.what, who: plan.who, when: plan.when || nowIso(), done: plan.done }
+                : undefined;
+              onAdvance(report, status, note, actionPlan);
               setNote("");
             }}
           >
@@ -457,7 +439,7 @@ export function AuditPage() {
   return (
     <div>
       <PageHeader title="Auditoria" subtitle="Quem fez o quê, quando. Registro de todas as ações relevantes." icon="lock" />
-      <TextInput className="mb-4 sm:max-w-md" value={term} onChange={(e) => setTerm(e.target.value)} placeholder="Filtrar por ação, pessoa ou entidade…" />
+      <TextInput className="mb-4 sm:max-w-md" aria-label="Filtrar registros de auditoria" value={term} onChange={(e) => setTerm(e.target.value)} placeholder="Filtrar por ação, pessoa ou entidade…" />
       <Card className="overflow-hidden">
         <ul>
           {filtered.map((log) => (
@@ -490,6 +472,13 @@ export function SettingsPage() {
   const [tab, setTab] = useState("geral");
   const [draft, setDraft] = useState<AppSettings>(settings);
   const [confirmReseed, setConfirmReseed] = useState(false);
+
+  // Se as configurações mudarem por fora (restaurar demonstração, outra
+  // sessão gravando), o rascunho acompanha — senão a tela salvaria de
+  // volta valores velhos.
+  useEffect(() => {
+    setDraft(settings);
+  }, [settings.updatedAt]);
 
   const save = (changes: Partial<AppSettings>) => {
     if (!employee) return;
@@ -575,6 +564,7 @@ export function SettingsPage() {
                   <Chip tone="navy">Nível {level.level}</Chip>
                   <TextInput
                     value={level.name}
+                    aria-label={`Nome do nível ${level.level}`}
                     onChange={(e) => {
                       const levels = [...draft.levels];
                       levels[index] = { ...level, name: e.target.value };
@@ -584,6 +574,7 @@ export function SettingsPage() {
                   <TextInput
                     type="number"
                     className="max-w-[120px]"
+                    aria-label={`XP mínimo do nível ${level.level}`}
                     value={level.minXp}
                     onChange={(e) => {
                       const levels = [...draft.levels];
@@ -746,6 +737,10 @@ export function SettingsPage() {
             <li className="flex items-center justify-between gap-3">
               <span className="text-ink-600">Competências cadastradas</span><strong>{competencyRepo.all().length}</strong>
             </li>
+            {status.lastError && <li className="text-alert">Falha de gravação: {status.lastError}</li>}
+            {status.loadWarnings.length > 0 && (
+              <li className="text-copper-600">{status.loadWarnings.length} registro(s) ilegível(is) na carga</li>
+            )}
           </ul>
           <Callout tone="alerta" title="Restaurar demonstração">
             Apaga TODOS os dados da Academia (conteúdos, cursos, progresso, certificados) e recria a carga inicial.

@@ -147,8 +147,17 @@ gerada pelo motor e 2 certificados de exemplo.
 npm install
 npm run dev             # ERP em /  ·  Academia em /academia.html
 npm run typecheck       # TypeScript estrito
-npm run test:academia   # 63 verificações de integração dos motores
+npm run test:academia   # 93 verificações: motores + integridade do conteúdo
 npm run build           # gera as duas aplicações
+```
+
+Varredura no navegador (opcional — abre todas as telas no computador e no
+celular, roda os fluxos de ponta a ponta e as regressões já corrigidas):
+
+```bash
+npm i -D playwright && npx playwright install chromium   # uma vez
+npm run build && npm run preview                         # num terminal
+npm run smoke:academia                                   # noutro terminal
 ```
 
 ### Sem Supabase configurado

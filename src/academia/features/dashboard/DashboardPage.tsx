@@ -221,7 +221,7 @@ export function DashboardPage() {
             title="Minhas competências"
             subtitle="Onde você está forte e onde vale desenvolver"
             icon="target"
-            right={<Link to="/competencias" className="text-[12.5px] font-semibold text-navy underline">ver tudo</Link>}
+            right={<Link to="/competencias" className="inline-flex items-center py-1.5 px-1 text-[12.5px] font-semibold text-navy underline">ver tudo</Link>}
           />
           <div className="px-4 sm:px-5 pb-5 space-y-3">
             {strengths.length > 0 && (
@@ -271,7 +271,7 @@ export function DashboardPage() {
               </div>
               <h3 className="font-bold text-[15.5px]">{curiosity.title}</h3>
               <p className="text-[14.5px] leading-relaxed mt-1.5">{curiosity.text}</p>
-              <Link to="/curiosidades" className="inline-block mt-3 text-[12.5px] font-semibold text-navy underline">
+              <Link to="/curiosidades" className="inline-flex items-center mt-2 py-1.5 text-[12.5px] font-semibold text-navy underline">
                 Ver mais curiosidades
               </Link>
             </Card>

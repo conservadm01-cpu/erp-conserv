@@ -66,7 +66,7 @@ export function SourcesPage() {
             </div>
             <p className="text-[13px] text-ink-600 mt-1">{source.institution} · {source.type}</p>
             {source.url && (
-              <a href={source.url} target="_blank" rel="noreferrer" className="text-[12px] text-navy underline break-all block mt-1">{source.url}</a>
+              <a href={source.url} target="_blank" rel="noreferrer" className="inline-block py-1 text-[12px] text-navy underline break-all mt-1">{source.url}</a>
             )}
             {source.subjects.length > 0 && (
               <div className="flex flex-wrap gap-1 mt-2">

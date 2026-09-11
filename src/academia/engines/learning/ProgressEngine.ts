@@ -22,6 +22,8 @@ export interface LessonCompletion {
   enrollment: Enrollment;
   courseCompleted: boolean;
   nextLessonId?: ID;
+  /** Preenchido quando a última aula fecha um curso sem avaliação final. */
+  certificate: Certificate | null;
 }
 
 export interface CourseCompletion {
@@ -84,9 +86,9 @@ export const progressEngine = {
 
     const rules = settingsRepo.get().xpRules;
     const amount = alreadyDone ? 0 : lesson.xp || rules.lesson;
-    const award = amount > 0
+    const award: { leveledUp: boolean; newBadges: BadgeGrant[] } = amount > 0
       ? xpEngine.award(employeeId, amount, `Aula concluída: ${lesson.title}`, "aula", lesson.id)
-      : { leveledUp: false, newBadges: [] as BadgeGrant[] };
+      : { leveledUp: false, newBadges: [] };
 
     if (!alreadyDone) {
       for (const competencyId of lesson.competencies) {
@@ -94,19 +96,46 @@ export const progressEngine = {
       }
     }
 
-    const enrollment = this.refreshEnrollment(employeeId, lesson.courseId);
+    let enrollment = this.refreshEnrollment(employeeId, lesson.courseId);
     const lessons = catalogRepo.orderedLessons(lesson.courseId);
     const done = learningRepo.completedLessonIds(employeeId, lesson.courseId);
     const next = lessons.find((l) => !done.has(l.id));
 
+    // Curso SEM avaliação final: a conclusão acontece aqui, ao terminar a
+    // última aula. Sem isso o colaborador ficava num beco sem saída —
+    // terminava tudo e o curso nunca fechava (nem certificado saía).
+    const course = catalogRepo.course(lesson.courseId);
+    let certificate: Certificate | null = null;
+    let courseXp = 0;
+    if (!next && course && !course.finalQuizId && enrollment.status !== "concluido") {
+      const score = this.scoreWithoutFinalExam(employeeId, course.id);
+      const completion = this.completeCourse(employeeId, course.id, score);
+      enrollment = completion.enrollment;
+      certificate = completion.certificate;
+      courseXp = completion.xpEarned;
+      award.newBadges = [...award.newBadges, ...completion.newBadges];
+    }
+
     return {
-      lessonXp: amount,
+      lessonXp: amount + courseXp,
       leveledUp: award.leveledUp,
       newBadges: award.newBadges,
       enrollment,
       courseCompleted: !next,
       nextLessonId: next?.id,
+      certificate,
     };
+  },
+
+  /**
+   * Aproveitamento de um curso que não tem avaliação final: usa a média
+   * dos quizzes feitos dentro do curso; não havendo nenhum, considera
+   * conclusão por participação (100%).
+   */
+  scoreWithoutFinalExam(employeeId: ID, courseId: ID): number {
+    const attempts = learningRepo.quizAttempts(employeeId).filter((a) => a.courseId === courseId);
+    if (attempts.length === 0) return 100;
+    return Math.round(attempts.reduce((sum, a) => sum + a.score, 0) / attempts.length);
   },
 
   /** Todas as aulas concluídas? (pré-requisito da avaliação final) */

@@ -55,6 +55,7 @@ export function Toggle({ checked, onChange, label, hint }: {
         id={id}
         role="switch"
         aria-checked={checked}
+        aria-label={label}
         onClick={() => onChange(!checked)}
         className={cn(
           "relative shrink-0 w-11 h-6 rounded-full transition-colors border",
@@ -71,12 +72,14 @@ export function Toggle({ checked, onChange, label, hint }: {
   );
 }
 
-export function CheckboxRow({ checked, onChange, title, description, right }: {
+export function CheckboxRow({ checked, onChange, title, description, right, ariaLabel }: {
   checked: boolean;
   onChange: (value: boolean) => void;
   title: React.ReactNode;
   description?: React.ReactNode;
   right?: React.ReactNode;
+  /** Nome lido por leitor de tela quando o título não é texto simples. */
+  ariaLabel?: string;
 }) {
   return (
     <div
@@ -89,6 +92,7 @@ export function CheckboxRow({ checked, onChange, title, description, right }: {
       <input
         type="checkbox"
         checked={checked}
+        aria-label={ariaLabel ?? (typeof title === "string" ? title : "selecionar item")}
         onChange={(e) => onChange(e.target.checked)}
         onClick={(e) => e.stopPropagation()}
         className="mt-0.5 w-4 h-4 accent-[#2f4a63]"

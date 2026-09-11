@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { Suspense, lazy, useEffect } from "react";
 import { RouterProvider, resolveRoute, useRouter, type RouteDefinition } from "./router/Router";
 import { DatabaseProvider } from "./state/DatabaseProvider";
 import { ToastProvider } from "./state/ToastContext";
@@ -30,20 +30,8 @@ import { WorkstationPage } from "./features/workstation/WorkstationPage";
 import { CulturePage } from "./features/culture/CulturePage";
 import { ProfilePage, NotificationsPage } from "./features/profile/ProfilePage";
 
-// Telas administrativas
-import { AdminDashboard } from "./features/admin/AdminDashboard";
-import { ContentsPage } from "./features/admin/ContentsPage";
-import { ContentUploaderPage } from "./features/admin/ContentUploader";
-import { ContentDetailPage } from "./features/admin/ContentDetailPage";
-import { EmployeesPage, EmployeeDetailPage } from "./features/admin/EmployeesPage";
-import { SourcesPage } from "./features/admin/SourcesPage";
-import {
-  CoursesAdminPage, CourseAdminDetailPage, QuizzesAdminPage, GamesAdminPage, PathsAdminPage,
-  HandbooksAdminPage, CompetenciesAdminPage, Nr1AdminPage,
-} from "./features/admin/AdminCatalogPages";
-import {
-  CertificatesAdminPage, RisksAdminPage, ReportsPage, AuditPage, SettingsPage,
-} from "./features/admin/AdminOpsPages";
+// Área administrativa: carregada sob demanda (ver AdminArea.tsx).
+const AdminArea = lazy(() => import("./features/admin/AdminArea"));
 
 // =====================================================================
 // Tabela de rotas (hash routing — funciona em hospedagem estática e no
@@ -79,27 +67,9 @@ const ROUTES: RouteDefinition[] = [
   { pattern: "/perfil", render: () => <ProfilePage /> },
   { pattern: "/notificacoes", render: () => <NotificationsPage /> },
 
-  // administração
-  { pattern: "/admin", admin: true, render: () => <AdminDashboard /> },
-  { pattern: "/admin/conteudos", admin: true, render: () => <ContentsPage /> },
-  { pattern: "/admin/conteudos/novo", admin: true, render: () => <ContentUploaderPage /> },
-  { pattern: "/admin/conteudos/:contentId", admin: true, render: (p) => <ContentDetailPage contentId={p.contentId} /> },
-  { pattern: "/admin/colaboradores", admin: true, render: () => <EmployeesPage /> },
-  { pattern: "/admin/colaboradores/:employeeId", admin: true, render: (p) => <EmployeeDetailPage employeeId={p.employeeId} /> },
-  { pattern: "/admin/cursos", admin: true, render: () => <CoursesAdminPage /> },
-  { pattern: "/admin/cursos/:courseId", admin: true, render: (p) => <CourseAdminDetailPage courseId={p.courseId} /> },
-  { pattern: "/admin/apostilas", admin: true, render: () => <HandbooksAdminPage /> },
-  { pattern: "/admin/quizzes", admin: true, render: () => <QuizzesAdminPage /> },
-  { pattern: "/admin/jogos", admin: true, render: () => <GamesAdminPage /> },
-  { pattern: "/admin/competencias", admin: true, render: () => <CompetenciesAdminPage /> },
-  { pattern: "/admin/certificados", admin: true, render: () => <CertificatesAdminPage /> },
-  { pattern: "/admin/trilhas", admin: true, render: () => <PathsAdminPage /> },
-  { pattern: "/admin/nr1", admin: true, render: () => <Nr1AdminPage /> },
-  { pattern: "/admin/fontes", admin: true, render: () => <SourcesPage /> },
-  { pattern: "/admin/riscos", admin: true, render: () => <RisksAdminPage /> },
-  { pattern: "/admin/relatorios", admin: true, render: () => <ReportsPage /> },
-  { pattern: "/admin/auditoria", admin: true, render: () => <AuditPage /> },
-  { pattern: "/admin/configuracoes", admin: true, render: () => <SettingsPage /> },
+  // administração (um único pedaço, carregado sob demanda)
+  { pattern: "/admin", admin: true, render: () => <AdminArea /> },
+  { pattern: "/admin/*", admin: true, render: () => <AdminArea /> },
 ];
 
 /** Quiz aceita ?curso=ID para fechar o curso ao final da avaliação. */
@@ -148,7 +118,21 @@ function Shell() {
     );
   }
 
-  return <AppShell admin={match.route.admin}>{match.route.render(match.params)}</AppShell>;
+  return (
+    <AppShell admin={match.route.admin}>
+      <Suspense fallback={<CarregandoArea />}>{match.route.render(match.params)}</Suspense>
+    </AppShell>
+  );
+}
+
+/** Espera curta enquanto o pedaço da área administrativa chega. */
+function CarregandoArea() {
+  return (
+    <div className="py-16 text-center text-ink-600">
+      <Icon name="refresh" size={22} className="animate-spin mx-auto mb-2" />
+      <p className="text-[14px]">Abrindo o painel…</p>
+    </div>
+  );
 }
 
 function BootScreen({ message, error, onRetry }: { message: string; error?: string; onRetry: () => void }) {

@@ -612,7 +612,7 @@ export function HandbooksAdminPage() {
       <Card className="p-4 mb-5">
         <SectionTitle>Gerar apostila de um curso</SectionTitle>
         <div className="flex flex-col sm:flex-row gap-2">
-          <Select value={courseId} onChange={(e) => setCourseId(e.target.value)}>
+          <Select value={courseId} aria-label="Curso para gerar a apostila" onChange={(e) => setCourseId(e.target.value)}>
             <option value="">Escolha o curso…</option>
             {courses.map((course) => <option key={course.id} value={course.id}>{course.title}</option>)}
           </Select>

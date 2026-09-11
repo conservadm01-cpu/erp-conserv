@@ -79,7 +79,7 @@ export function GameHostPage({ gameId }: { gameId: string }) {
   return (
     <div className="max-w-3xl mx-auto">
       <div className="mb-4">
-        <button type="button" onClick={() => navigate("/jogos")} className="inline-flex items-center gap-1.5 text-[13px] font-semibold text-ink-600 hover:text-navy mb-2">
+        <button type="button" onClick={() => navigate("/jogos")} className="inline-flex items-center gap-1.5 py-1.5 text-[13px] font-semibold text-ink-600 hover:text-navy mb-1">
           <Icon name="arrow-left" size={15} />
           Jogos
         </button>
@@ -441,6 +441,9 @@ function TimedQuizRenderer({ rounds, onFinish }: { rounds: TimedQuizRound[]; onF
   const [index, setIndex] = useState(0);
   const [results, setResults] = useState<RoundResult[]>([]);
   const [flash, setFlash] = useState<"ok" | "erro" | null>(null);
+  // O efeito abaixo re-executa a cada resposta; sem esta trava ele podia
+  // encerrar a partida duas vezes quando o tempo acabasse.
+  const encerrado = useRef(false);
 
   const questions = useQuery(() => {
     if (!round) return [];
@@ -462,6 +465,8 @@ function TimedQuizRenderer({ rounds, onFinish }: { rounds: TimedQuizRound[]; onF
   useEffect(() => {
     if (!started) return;
     if (secondsLeft <= 0) {
+      if (encerrado.current) return;
+      encerrado.current = true;
       onFinish(results, Math.max(results.length, 1));
       return;
     }
@@ -490,7 +495,17 @@ function TimedQuizRenderer({ rounds, onFinish }: { rounds: TimedQuizRound[]; onF
     return (
       <Card className="p-6 text-center">
         <h2 className="text-[18px] font-bold">Acabaram as perguntas!</h2>
-        <Button className="mt-4" icon="trophy" onClick={() => onFinish(results, Math.max(results.length, 1))}>Ver resultado</Button>
+        <Button
+          className="mt-4"
+          icon="trophy"
+          onClick={() => {
+            if (encerrado.current) return;
+            encerrado.current = true;
+            onFinish(results, Math.max(results.length, 1));
+          }}
+        >
+          Ver resultado
+        </Button>
       </Card>
     );
   }

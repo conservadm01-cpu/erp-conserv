@@ -8,8 +8,7 @@ import { useAuth } from "../../auth/AuthContext";
 import { MAIN_NAV, ADMIN_NAV, type NavItem } from "./navigation";
 import { xpEngine } from "../../engines/gamification/XpEngine";
 import { notificationRepo, settingsRepo } from "../../data/repositories";
-import { useQuery } from "../../state/useCollection";
-import { ProgressBar } from "../primitives/Progress";
+import { useDbStatus, useQuery } from "../../state/useCollection";
 import { Button } from "../primitives/Button";
 
 function isActive(path: string, to: string): boolean {
@@ -44,6 +43,7 @@ export function AppShell({ children, admin = false }: { children: React.ReactNod
   const level = useQuery(() => (employee ? xpEngine.level(employee.id) : null), [employee?.id]);
   const unread = useQuery(() => (employee ? notificationRepo.unreadCount(employee.id, role ?? undefined) : 0), [employee?.id, role]);
 
+  const dbStatus = useDbStatus();
   const nav = admin ? ADMIN_NAV : MAIN_NAV;
   const mobileNav = admin ? ADMIN_NAV.slice(0, 4) : MAIN_NAV.filter((i) => i.mobile);
 
@@ -155,6 +155,23 @@ export function AppShell({ children, admin = false }: { children: React.ReactNod
           )}
         </header>
 
+        {/*
+          Aviso honesto quando a gravação no banco falha (queda de rede na
+          fábrica, Supabase fora do ar). Sem isso, a pessoa continuaria
+          trabalhando achando que tudo foi salvo.
+        */}
+        {dbStatus.lastError && (
+          <div className="no-print bg-alert/10 border-b border-alert/30 px-4 sm:px-6 lg:px-8 py-2.5" role="status">
+            <div className="max-w-[1180px] mx-auto flex items-start gap-2.5 text-[13px] text-alert">
+              <Icon name="alert" size={16} className="shrink-0 mt-0.5" />
+              <span>
+                <strong>Não foi possível salvar no banco.</strong> Suas últimas ações podem não ter sido gravadas —
+                verifique a conexão e refaça a última ação. (Detalhe: {dbStatus.lastError})
+              </span>
+            </div>
+          </div>
+        )}
+
         <main className="flex-1 px-4 sm:px-6 lg:px-8 py-5 sm:py-7 pb-24 lg:pb-10 max-w-[1180px] w-full mx-auto">
           {children}
         </main>
@@ -258,7 +275,7 @@ export function PageHeader({ title, subtitle, icon, action, back }: {
   return (
     <div className="mb-5">
       {back && (
-        <Link to={back.to} className="inline-flex items-center gap-1.5 text-[13px] font-semibold text-ink-600 hover:text-navy mb-2">
+        <Link to={back.to} className="inline-flex items-center gap-1.5 py-1.5 text-[13px] font-semibold text-ink-600 hover:text-navy mb-1">
           <Icon name="arrow-left" size={15} />
           {back.label}
         </Link>
@@ -279,4 +296,3 @@ export function PageHeader({ title, subtitle, icon, action, back }: {
   );
 }
 
-export { ProgressBar };

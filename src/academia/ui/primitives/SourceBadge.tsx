@@ -43,7 +43,9 @@ export function SourceBadge({ sourceId, sourceRef, label = "Fonte", className }:
           setOpen(true);
         }}
         className={cn(
-          "inline-flex items-center gap-1 text-[11px] font-semibold text-ink-400 hover:text-navy transition-colors",
+          // py-1 garante altura mínima de toque no celular (WCAG 2.2 AA)
+          "inline-flex items-center gap-1 py-1 min-h-[24px] text-[11px] font-semibold",
+          "text-ink-400 hover:text-navy transition-colors",
           className,
         )}
         title={`Ver origem da informação (${id})`}

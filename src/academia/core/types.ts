@@ -992,6 +992,13 @@ export interface AppSettings {
   levels: Array<{ level: number; name: string; minXp: number }>;
   ai: AiSettings;
   erpIntegration: { enabled: boolean; baseUrl: string; apiKey: string };
+  /**
+   * Gravado por último na carga inicial. Serve de marca de "carga
+   * completa": se a página for fechada no meio do seed, este campo não
+   * existe e a carga é refeita na próxima abertura, em vez de o sistema
+   * seguir com o banco pela metade.
+   */
+  seedCompletedAt?: ISODate;
   updatedAt: ISODate;
 }
 

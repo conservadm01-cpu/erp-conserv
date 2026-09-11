@@ -150,7 +150,12 @@ export function AdminDashboard() {
               <strong className="tabular-nums">{status.pendingWrites}</strong>
             </li>
             {status.lastError && (
-              <li className="text-alert text-[12.5px]">Último erro: {status.lastError}</li>
+              <li className="text-alert text-[12.5px]">Falha de gravação: {status.lastError}</li>
+            )}
+            {status.loadWarnings.length > 0 && (
+              <li className="text-copper-600 text-[12.5px]">
+                {status.loadWarnings.length} registro(s) ilegível(is) na carga — veja o console para os detalhes.
+              </li>
             )}
             {!status.shared && (
               <li className="text-[12px] text-ink-600 leading-relaxed">

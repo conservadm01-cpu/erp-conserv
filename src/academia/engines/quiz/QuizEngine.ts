@@ -90,6 +90,13 @@ export const quizEngine = {
     const finishedAt = nowIso();
     const durationSec = Math.max(1, Math.round((Date.parse(finishedAt) - Date.parse(prepared.startedAt)) / 1000));
 
+    // XP proporcional ao acerto, com bônus de aprovação.
+    const rules = settingsRepo.get().xpRules;
+    const base = quiz.xp || rules.quiz;
+    const xpEarned = Math.round(base * (score / 100)) + (passed ? Math.round(base * 0.2) : 0);
+
+    // A tentativa é gravada UMA vez, já com o XP: o motor de badges lê as
+    // tentativas durante o award, então ela precisa existir antes dele.
     const attempt = learningRepo.saveQuizAttempt({
       id: uid("QAT"),
       quizId: quiz.id,
@@ -111,15 +118,10 @@ export const quizEngine = {
       startedAt: prepared.startedAt,
       finishedAt,
       durationSec,
-      xpEarned: 0,
+      xpEarned,
     });
 
-    // XP proporcional ao acerto, com bônus de aprovação.
-    const rules = settingsRepo.get().xpRules;
-    const base = quiz.xp || rules.quiz;
-    const xpEarned = Math.round(base * (score / 100)) + (passed ? Math.round(base * 0.2) : 0);
     const award = xpEngine.award(employeeId, xpEarned, `Quiz: ${quiz.title} (${score}%)`, "quiz", quiz.id);
-    learningRepo.saveQuizAttempt({ ...attempt, xpEarned });
 
     // Evidência de competência por competência presente na prova.
     const perCompetency = new Map<ID, { total: number; correct: number }>();
@@ -147,7 +149,7 @@ export const quizEngine = {
     const weakSubjects = [...subjectErrors.entries()].sort((a, b) => b[1] - a[1]).map(([s]) => s);
 
     return {
-      attempt: { ...attempt, xpEarned },
+      attempt,
       score,
       passed,
       correctCount,

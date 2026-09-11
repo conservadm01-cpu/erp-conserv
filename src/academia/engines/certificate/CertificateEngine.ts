@@ -79,16 +79,7 @@ export const certificateEngine = {
     const competencies = input.competencies ?? course?.competencies ?? path?.competencies ?? [];
     const code = uniqueCode();
 
-    auditRepo.log({
-      actorId: employee.id,
-      actorName: employee.name,
-      action: "certificate.issue",
-      entity: "certificates",
-      entityId: `CERT-${code}`,
-      detail: `${title} · ${employee.name} · ${input.score}% · ${hours}h`,
-    });
-
-    return certificateRepo.save({
+    const certificate = certificateRepo.save({
       id: `CERT-${code}`,
       code,
       kind: input.kind,
@@ -107,6 +98,17 @@ export const certificateEngine = {
       competencies,
       librarySourceIds: course?.librarySourceIds ?? [],
     });
+
+    auditRepo.log({
+      actorId: employee.id,
+      actorName: employee.name,
+      action: "certificate.issue",
+      entity: "certificates",
+      entityId: certificate.id,
+      detail: `${title} · ${employee.name} · ${input.score}% · ${hours}h`,
+    });
+
+    return certificate;
   },
 
   /** Validação pública — registra a consulta para auditoria. */

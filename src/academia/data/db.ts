@@ -21,12 +21,20 @@ function keyFor(collection: CollectionName, id: string): string {
   return `${DB_PREFIX}${collection}:${id}`;
 }
 
+/** Comparação de IDs sem depender de idioma/locale (ordem reproduzível). */
+function byId(a: Row, b: Row): number {
+  return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+}
+
 export interface DbStatus {
   adapter: string;
   shared: boolean;
   loaded: boolean;
   pendingWrites: number;
+  /** Falha de GRAVAÇÃO — acende o aviso de "não foi salvo" na tela. */
   lastError: string | null;
+  /** Registros ilegíveis encontrados na carga (não são falha de escrita). */
+  loadWarnings: string[];
   records: number;
 }
 
@@ -38,6 +46,7 @@ class Database {
   private pending = 0;
   private loaded = false;
   private lastError: string | null = null;
+  private loadWarnings: string[] = [];
   private version = 0;
 
   constructor() {
@@ -59,6 +68,7 @@ class Database {
   }
 
   async load(): Promise<void> {
+    this.loadWarnings = [];
     const entries = await this.adapter.entries(DB_PREFIX);
     for (const name of COLLECTIONS) this.cache.get(name)?.clear();
     for (const entry of entries) {
@@ -72,7 +82,9 @@ class Database {
         const row = JSON.parse(entry.value) as Row;
         if (row && typeof row.id === "string") bucket.set(row.id, row);
       } catch {
-        this.lastError = `Registro ilegível em ${entry.key}`;
+        // Registro corrompido não é falha de gravação: fica registrado
+        // como aviso de carga, sem acender o alerta de "não salvou".
+        this.loadWarnings.push(`Registro ilegível em ${entry.key}`);
       }
     }
     this.primeIdCounters();
@@ -96,6 +108,7 @@ class Database {
       loaded: this.loaded,
       pendingWrites: this.pending,
       lastError: this.lastError,
+      loadWarnings: [...this.loadWarnings],
       records,
     };
   }
@@ -124,10 +137,20 @@ class Database {
 
   // ---------------- leitura ----------------
 
+  /**
+   * Lista a coleção em ORDEM ESTÁVEL por ID.
+   *
+   * A ordem em que o armazenamento devolve as chaves (localStorage,
+   * Supabase) não é garantida e muda entre recarregamentos. Sem esta
+   * ordenação as telas trocavam de ordem a cada F5 e um `slice(0, n)`
+   * passava a mostrar outros registros — foi o que fazia a lista de
+   * perfis de demonstração mudar sozinha. Quem precisa de outra ordem
+   * (ordem do módulo, data, pontuação) ordena explicitamente.
+   */
   list<K extends CollectionName>(collection: K): readonly Schema[K][] {
     const cached = this.snapshots.get(collection);
     if (cached) return cached as readonly Schema[K][];
-    const rows = [...(this.cache.get(collection)?.values() ?? [])] as unknown as Schema[K][];
+    const rows = [...(this.cache.get(collection)?.values() ?? [])].sort(byId) as unknown as Schema[K][];
     this.snapshots.set(collection, rows);
     return rows;
   }
@@ -137,17 +160,18 @@ class Database {
     return this.cache.get(collection)?.get(id) as unknown as Schema[K] | undefined;
   }
 
+  /** Primeiro registro que atende ao teste, na mesma ordem estável de `list`. */
   find<K extends CollectionName>(collection: K, predicate: (row: Schema[K]) => boolean): Schema[K] | undefined {
-    for (const row of this.cache.get(collection)?.values() ?? []) {
-      if (predicate(row as unknown as Schema[K])) return row as unknown as Schema[K];
+    for (const row of this.list(collection)) {
+      if (predicate(row)) return row;
     }
     return undefined;
   }
 
   filter<K extends CollectionName>(collection: K, predicate: (row: Schema[K]) => boolean): Schema[K][] {
     const out: Schema[K][] = [];
-    for (const row of this.cache.get(collection)?.values() ?? []) {
-      if (predicate(row as unknown as Schema[K])) out.push(row as unknown as Schema[K]);
+    for (const row of this.list(collection)) {
+      if (predicate(row)) out.push(row);
     }
     return out;
   }

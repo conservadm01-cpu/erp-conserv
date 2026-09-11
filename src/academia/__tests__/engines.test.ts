@@ -9,9 +9,9 @@
 //
 //   npm run test:academia
 // =====================================================================
-import { runSeed } from "../data/seed/index";
+import { isSeeded, runSeed } from "../data/seed/index";
 import { db } from "../data/db";
-import { catalogRepo, certificateRepo, learningRepo, gamificationRepo } from "../data/repositories/index";
+import { catalogRepo, certificateRepo, learningRepo, gamificationRepo, settingsRepo } from "../data/repositories/index";
 import { progressEngine } from "../engines/learning/ProgressEngine";
 import { quizEngine } from "../engines/quiz/QuizEngine";
 import { certificateEngine } from "../engines/certificate/CertificateEngine";
@@ -22,8 +22,12 @@ import { contentEngine } from "../engines/content/ContentEngine";
 import { courseComposer } from "../engines/content/CourseComposer";
 import { handbookEngine } from "../engines/handbook/HandbookEngine";
 import { extractFromText } from "../engines/content/extractors/index";
+import { DEFAULT_SETTINGS } from "../data/defaults";
+import { COLLECTIONS } from "../data/schema";
 import { xpEngine } from "../engines/gamification/XpEngine";
 import { workstationEngine } from "../engines/learning/WorkstationEngine";
+import { riskEngine } from "../engines/risk/RiskEngine";
+import { notificationRepo, riskRepo, peopleRepo } from "../data/repositories/index";
 
 let pass = 0, fail = 0;
 function check(name: string, condition: unknown, detail = "") {
@@ -159,6 +163,139 @@ check("versão registrada", catalogRepo.versionsOf(created.id).length === 1, `v$
 check("auditoria registrou as ações", db.count("audit_logs") >= 7, `${db.count("audit_logs")} registros`);
 const actions = new Set(db.list("audit_logs").map((l) => l.action));
 check("auditoria cobre certificado e conclusão", actions.has("certificate.issue") && actions.has("course.complete"), [...actions].join(", "));
+
+console.log("\n9) Eu vi um risco: registro, anonimato e tratamento");
+const autor = db.byId("employees", "EMP-0002")!;
+const gestor = db.byId("employees", "EMP-0008")!;
+
+const anon = riskEngine.report({
+  sector: "Costura", place: "Corredor entre linhas", category: "Queda / obstrução",
+  description: "Caixas bloqueando a passagem perto da saída de emergência.",
+  priority: "alta", anonymous: true,
+}, autor);
+check("registro anônimo não guarda o colaborador", !anon.report.employeeId && !anon.report.employeeName);
+check("XP do anônimo não aponta para o registro (não dá para descobrir quem foi)",
+  !gamificationRepo.xpOf(autor.id).some((t) => t.refId === anon.report.id));
+check("XP do anônimo mesmo assim é lançado", gamificationRepo.xpOf(autor.id).some((t) => t.reason === "Contribuição com a segurança"));
+const logAnon = db.list("audit_logs").find((l) => l.entityId === anon.report.id);
+check("auditoria do anônimo não identifica a pessoa", logAnon?.actorId === "anonimo", logAnon?.actorName);
+check("linha do tempo do anônimo não tem nome", anon.report.timeline.every((t) => !t.byName));
+
+const ident = riskEngine.report({
+  sector: "Estamparia", place: "Bancada de telas", category: "Produto químico",
+  description: "Produto de limpeza sem ventilação adequada no fim do turno.",
+  priority: "critica", anonymous: false,
+}, autor);
+check("registro identificado guarda o autor", ident.report.employeeId === autor.id);
+check("XP identificado aponta para o registro", gamificationRepo.xpOf(autor.id).some((t) => t.refId === ident.report.id));
+check("gestão é notificada do novo risco", notificationRepo.all().some((n) => n.role === "GESTOR" && n.body.includes("Estamparia")));
+check("validação recusa descrição curta", riskEngine.validate({ sector: "Costura", place: "", category: "x", description: "curto", priority: "baixa", anonymous: false }) !== null);
+
+const tratado = riskEngine.advance(ident.report, "em_analise", "Verificado no local pela supervisão.", gestor);
+check("fluxo avança e registra a linha do tempo", tratado.status === "em_analise" && tratado.timeline.length === 2);
+check("quem reportou recebe aviso", notificationRepo.forEmployee(autor.id).some((n) => n.title.includes(ident.report.code)));
+const antesAvisos = notificationRepo.all().length;
+riskEngine.advance(anon.report, "em_analise", "Verificado.", gestor);
+check("registro anônimo não gera aviso para ninguém", notificationRepo.all().length === antesAvisos);
+check("próximo status segue o fluxo", riskEngine.nextStatus("acao_definida") === "resolvido");
+check("resumo de riscos bate", riskEngine.summary().total === riskRepo.all().length);
+
+console.log("\n10) Curso sem avaliação final: não pode virar beco sem saída");
+const textoCurto = `A galoneira precisa de limpeza diária. O fiapo acumulado embaixo da chapa muda o transporte e estraga a barra.
+
+Antes de começar o turno, confira o passamento das linhas e o nível do óleo indicado pelo fabricante.`;
+const semProva = contentEngine.createFromUpload({
+  title: "Cuidados diários com a galoneira",
+  description: "Material curto, sem base para uma avaliação completa.",
+  category: "manutencao", level: "basico", sector: "Costura", contentType: "procedimento",
+  keywords: ["galoneira"], competencies: ["CMP-GALONEIRA"], librarySourceIds: ["SRCLIB-CONSERV-POP"],
+  extraction: extractFromText(textoCurto), createdBy: "EMP-0009",
+});
+await contentEngine.analyze(semProva.id, "EMP-0009");
+const cursoSemProva = courseComposer.compose(semProva.id, "EMP-0009", "Coordenação", {
+  title: "Cuidados diários com a galoneira", publish: true,
+})!;
+check("curso gerado sem avaliação final (questões insuficientes)", !cursoSemProva.finalQuiz);
+
+const aluno = "EMP-0006";
+progressEngine.enroll(aluno, cursoSemProva.course.id, "gestor");
+const aulasSemProva = catalogRepo.orderedLessons(cursoSemProva.course.id);
+let fechamento: ReturnType<typeof progressEngine.completeLesson> | null = null;
+for (const aula of aulasSemProva) fechamento = progressEngine.completeLesson(aluno, aula, 120);
+check("última aula fecha o curso sozinha", learningRepo.enrollment(aluno, cursoSemProva.course.id)?.status === "concluido");
+check("certificado sai mesmo sem avaliação", !!fechamento?.certificate, fechamento?.certificate?.code);
+check("aproveitamento registrado como participação", learningRepo.enrollment(aluno, cursoSemProva.course.id)?.finalScore === 100);
+check("conclusão aparece na auditoria", db.list("audit_logs").some((l) => l.action === "course.complete" && l.detail?.includes("galoneira")));
+
+console.log("\n11) Ordem de leitura estável entre recarregamentos");
+// O armazenamento (localStorage, Supabase) não garante a ordem em que
+// devolve as chaves. Se a ordem do banco dependesse disso, as listas da
+// tela mudariam a cada F5 — foi o que trocava os perfis de demonstração.
+const usuariosAntes = peopleRepo.users().map((u) => u.id);
+const cursosAntes = catalogRepo.courses().map((c) => c.id);
+const banco: Array<{ key: string; value: string }> = [];
+for (const colecao of COLLECTIONS) {
+  for (const registro of db.list(colecao) as ReadonlyArray<{ id: string }>) {
+    banco.push({ key: `academia:v1:${colecao}:${registro.id}`, value: JSON.stringify(registro) });
+  }
+}
+/** Adaptador que devolve o mesmo banco, mas na ordem inversa das chaves. */
+const adaptadorInvertido = {
+  name: "Adaptador de teste (ordem invertida)",
+  shared: false,
+  async get(key: string) { return banco.find((e) => e.key === key)?.value ?? null; },
+  async set() { /* nada */ },
+  async delete() { /* nada */ },
+  async keys() { return banco.map((e) => e.key); },
+  async entries() { return [...banco].reverse(); },
+  async setMany() { /* nada */ },
+  async deleteMany() { /* nada */ },
+};
+db.useAdapter(adaptadorInvertido);
+await db.load();
+check("ordem dos usuários não muda quando o armazenamento inverte as chaves",
+  peopleRepo.users().map((u) => u.id).join(",") === usuariosAntes.join(","));
+check("ordem dos cursos não muda quando o armazenamento inverte as chaves",
+  catalogRepo.courses().map((c) => c.id).join(",") === cursosAntes.join(","));
+check("a lista sai ordenada por ID (ordem reproduzível)",
+  peopleRepo.users().map((u) => u.id).join(",") === [...usuariosAntes].sort().join(","),
+  peopleRepo.users().map((u) => u.id).join(","));
+const ativos = peopleRepo.activeEmployees().map((e) => e.id);
+check("filtro herda a mesma ordem estável", ativos.join(",") === [...ativos].sort().join(","));
+
+// O acesso de demonstração precisa mostrar um perfil de cada papel,
+// independente da ordem em que os usuários chegam do armazenamento.
+const perfisDemo = (["COLABORADOR", "INSTRUTOR", "GESTOR", "ADMIN"] as const)
+  .map((papel) => peopleRepo.users().find((u) => u.active && u.role === papel))
+  .filter((u): u is NonNullable<typeof u> => !!u);
+check("há um perfil de demonstração para cada papel", perfisDemo.length === 4, `${perfisDemo.length} de 4`);
+check("todo perfil de demonstração tem colaborador vinculado",
+  perfisDemo.every((u) => !!peopleRepo.employee(u.employeeId)));
+
+console.log("\n12) Robustez: carga interrompida e falha de gravação");
+const configSalva = settingsRepo.get();
+check("carga completa é reconhecida", isSeeded());
+db.put("settings", { ...configSalva, seedCompletedAt: undefined });
+check("carga interrompida no meio é detectada (e seria refeita)", !isSeeded());
+db.put("settings", configSalva);
+check("estado restaurado", isSeeded());
+
+const adaptadorComFalha = {
+  name: "Adaptador de teste (sempre falha)",
+  shared: false,
+  async get() { return null; },
+  async set() { throw new Error("sem conexão com o banco"); },
+  async delete() { /* nada */ },
+  async keys() { return [] as string[]; },
+  async entries() { return [] as Array<{ key: string; value: string }>; },
+  async setMany() { throw new Error("sem conexão com o banco"); },
+  async deleteMany() { /* nada */ },
+};
+db.useAdapter(adaptadorComFalha);
+db.put("settings", { ...DEFAULT_SETTINGS });
+await new Promise((r) => setTimeout(r, 60));
+check("falha de gravação aparece no status do banco", (db.status().lastError ?? "").includes("sem conexão"), db.status().lastError ?? "");
+check("aviso de leitura não é confundido com falha de gravação", db.status().loadWarnings.length === 0);
 
 console.log(`\n=== ${pass} passaram, ${fail} falharam ===`);
 if (fail > 0) process.exit(1);

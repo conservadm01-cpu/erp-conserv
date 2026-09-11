@@ -1,14 +1,11 @@
 import { useState } from "react";
 import type { RiskPriority, RiskReport } from "../../core/types";
+import { riskEngine } from "../../engines/risk/RiskEngine";
 import { peopleRepo, riskRepo } from "../../data/repositories";
 import { useQuery } from "../../state/useCollection";
 import { useAuth } from "../../auth/AuthContext";
 import { useToast } from "../../state/ToastContext";
-import { xpEngine } from "../../engines/gamification/XpEngine";
-import { notificationEngine } from "../../engines/notification/NotificationEngine";
-import { auditRepo } from "../../data/repositories";
-import { riskCode, uid } from "../../core/ids";
-import { nowIso, formatDateTime } from "../../core/dates";
+import { formatDateTime } from "../../core/dates";
 import { compressImage } from "../../core/images";
 import { PageHeader } from "../../ui/layout/AppShell";
 import { Card, SectionTitle } from "../../ui/primitives/Card";
@@ -61,46 +58,23 @@ export function RiskReportPage() {
 
   const submit = () => {
     if (!employee) return;
-    const description = form.description.trim();
-    if (description.length < 10) {
-      toast.error("Descreva o risco com um pouco mais de detalhe (o que você viu e onde).");
+    const input = {
+      sector: form.sector || defaultSector,
+      place: form.place,
+      category: form.category,
+      description: form.description,
+      priority: form.priority,
+      anonymous: form.anonymous,
+      photoRef: photo,
+    };
+    const erro = riskEngine.validate(input);
+    if (erro) {
+      toast.error(erro);
       return;
     }
-    const report: RiskReport = {
-      id: uid("RSK"),
-      code: riskCode(riskRepo.nextSequence()),
-      employeeId: form.anonymous ? undefined : employee.id,
-      employeeName: form.anonymous ? undefined : employee.name,
-      anonymous: form.anonymous,
-      sector: form.sector || defaultSector,
-      place: form.place.trim() || "Não informado",
-      category: form.category,
-      description,
-      photoRef: photo,
-      priority: form.priority,
-      status: "aberto",
-      createdAt: nowIso(),
-      timeline: [{
-        at: nowIso(),
-        status: "aberto",
-        note: form.anonymous ? "Registro anônimo." : "Registro feito pelo colaborador.",
-        byId: form.anonymous ? undefined : employee.id,
-        byName: form.anonymous ? undefined : employee.name,
-      }],
-    };
-    riskRepo.save(report);
-    const award = xpEngine.award(employee.id, 60, "Risco reportado", "risco", report.id);
-    notificationEngine.notifyRole("GESTOR", `Novo risco (${report.priority})`, `${report.sector} — ${report.category}: ${description.slice(0, 90)}`, "risco", "/admin/riscos");
-    auditRepo.log({
-      actorId: form.anonymous ? "anonimo" : employee.id,
-      actorName: form.anonymous ? "Anônimo" : employee.name,
-      action: "risk.create",
-      entity: "risk_report",
-      entityId: report.id,
-      detail: `${report.code} · ${report.category} · ${report.sector}`,
-    });
-    toast.xp(60, "Obrigado por avisar!");
-    toast.badges(award.newBadges);
+    const { report, xpEarned, newBadges } = riskEngine.report(input, employee);
+    toast.xp(xpEarned, "Obrigado por avisar!");
+    toast.badges(newBadges);
     setSent(report);
     setForm({ sector: "", place: "", category: CATEGORIES[0], description: "", priority: "media", anonymous: false });
     setPhoto(undefined);

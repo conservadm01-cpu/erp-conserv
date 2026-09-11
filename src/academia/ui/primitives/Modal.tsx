@@ -1,4 +1,4 @@
-import React, { useEffect } from "react";
+import React, { useEffect, useRef } from "react";
 import { cn } from "../../core/cn";
 import { Icon } from "./Icon";
 
@@ -11,6 +11,9 @@ export function Modal({ open, onClose, title, subtitle, children, footer, size =
   footer?: React.ReactNode;
   size?: "sm" | "md" | "lg" | "xl";
 }) {
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const origemDoFoco = useRef<HTMLElement | null>(null);
+
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
@@ -19,9 +22,19 @@ export function Modal({ open, onClose, title, subtitle, children, footer, size =
     document.addEventListener("keydown", onKey);
     const previous = document.body.style.overflow;
     document.body.style.overflow = "hidden";
+
+    // Acessibilidade: o foco entra no diálogo e volta para o botão que o
+    // abriu, para quem navega por teclado não ficar perdido na página.
+    origemDoFoco.current = document.activeElement as HTMLElement | null;
+    const primeiro = dialogRef.current?.querySelector<HTMLElement>(
+      "input:not([type=hidden]), select, textarea, button, [href], [tabindex]:not([tabindex='-1'])",
+    );
+    (primeiro ?? dialogRef.current)?.focus({ preventScroll: true });
+
     return () => {
       document.removeEventListener("keydown", onKey);
       document.body.style.overflow = previous;
+      origemDoFoco.current?.focus?.({ preventScroll: true });
     };
   }, [open, onClose]);
 
@@ -32,9 +45,11 @@ export function Modal({ open, onClose, title, subtitle, children, footer, size =
     <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-6 no-print">
       <div className="absolute inset-0 bg-navy-900/50 backdrop-blur-[2px]" onClick={onClose} />
       <div
+        ref={dialogRef}
         role="dialog"
         aria-modal="true"
         aria-label={title}
+        tabIndex={-1}
         className={cn(
           "relative w-full bg-linen-50 shadow-lift animate-pop-in",
           "rounded-t-2xl sm:rounded-2xl max-h-[92dvh] sm:max-h-[88dvh] flex flex-col",

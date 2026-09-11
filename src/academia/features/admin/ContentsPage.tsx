@@ -46,6 +46,7 @@ export function ContentsPage() {
       <div className="flex flex-col sm:flex-row gap-3 mb-4">
         <TextInput
           value={term}
+          aria-label="Buscar conteúdo no Banco de Conhecimento"
           onChange={(e) => setTerm(e.target.value)}
           placeholder="Buscar por título, descrição, palavra-chave ou categoria…"
           className="sm:max-w-md"

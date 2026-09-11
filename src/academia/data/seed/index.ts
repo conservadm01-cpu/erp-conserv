@@ -58,7 +58,11 @@ export interface SeedReport {
 }
 
 export function isSeeded(): boolean {
-  return db.count("courses") > 0 && db.count("questions") > 0;
+  // Não basta "ter curso": a carga só conta como concluída quando o
+  // marcador final foi gravado. Assim, uma carga interrompida no meio
+  // (aba fechada, rede caindo) é refeita em vez de deixar o banco torto.
+  const settings = db.byId("settings", "settings");
+  return !!settings?.seedCompletedAt && db.count("courses") > 0 && db.count("questions") > 0;
 }
 
 /** Escreve a carga inicial. `force` recria do zero (apaga o que existe). */
@@ -83,7 +87,6 @@ export async function runSeed(options: { force?: boolean } = {}): Promise<SeedRe
   const courses = BUILT.map((b) => withQuizzes(b.course));
 
   const batch: Array<{ collection: CollectionName; records: Array<{ id: string } & Record<string, unknown>> }> = [
-    { collection: "settings", records: [DEFAULT_SETTINGS as unknown as { id: string }] },
     { collection: "competencies", records: competenciesWithCourses() as unknown as Array<{ id: string }> },
     { collection: "content_sources", records: SEED_SOURCES as unknown as Array<{ id: string }> },
     { collection: "departments", records: SEED_DEPARTMENTS as unknown as Array<{ id: string }> },
@@ -116,6 +119,14 @@ export async function runSeed(options: { force?: boolean } = {}): Promise<SeedRe
 
   await db.writeBatch(batch);
 
+  // Marcador final: a partir daqui a carga é considerada completa.
+  await db.writeBatch([
+    {
+      collection: "settings",
+      records: [{ ...DEFAULT_SETTINGS, seedCompletedAt: new Date().toISOString() } as unknown as { id: string }],
+    },
+  ]);
+
   // Apostila de exemplo gerada pelo motor (não escrita à mão).
   if (db.count("handbooks") === 0) {
     handbookEngine.generate({
@@ -134,7 +145,7 @@ export async function runSeed(options: { force?: boolean } = {}): Promise<SeedRe
     });
   }
 
-  const counts: Record<string, number> = {};
+  const counts: Record<string, number> = { settings: 1 };
   for (const part of batch) counts[part.collection] = part.records.length;
   counts.handbooks = db.count("handbooks");
   return { seeded: true, counts };

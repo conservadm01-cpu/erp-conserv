@@ -110,6 +110,11 @@ export const gameEngine = {
     const passed = percent >= game.passScore;
     const finishedAt = nowIso();
 
+    const base = game.xp || settingsRepo.get().xpRules.game;
+    const xpEarned = Math.round(base * (percent / 100)) + (passed ? 20 : 0);
+
+    // Grava a partida uma única vez, já com o XP — o motor de badges lê as
+    // partidas durante o award.
     const session = learningRepo.saveGameSession({
       id: uid("GSS"),
       gameId: game.id,
@@ -120,21 +125,18 @@ export const gameEngine = {
       startedAt,
       finishedAt,
       durationSec: Math.max(1, Math.round((Date.parse(finishedAt) - Date.parse(startedAt)) / 1000)),
-      xpEarned: 0,
+      xpEarned,
       details: details.map((d) => ({ roundId: d.roundId, correct: d.correct, competencies: d.competencies ?? game.competencies })),
     });
 
-    const base = game.xp || settingsRepo.get().xpRules.game;
-    const xpEarned = Math.round(base * (percent / 100)) + (passed ? 20 : 0);
     const award = xpEngine.award(employeeId, xpEarned, `Jogo: ${game.title} (${percent}%)`, "jogo", game.id);
-    learningRepo.saveGameSession({ ...session, xpEarned });
 
     for (const competencyId of game.competencies) {
       competencyEngine.registerEvidence(employeeId, competencyId, "jogo", game.id, `Jogo: ${game.title}`, percent / 100);
     }
 
     return {
-      session: { ...session, xpEarned },
+      session,
       score,
       maxScore,
       percent,

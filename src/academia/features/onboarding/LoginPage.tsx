@@ -8,21 +8,45 @@ import { Icon } from "../../ui/primitives/Icon";
 import { Avatar } from "../../ui/primitives/Avatar";
 import { CharacterAvatar } from "../../ui/characters/Character";
 import { ROLE_LABELS } from "../../auth/permissions";
-import { useRouter } from "../../router/Router";
 import { Chip } from "../../ui/primitives/Chip";
+import type { Employee, Role, User } from "../../core/types";
+
+/**
+ * A demonstração mostra UM perfil de cada papel, sempre nesta ordem.
+ *
+ * Antes a tela pegava os quatro primeiros usuários da coleção: como a
+ * ordem de leitura do armazenamento não é garantida, a lista mudava a
+ * cada recarregamento e às vezes nem aparecia um administrador.
+ */
+const PAPEIS_DEMONSTRACAO: Role[] = ["COLABORADOR", "INSTRUTOR", "GESTOR", "ADMIN"];
 
 export function LoginPage() {
   const { login, loginAs } = useAuth();
-  const { navigate } = useRouter();
+  // Não há navegação após o login de propósito: a pessoa continua no
+  // endereço que tentou abrir (link de curso compartilhado, QR Code,
+  // aviso). Quem chegou pela raiz cai no painel normalmente.
   const settings = useQuery(() => settingsRepo.get());
-  const users = useQuery(() => peopleRepo.users().map((u) => ({ user: u, employee: peopleRepo.employee(u.employeeId) })));
+  const perfis = useQuery<Array<{ user: User; employee: Employee }>>(() => {
+    const candidatos = peopleRepo
+      .users()
+      .filter((user) => user.active)
+      .map((user) => ({ user, employee: peopleRepo.employee(user.employeeId) }))
+      .filter((item): item is { user: User; employee: Employee } => !!item.employee);
+    const escolhidos: Array<{ user: User; employee: Employee }> = [];
+    for (const papel of PAPEIS_DEMONSTRACAO) {
+      const achado = candidatos.find((item) => item.user.role === papel);
+      if (achado) escolhidos.push(achado);
+    }
+    // Sem nenhum papel reconhecido (base vindo de outro sistema), mostra
+    // os primeiros mesmo assim para não travar o acesso.
+    return escolhidos.length ? escolhidos : candidatos.slice(0, 4);
+  });
   const [form, setForm] = useState({ login: "", password: "" });
   const [error, setError] = useState<string>();
 
   const submit = () => {
     const result = login(form.login, form.password);
     if (!result.ok) setError(result.error);
-    else navigate("/");
   };
 
   return (
@@ -114,20 +138,17 @@ export function LoginPage() {
                 Enquanto o acesso oficial não é configurado, toque em um perfil para entrar (senha <strong>1234</strong>).
               </p>
               <div className="space-y-2">
-                {users.filter((u) => u.employee).slice(0, 4).map(({ user, employee }) => (
+                {perfis.map(({ user, employee }) => (
                   <button
                     key={user.id}
                     type="button"
-                    onClick={() => {
-                      loginAs(user.id);
-                      navigate("/");
-                    }}
+                    onClick={() => loginAs(user.id)}
                     className="w-full flex items-center gap-3 p-3 rounded-xl border border-sand bg-linen-50 hover:shadow-card transition-shadow text-left"
                   >
-                    <Avatar name={employee!.name} size={38} />
+                    <Avatar name={employee.name} size={38} />
                     <div className="min-w-0 flex-1">
-                      <div className="text-[14px] font-semibold truncate">{employee!.name}</div>
-                      <div className="text-[12px] text-ink-600 truncate">{employee!.cargo}</div>
+                      <div className="text-[14px] font-semibold truncate">{employee.name}</div>
+                      <div className="text-[12px] text-ink-600 truncate">{employee.cargo}</div>
                     </div>
                     <Chip tone={user.role === "ADMIN" ? "copper" : user.role === "COLABORADOR" ? "navy" : "jade"}>
                       {ROLE_LABELS[user.role]}
