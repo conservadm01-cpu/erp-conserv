@@ -1,0 +1,136 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* =====================================================================
+   ACADEMIA CONSERV — base visual
+   Industrial + moda: fundo linho, tipografia firme, azul ConServ e
+   cobre como acentos. Acessibilidade: contraste alto, foco visível,
+   respeito a prefers-reduced-motion.
+   ===================================================================== */
+
+:root {
+  --ring: 47 74 99;
+  color-scheme: light;
+}
+
+@layer base {
+  html {
+    -webkit-text-size-adjust: 100%;
+  }
+  body {
+    @apply bg-linen text-ink font-sans antialiased;
+    margin: 0;
+    min-height: 100dvh;
+  }
+  h1, h2, h3, h4 {
+    @apply font-display tracking-tight text-navy-900;
+  }
+  /*
+   * Em superfícies escuras (cards navy, tela de boas-vindas), o título
+   * precisa herdar a cor clara do bloco — senão fica navy sobre navy e
+   * some. Regra com especificidade maior que a base, e ainda assim
+   * sobrescrevível por uma classe explícita no próprio título.
+   */
+  .text-linen-50 h1, .text-linen-50 h2, .text-linen-50 h3, .text-linen-50 h4,
+  .text-linen-100 h1, .text-linen-100 h2, .text-linen-100 h3, .text-linen-100 h4,
+  .text-linen-200 h1, .text-linen-200 h2, .text-linen-200 h3, .text-linen-200 h4 {
+    color: inherit;
+  }
+  :focus-visible {
+    outline: 3px solid rgb(var(--ring));
+    outline-offset: 2px;
+    border-radius: 6px;
+  }
+  ::selection {
+    background: #ddcda6;
+  }
+  /* Evita zoom involuntário no iOS em campos de formulário */
+  input, select, textarea {
+    font-size: 16px;
+  }
+  /*
+   * Itens de grid/flex nascem com min-width:auto, o que faz uma coluna
+   * "estourar" a largura da tela quando o conteúdo tem palavra longa,
+   * chip ou número que não quebra. Isso provocava rolagem horizontal no
+   * celular. A regra abaixo permite que a coluna encolha; quem precisa
+   * manter tamanho continua usando shrink-0.
+   */
+  :where(.grid) > *,
+  :where(.flex) > * {
+    min-width: 0;
+  }
+}
+
+@layer components {
+  .card {
+    @apply bg-linen-50 border border-sand/50 rounded-2xl shadow-card;
+  }
+  .card-quiet {
+    @apply bg-linen-50/70 border border-sand/40 rounded-2xl;
+  }
+  .chip {
+    @apply inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide;
+  }
+  .label {
+    @apply block text-[12px] font-semibold uppercase tracking-wide text-ink-600 mb-1.5;
+  }
+  .field {
+    @apply w-full rounded-xl border border-sand bg-linen-50 px-3.5 py-2.5 text-[15px] text-ink
+           placeholder:text-ink-400 focus:border-navy focus:outline-none focus:ring-2 focus:ring-navy/20;
+  }
+  .skeleton {
+    background: linear-gradient(90deg, #efe7d4 25%, #f8f4ea 37%, #efe7d4 63%);
+    background-size: 400% 100%;
+    @apply animate-shimmer rounded-lg;
+  }
+  .prose-lesson p {
+    @apply text-[16px] leading-[1.72] text-ink;
+  }
+}
+
+/* Barra de rolagem discreta no desktop */
+@media (min-width: 768px) {
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: #cdb98a transparent;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* ---------------------------------------------------------------------
+   IMPRESSÃO — apostilas e certificados saem em papel/PDF pelo navegador
+   --------------------------------------------------------------------- */
+@media print {
+  @page {
+    margin: 14mm;
+  }
+  body {
+    background: #fff !important;
+  }
+  .no-print {
+    display: none !important;
+  }
+  .print-area {
+    box-shadow: none !important;
+    border: 0 !important;
+    background: #fff !important;
+  }
+  .print-page {
+    break-after: page;
+  }
+  .print-avoid-break {
+    break-inside: avoid;
+  }
+  a[href^="#"]::after {
+    content: "";
+  }
+}
