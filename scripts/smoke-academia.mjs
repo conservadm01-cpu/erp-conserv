@@ -21,6 +21,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import { montarPdf, PAGINAS_EXEMPLO } from "./lib/pdf-de-teste.mjs";
 
 const URL_BASE = process.env.SMOKE_URL ?? "http://localhost:4173/academia.html";
 
@@ -279,6 +280,40 @@ await page.waitForTimeout(200);
 await page.locator("button", { hasText: "Aprovar selecionadas" }).click();
 await page.waitForTimeout(800);
 check("questões sugeridas viram questões aprovadas", (await page.locator("text=aprovadas").count()) > 0);
+
+// administração: ler e analisar um PDF de verdade
+await page.goto(`${URL_BASE}#/admin/conteudos/novo`, { waitUntil: "networkidle" });
+await page.waitForTimeout(500);
+await page.locator('input[type="file"]').setInputFiles({
+  name: "pressao-do-pe-calcador.pdf",
+  mimeType: "application/pdf",
+  buffer: montarPdf(PAGINAS_EXEMPLO),
+});
+// O rótulo já existe com "0 trecho(s)" antes de a leitura terminar: a
+// espera é pelo número, não pelo texto.
+await page.waitForFunction(() => {
+  const m = document.body.innerText.match(/(\d+) trecho\(s\) extraídos/);
+  return !!m && Number(m[1]) > 0;
+}, null, { timeout: 60000 });
+const trechosDoPdf = Number(
+  (await page.evaluate(() => document.body.innerText.match(/(\d+) trecho\(s\) extraídos/)?.[1])) ?? 0,
+);
+check("PDF é lido no navegador (uma página, um trecho)", trechosDoPdf >= 2, `${trechosDoPdf} trecho(s)`);
+check("título vem do nome do arquivo",
+  (await page.locator('input[placeholder="Ex.: Regulagem da Overloque"]').inputValue()).includes("pressao"));
+await page.locator("button", { hasText: "Analisar conteúdo" }).click();
+await page.waitForSelector("text=Conteúdo identificado", { timeout: 60000 });
+check("análise do PDF identifica o conteúdo", (await page.locator("text=Conteúdo identificado").count()) > 0);
+const textoDaAnalise = await page.locator("body").innerText();
+check("a análise usa o texto do PDF", /calcador|arraste|transporte/i.test(textoDaAnalise));
+
+// A página do PDF tem de continuar registrada na fonte (rastreabilidade).
+const fonte = page.getByRole("button", { name: "Fonte", exact: true });
+if (await fonte.count()) {
+  await fonte.first().click();
+  await page.waitForTimeout(400);
+}
+check("a página do PDF fica registrada como fonte", /página \d+/i.test(await page.locator("body").innerText()));
 
 // =====================================================================
 // REGRESSÕES — defeitos já corrigidos que não podem voltar

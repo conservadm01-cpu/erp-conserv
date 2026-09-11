@@ -313,6 +313,7 @@ npm run dev             # ERP: /  ·  Academia: /academia.html
 npm run typecheck       # TypeScript estrito
 npm run test:academia   # 93 verificações dos motores + integridade do conteúdo
 npm run build           # gera as duas aplicações
+npm run build:publicacao# build com caminhos relativos (hospedagem estática)
 ```
 
 Varredura no navegador (opcional, precisa do Playwright):
@@ -327,10 +328,24 @@ A varredura abre todas as telas (computador e celular, colaborador e
 administração) procurando erro de JavaScript, tela em branco, rolagem
 horizontal, botão sem nome acessível, campo sem rótulo e id repetido;
 depois roda os fluxos de ponta a ponta (aula, quiz, jogo, registro de
-risco, análise de material novo) e as **regressões** já corrigidas —
-link compartilhado que sobrevive ao login, perfis de demonstração
-estáveis, progresso após o F5, impressão da apostila e do certificado,
-foco no diálogo e aviso de falha de gravação.
+risco, análise de material novo, **leitura e análise de PDF**) e as
+**regressões** já corrigidas — link compartilhado que sobrevive ao login,
+perfis de demonstração estáveis, progresso após o F5, impressão da
+apostila e do certificado, foco no diálogo e aviso de falha de gravação.
+
+### Leitura de PDF
+
+`engines/content/extractors/pdf.ts` lê o PDF no próprio navegador com o
+pdfjs e devolve um trecho por página — é daí que vem o localizador
+`página N` que o SOURCE_ID guarda. PDF digitalizado (só imagem) não tem
+texto: nesse caso a tela pede para colar o conteúdo, sem fingir que leu.
+
+O pdfjs trabalha num arquivo auxiliar separado (`pdf.worker`). Ele vai
+para `assets/` no build normal; para hospedagem estática use
+`npm run build:publicacao`, que além dos caminhos relativos reescreve os
+bytes de controle crus desse arquivo (publicadores de página os recusam, e
+sem o arquivo a leitura de PDF cai fora). A varredura de navegador cobre
+esse caminho de ponta a ponta com um PDF gerado na hora.
 
 ### Ordem de leitura do banco
 

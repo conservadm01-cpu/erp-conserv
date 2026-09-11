@@ -160,6 +160,22 @@ npm run build && npm run preview                         # num terminal
 npm run smoke:academia                                   # noutro terminal
 ```
 
+A varredura inclui a leitura de PDF: ela gera um PDF de duas páginas na
+hora (`scripts/lib/pdf-de-teste.mjs`), envia na tela de novo conteúdo e
+confere que o texto foi extraído, que a análise usou esse texto e que a
+página do PDF ficou registrada como fonte.
+
+### Publicar em hospedagem estática
+
+```bash
+npm run build:publicacao        # gera dist-publicacao/ com caminhos relativos
+```
+
+Use este build quando a aplicação não for ficar na raiz do domínio (uma
+pasta, uma pré-visualização hospedada). Ele também reescreve os bytes de
+controle crus do arquivo auxiliar do leitor de PDF, que alguns
+publicadores recusam — sem ele a leitura de PDF fica de fora.
+
 ### Sem Supabase configurado
 
 O ERP exige Supabase. **A Academia não**: sem as variáveis de ambiente ela
