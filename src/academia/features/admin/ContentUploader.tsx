@@ -70,12 +70,13 @@ export function ContentUploaderPage() {
   const [extraction, setExtraction] = useState<ExtractionResult | null>(null);
   const [fileRef, setFileRef] = useState<string | undefined>();
   const [busy, setBusy] = useState<"extraindo" | "analisando" | null>(null);
+  const [pdfPassword, setPdfPassword] = useState("");
 
-  const handleFile = async (picked: File) => {
+  const handleFile = async (picked: File, password?: string) => {
     setFile(picked);
     setBusy("extraindo");
     try {
-      const result = await extractFromFile(picked);
+      const result = await extractFromFile(picked, { password });
       setExtraction(result);
       if (result.detectedType === "imagem") setFileRef(await compressImage(picked));
       if (!form.title) setForm((f) => ({ ...f, title: picked.name.replace(/\.[^.]+$/, "").replace(/[-_]/g, " ") }));
@@ -254,6 +255,54 @@ export function ContentUploaderPage() {
               <ul className="list-disc pl-4 space-y-1">
                 {extraction.notes.map((note, i) => <li key={i}>{note}</li>)}
               </ul>
+
+              {/* PDF protegido: a senha resolve, então pedimos a senha. */}
+              {extraction.problem === "senha" && file && (
+                <div className="mt-3 flex flex-col sm:flex-row gap-2 sm:items-end">
+                  <Field label="Senha do PDF" className="flex-1">
+                    <TextInput
+                      type="password"
+                      value={pdfPassword}
+                      onChange={(e) => setPdfPassword(e.target.value)}
+                      onKeyDown={(e) => e.key === "Enter" && void handleFile(file, pdfPassword)}
+                      placeholder="senha do arquivo"
+                    />
+                  </Field>
+                  <Button
+                    variant="secondary"
+                    icon="unlock"
+                    loading={busy === "extraindo"}
+                    disabled={!pdfPassword}
+                    onClick={() => void handleFile(file, pdfPassword)}
+                  >
+                    Abrir com a senha
+                  </Button>
+                </div>
+              )}
+
+              {/* Falha técnica: o detalhe vai para a área de transferência
+                  em um toque, para quem está na tela conseguir relatar. */}
+              {extraction.technicalDetail && (
+                <div className="mt-3">
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    icon="copy"
+                    onClick={() => {
+                      const detalhes = [
+                        `Arquivo: ${extraction.fileName} (${formatBytes(extraction.fileSize ?? 0)}, ${extraction.mimeType})`,
+                        `Erro: ${extraction.technicalDetail}`,
+                        `Navegador: ${navigator.userAgent}`,
+                      ].join("\n");
+                      void navigator.clipboard?.writeText(detalhes)
+                        .then(() => toast.success("Detalhes copiados", "Cole na mensagem para quem for ajudar."))
+                        .catch(() => toast.error("Não foi possível copiar os detalhes."));
+                    }}
+                  >
+                    Copiar detalhes técnicos
+                  </Button>
+                </div>
+              )}
             </Callout>
           )}
           {extraction && !extraction.needsManualText && (

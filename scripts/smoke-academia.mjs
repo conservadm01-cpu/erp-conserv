@@ -21,7 +21,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import { montarPdf, PAGINAS_EXEMPLO } from "./lib/pdf-de-teste.mjs";
+import { montarPdf, montarPdfComSenha, PAGINAS_EXEMPLO } from "./lib/pdf-de-teste.mjs";
 
 const URL_BASE = process.env.SMOKE_URL ?? "http://localhost:4173/academia.html";
 
@@ -348,6 +348,43 @@ check("a página do PDF fica registrada como fonte", /página \d+/i.test(await p
   }
   await semWorker.close();
 }
+
+// PDF protegido por senha: a tela tem de pedir a senha e abrir com ela.
+await page.goto(`${URL_BASE}#/admin/conteudos/novo`, { waitUntil: "networkidle" });
+await page.waitForTimeout(500);
+await page.locator('input[type="file"]').setInputFiles({
+  name: "manual-do-fabricante.pdf",
+  mimeType: "application/pdf",
+  buffer: montarPdfComSenha(PAGINAS_EXEMPLO, "1234"),
+});
+await page.waitForSelector("text=Senha do PDF", { timeout: 40000 }).catch(() => {});
+check("PDF protegido pede a senha em vez de só falhar", (await page.locator("text=Senha do PDF").count()) > 0);
+if (await page.locator("text=Senha do PDF").count()) {
+  await page.locator('input[type="password"]').first().fill("1234");
+  await page.locator("button", { hasText: "Abrir com a senha" }).click();
+  await page.waitForFunction(() => {
+    const m = document.body.innerText.match(/(\d+) trecho\(s\) extraídos/);
+    return !!m && Number(m[1]) > 0;
+  }, null, { timeout: 60000 }).catch(() => {});
+}
+const trechosComSenha = await page.evaluate(
+  () => document.body.innerText.match(/(\d+) trecho\(s\) extraídos/)?.[1] ?? "0",
+);
+check("PDF protegido é lido depois da senha", Number(trechosComSenha) > 0, `${trechosComSenha} trecho(s)`);
+
+// Arquivo que não é PDF: explica o que houve e oferece copiar o detalhe.
+await page.goto(`${URL_BASE}#/admin/conteudos/novo`, { waitUntil: "networkidle" });
+await page.waitForTimeout(500);
+await page.locator('input[type="file"]').setInputFiles({
+  name: "renomeado.pdf",
+  mimeType: "application/pdf",
+  buffer: Buffer.from("Isto e um texto simples que alguem renomeou para .pdf\n"),
+});
+await page.waitForSelector("text=Este arquivo não abre como PDF", { timeout: 40000 }).catch(() => {});
+check("arquivo que não é PDF recebe explicação, não erro cru",
+  (await page.locator("text=Este arquivo não abre como PDF").count()) > 0);
+check("falha técnica oferece copiar os detalhes",
+  (await page.locator("button", { hasText: "Copiar detalhes" }).count()) > 0);
 
 // =====================================================================
 // REGRESSÕES — defeitos já corrigidos que não podem voltar

@@ -349,8 +349,22 @@ extra ser publicado junto. O custo é desprezível — 40 páginas saem em
 também desliga a avaliação dinâmica de código (`isEvalSupported: false`),
 que a política de segurança das páginas publicadas proíbe.
 
-A varredura cobre esse caminho de ponta a ponta com um PDF gerado na
-hora, inclusive com a criação de worker bloqueada.
+Quando a leitura não dá certo, o extrator diz **por quê** (campo
+`problem`), e a tela oferece a saída correspondente:
+
+| Situação | O que a tela faz |
+|---|---|
+| PDF protegido por senha | Pede a senha e abre o arquivo com ela |
+| Arquivo que não é PDF (renomeado, download incompleto, danificado) | Explica o caso e sugere salvar de novo como PDF |
+| PDF digitalizado (sem camada de texto) | Diz quantas páginas tem e pede o texto colado |
+| Falha técnica qualquer | Mostra o erro e oferece **copiar os detalhes** (arquivo, erro, navegador) |
+
+Página defeituosa isolada não derruba o material inteiro: ela é pulada e
+contabilizada no aviso.
+
+A varredura cobre esses caminhos de ponta a ponta com PDFs gerados na
+hora — inclusive um protegido por senha (criptografia RC4 padrão, montada
+em `scripts/lib/pdf-de-teste.mjs`) e com a criação de worker bloqueada.
 
 **Campo de arquivo**: a lista do `accept` é explícita, com o PDF na
 frente. Com `image/*` o Windows montava um filtro que começava em

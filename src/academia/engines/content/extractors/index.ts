@@ -82,11 +82,11 @@ export async function extractFromUrl(url: string): Promise<ExtractionResult> {
 }
 
 /** Extrai o texto de um arquivo, escolhendo o extrator adequado. */
-export async function extractFromFile(file: File): Promise<ExtractionResult> {
+export async function extractFromFile(file: File, options: { password?: string } = {}): Promise<ExtractionResult> {
   const type = detectFileType(file);
   if (type === "pdf") {
     const { extractPdf } = await import("./pdf");
-    return extractPdf(file);
+    return extractPdf(file, options);
   }
   if (type === "docx") {
     const { extractDocx } = await import("./office");

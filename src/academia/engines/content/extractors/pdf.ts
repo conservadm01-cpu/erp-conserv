@@ -1,16 +1,14 @@
-import type { ExtractedSection, ExtractionResult } from "./types";
+import type { ExtractedSection, ExtractionProblem, ExtractionResult } from "./types";
 import { cleanExtractedText } from "../../../core/text";
 
 /**
  * Carrega o pdfjs pronto para ler no PRÓPRIO thread da página.
  *
  * Ler PDF exige um "ajudante" (worker). Por padrão o pdfjs tenta criar
- * esse ajudante a partir de um arquivo separado — e é aí que a leitura
- * quebrava fora do servidor da ConServ: em página embutida ou publicada,
- * o navegador bloqueia a criação do worker e o erro não aparecia para
- * ninguém. Registrando o ajudante aqui, a leitura roda no thread da
- * página: funciona em qualquer hospedagem e não depende de nenhum
- * arquivo extra ser publicado junto.
+ * esse ajudante a partir de um arquivo separado — e isso não funciona em
+ * toda hospedagem. Registrando o ajudante aqui, a leitura roda no thread
+ * da página: funciona em qualquer lugar e não depende de nenhum arquivo
+ * extra ser publicado junto. Medido: 40 páginas em 0,2 s.
  */
 async function carregarLeitor() {
   const pdfjs = await import("pdfjs-dist");
@@ -18,6 +16,35 @@ async function carregarLeitor() {
   const escopo = globalThis as typeof globalThis & { pdfjsWorker?: unknown };
   escopo.pdfjsWorker ??= ajudante;
   return pdfjs;
+}
+
+/** Traduz a falha do pdfjs para algo que a tela saiba tratar. */
+function interpretarFalha(error: unknown): { problem: ExtractionProblem; note: string; detail: string } {
+  const nome = (error as { name?: string })?.name ?? "";
+  const detail = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+
+  if (nome === "PasswordException" || /password/i.test(detail)) {
+    return {
+      problem: "senha",
+      note: "Este PDF está protegido por senha. Informe a senha do arquivo para a plataforma conseguir ler.",
+      detail,
+    };
+  }
+  if (nome === "InvalidPDFException" || /invalid pdf|not a pdf/i.test(detail)) {
+    return {
+      problem: "arquivo_invalido",
+      note:
+        "Este arquivo não abre como PDF. Costuma ser um download incompleto, um arquivo de outro " +
+        "formato renomeado para .pdf, ou um PDF danificado. Tente abrir o arquivo no computador: se " +
+        "ele abrir, salve de novo (Imprimir → Salvar como PDF) e envie a cópia.",
+      detail,
+    };
+  }
+  return {
+    problem: "falha",
+    note: `Não foi possível ler este PDF (${detail}). Cole o conteúdo no campo de texto abaixo para seguir com a análise.`,
+    detail,
+  };
 }
 
 /**
@@ -28,15 +55,19 @@ async function carregarLeitor() {
  * administrador para colar o conteúdo ou enviar a versão digital.
  * (OCR seria o próximo passo — ponto de extensão.)
  */
-export async function extractPdf(file: File): Promise<ExtractionResult> {
+export async function extractPdf(file: File, options: { password?: string } = {}): Promise<ExtractionResult> {
   const notes: string[] = [];
   const sections: ExtractedSection[] = [];
+  let problem: ExtractionProblem | undefined;
+  let technicalDetail: string | undefined;
   let totalPaginas = 0;
+
   try {
     const pdfjs = await carregarLeitor();
     const buffer = await file.arrayBuffer();
     const pdf = await pdfjs.getDocument({
       data: new Uint8Array(buffer),
+      password: options.password,
       // Só queremos o texto: nada de renderizar, avaliar código ou baixar
       // fontes. Também evita esbarrar na política de segurança das
       // páginas publicadas, que proíbe execução dinâmica de código.
@@ -45,33 +76,45 @@ export async function extractPdf(file: File): Promise<ExtractionResult> {
       useSystemFonts: false,
     }).promise;
     totalPaginas = pdf.numPages;
+
+    const paginasComFalha: number[] = [];
     for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
-      const page = await pdf.getPage(pageNumber);
-      const content = await page.getTextContent();
-      const pageText = content.items
-        .map((item) => ("str" in item ? item.str : ""))
-        .join(" ")
-        .replace(/\s+/g, " ")
-        .trim();
-      if (pageText.length > 0) sections.push({ text: pageText, locator: `página ${pageNumber}` });
+      try {
+        const page = await pdf.getPage(pageNumber);
+        const content = await page.getTextContent();
+        const pageText = content.items
+          .map((item) => ("str" in item ? item.str : ""))
+          .join(" ")
+          .replace(/\s+/g, " ")
+          .trim();
+        if (pageText.length > 0) sections.push({ text: pageText, locator: `página ${pageNumber}` });
+      } catch {
+        // Uma página defeituosa não pode derrubar o material inteiro.
+        paginasComFalha.push(pageNumber);
+      }
+    }
+
+    if (paginasComFalha.length) {
+      notes.push(`Não foi possível ler ${paginasComFalha.length} página(s): ${paginasComFalha.join(", ")}.`);
     }
     if (sections.length === 0) {
+      problem = "sem_texto";
       notes.push(
         `Este PDF tem ${totalPaginas} página(s), mas nenhuma delas tem texto selecionável — ` +
         "provavelmente é um documento digitalizado (foto ou escâner). Cole o conteúdo no campo " +
         "de texto abaixo, ou envie a versão digital do arquivo.",
       );
-    } else if (totalPaginas > sections.length) {
-      notes.push(`${totalPaginas - sections.length} página(s) sem texto extraível foram ignoradas.`);
+    } else if (totalPaginas > sections.length + paginasComFalha.length) {
+      const vazias = totalPaginas - sections.length - paginasComFalha.length;
+      notes.push(`${vazias} página(s) sem texto (imagem ou em branco) foram ignoradas.`);
     }
   } catch (error) {
-    // Mensagem técnica junto: sem ela, quem está na tela não tem como
-    // dizer o que aconteceu nem pedir ajuda.
-    notes.push(
-      `Não foi possível ler este PDF (${error instanceof Error ? error.message : "erro desconhecido"}). ` +
-      "Cole o conteúdo no campo de texto abaixo para seguir com a análise.",
-    );
+    const falha = interpretarFalha(error);
+    problem = falha.problem;
+    technicalDetail = falha.detail;
+    notes.push(falha.note);
   }
+
   const text = cleanExtractedText(sections.map((s) => s.text).join("\n\n"));
   return {
     sections,
@@ -82,5 +125,7 @@ export async function extractPdf(file: File): Promise<ExtractionResult> {
     fileName: file.name,
     fileSize: file.size,
     mimeType: file.type || "application/pdf",
+    problem,
+    technicalDetail,
   };
 }

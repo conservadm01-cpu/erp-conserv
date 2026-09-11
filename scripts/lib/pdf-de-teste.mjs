@@ -138,3 +138,126 @@ export const PAGINAS_EXEMPLO = [
       "e o nome de quem ajustou. A ficha é o que permite voltar ao ponto anterior quando o resultado piora.",
   ],
 ];
+
+// ---------------------------------------------------------------------
+// PDF PROTEGIDO POR SENHA
+// ---------------------------------------------------------------------
+// Manual de fabricante costuma vir protegido. Para testar esse caminho
+// sem depender de ferramenta externa, montamos aqui a proteção padrão
+// mais simples do formato (handler "Standard", revisão 2, RC4 de 40
+// bits) — a mesma que os PDFs antigos usam.
+
+import crypto from "node:crypto";
+
+/** Preenchimento fixo definido pelo formato PDF. */
+const PREENCHIMENTO = Buffer.from([
+  0x28, 0xbf, 0x4e, 0x5e, 0x4e, 0x75, 0x8a, 0x41, 0x64, 0x00, 0x4e, 0x56, 0xff, 0xfa, 0x01, 0x08,
+  0x2e, 0x2e, 0x00, 0xb6, 0xd0, 0x68, 0x3e, 0x80, 0x2f, 0x0c, 0xa9, 0xfe, 0x64, 0x53, 0x69, 0x7a,
+]);
+
+function completarSenha(senha) {
+  return Buffer.concat([Buffer.from(senha, "latin1"), PREENCHIMENTO]).subarray(0, 32);
+}
+
+function md5(...partes) {
+  const h = crypto.createHash("md5");
+  for (const parte of partes) h.update(parte);
+  return h.digest();
+}
+
+/** RC4 — cifra simétrica usada pela proteção padrão antiga do PDF. */
+function rc4(chave, dados) {
+  const s = Array.from({ length: 256 }, (_, i) => i);
+  let j = 0;
+  for (let i = 0; i < 256; i += 1) {
+    j = (j + s[i] + chave[i % chave.length]) & 0xff;
+    [s[i], s[j]] = [s[j], s[i]];
+  }
+  const saida = Buffer.alloc(dados.length);
+  let i = 0;
+  j = 0;
+  for (let k = 0; k < dados.length; k += 1) {
+    i = (i + 1) & 0xff;
+    j = (j + s[i]) & 0xff;
+    [s[i], s[j]] = [s[j], s[i]];
+    saida[k] = dados[k] ^ s[(s[i] + s[j]) & 0xff];
+  }
+  return saida;
+}
+
+function literalDeBytes(buffer) {
+  let saida = "";
+  for (const byte of buffer) {
+    const c = String.fromCharCode(byte);
+    saida += "()\\".includes(c) ? `\\${c}` : (byte < 32 || byte > 126)
+      ? `\\${byte.toString(8).padStart(3, "0")}`
+      : c;
+  }
+  return saida;
+}
+
+/**
+ * Monta um PDF protegido por senha de usuário. A senha do dono é a
+ * mesma, o que basta para o teste.
+ */
+export function montarPdfComSenha(paginas, senha) {
+  const identificador = Buffer.from("00112233445566778899aabbccddeeff", "hex");
+  const senhaPreenchida = completarSenha(senha);
+  const chaveDono = md5(completarSenha(senha)).subarray(0, 5);
+  const entradaO = rc4(chaveDono, senhaPreenchida);
+  const permissoes = Buffer.alloc(4);
+  permissoes.writeInt32LE(-1);
+  const chave = md5(senhaPreenchida, entradaO, permissoes, identificador).subarray(0, 5);
+  const entradaU = rc4(chave, PREENCHIMENTO);
+
+  /** Chave específica de cada objeto, como manda o formato. */
+  const chaveDoObjeto = (numero) => {
+    const extra = Buffer.alloc(5);
+    extra.writeUIntLE(numero, 0, 3);
+    extra.writeUIntLE(0, 3, 2);
+    return md5(chave, extra).subarray(0, 10);
+  };
+
+  const objetos = [];
+  const idCatalogo = 1, idPaginas = 2, idFonte = 3, idFonteNegrito = 4;
+  const primeiroIdPagina = 5;
+  const idsDasPaginas = paginas.map((_, i) => primeiroIdPagina + i * 2);
+
+  objetos[idCatalogo] = `<< /Type /Catalog /Pages ${idPaginas} 0 R >>`;
+  objetos[idPaginas] =
+    `<< /Type /Pages /Kids [${idsDasPaginas.map((id) => `${id} 0 R`).join(" ")}] /Count ${paginas.length} >>`;
+  objetos[idFonte] = "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>";
+  objetos[idFonteNegrito] = "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>";
+
+  paginas.forEach((paragrafos, i) => {
+    const idPagina = idsDasPaginas[i];
+    const idFluxo = idPagina + 1;
+    const fluxo = rc4(chaveDoObjeto(idFluxo), Buffer.from(fluxoDaPagina(paragrafos), "latin1"));
+    objetos[idPagina] =
+      `<< /Type /Page /Parent ${idPaginas} 0 R /MediaBox [0 0 ${LARGURA} ${ALTURA}] ` +
+      `/Resources << /Font << /F1 ${idFonte} 0 R /F2 ${idFonteNegrito} 0 R >> >> /Contents ${idFluxo} 0 R >>`;
+    objetos[idFluxo] = `<< /Length ${fluxo.length} >>\nstream\n${fluxo.toString("latin1")}\nendstream`;
+  });
+
+  const idProtecao = objetos.length;
+  objetos[idProtecao] =
+    `<< /Filter /Standard /V 1 /R 2 /O (${literalDeBytes(entradaO)}) ` +
+    `/U (${literalDeBytes(entradaU)}) /P -1 >>`;
+
+  let arquivo = "%PDF-1.4\n";
+  const deslocamentos = [];
+  for (let id = 1; id < objetos.length; id += 1) {
+    deslocamentos[id] = Buffer.byteLength(arquivo, "latin1");
+    arquivo += `${id} 0 obj\n${objetos[id]}\nendobj\n`;
+  }
+  const inicioXref = Buffer.byteLength(arquivo, "latin1");
+  const total = objetos.length;
+  arquivo += `xref\n0 ${total}\n0000000000 65535 f \n`;
+  for (let id = 1; id < total; id += 1) {
+    arquivo += `${String(deslocamentos[id]).padStart(10, "0")} 00000 n \n`;
+  }
+  const idHex = identificador.toString("hex");
+  arquivo += `trailer\n<< /Size ${total} /Root ${idCatalogo} 0 R /Encrypt ${idProtecao} 0 R ` +
+    `/ID [<${idHex}> <${idHex}>] >>\nstartxref\n${inicioXref}\n%%EOF\n`;
+  return Buffer.from(arquivo, "latin1");
+}
