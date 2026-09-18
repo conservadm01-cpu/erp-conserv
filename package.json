@@ -10,7 +10,8 @@
     "test:academia": "node scripts/test-academia.mjs",
     "typecheck": "tsc --noEmit",
     "smoke:academia": "node scripts/smoke-academia.mjs",
-    "build:publicacao": "node scripts/build-publicacao.mjs"
+    "build:publicacao": "node scripts/build-publicacao.mjs",
+    "build:arquivo-unico": "node scripts/build-arquivo-unico.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.45.4",

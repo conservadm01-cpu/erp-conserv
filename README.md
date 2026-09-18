@@ -176,6 +176,18 @@ pasta, uma pré-visualização hospedada). Ele também reescreve os bytes de
 controle crus que vêm no leitor de PDF, porque alguns publicadores de
 página recusam arquivos com esses bytes.
 
+### Levar num arquivo só
+
+```bash
+npm run build:arquivo-unico     # gera academia-arquivo-unico.html
+```
+
+Tudo dentro de um `.html`: código, estilos e carga inicial. Serve para
+pendrive, e-mail ou duplo clique, sem servidor. Aberto direto do disco
+(`file://`) o navegador não libera armazenamento local, então o
+progresso vale só enquanto a aba estiver aberta — para uso de verdade,
+publique a pasta do `build:publicacao`.
+
 ### Sem Supabase configurado
 
 O ERP exige Supabase. **A Academia não**: sem as variáveis de ambiente ela
