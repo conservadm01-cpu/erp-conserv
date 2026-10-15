@@ -9,7 +9,7 @@ test("página protegida redireciona para o login e senha errada exibe erro gené
   await page.goto("/organizacao");
   await expect(page).toHaveURL(/\/login\?next=%2Forganizacao/);
   await login(page, "consulta.alfa@exemplo.test", "senha-errada");
-  await expect(page.getByRole("alert")).toHaveText("E-mail ou senha inválidos.");
+  await expect(page.getByRole("alert").filter({ hasText: "E-mail ou senha inválidos." })).toBeVisible();
   console.assertClean();
 });
 

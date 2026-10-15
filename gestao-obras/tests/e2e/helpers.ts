@@ -8,7 +8,7 @@ export const db = new PrismaClient({ datasources: { db: { url: E2E_DATABASE_URL 
 export async function login(page: Page, email: string, password = DEMO_PASSWORD) {
   await page.goto("/login");
   await page.getByLabel("E-mail").fill(email);
-  await page.getByLabel("Senha", { exact: true }).fill(password);
+  await page.getByLabel("Senha").fill(password);
   await page.getByRole("button", { name: "Entrar" }).click();
 }
 
