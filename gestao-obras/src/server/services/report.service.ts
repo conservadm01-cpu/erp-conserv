@@ -109,3 +109,47 @@ export async function generateWorkDossier(actor: Actor, workId: string, meta: Re
   );
   return { pdf, fileName: `dossie-${work.code}.pdf` };
 }
+
+const RESULT: Record<string, string> = { PENDENTE: "Pendente", CONFORME: "Conforme", NAO_CONFORME: "Não conforme", NAO_APLICAVEL: "Não se aplica" };
+const ACTION_STATUS: Record<string, string> = { ABERTA: "Aberta", EM_ANDAMENTO: "Em andamento", AGUARDANDO_VALIDACAO: "Aguardando validação", ENCERRADA: "Encerrada", CANCELADA: "Cancelada" };
+
+/** Relatório de inspeção com itens, criticidade e ações geradas. */
+export async function generateInspectionReport(actor: Actor, inspectionId: string, meta: RequestMeta) {
+  const ins = await prisma.inspection.findUnique({
+    where: { id: inspectionId },
+    include: { work: { include: { unit: true } }, items: { orderBy: { sortOrder: "asc" }, include: { correctiveActions: true } } },
+  });
+  if (!ins || !canOnWork(actor, "safety.read", ins.work)) throw Errors.notFound("Inspeção");
+  assertCanOnWork(actor, "report.generate", ins.work, "Você não pode gerar relatórios desta obra.");
+  const [inspector, levels] = await Promise.all([prisma.user.findUnique({ where: { id: ins.inspectorId }, select: { name: true } }), prisma.criticalityLevel.findMany()]);
+  const level = (c: string) => levels.find((l) => l.code === c)?.name ?? c;
+  const r = new Report({ title: `Relatório de inspeção — ${ins.work.code}`, subject: `${ins.title} · ${ins.work.title} · ${ins.work.unit.name}`, generatedBy: actor.name });
+  r.heading("Identificação");
+  r.fields([
+    ["Obra", `${ins.work.code} — ${ins.work.title}`],
+    ["Unidade", ins.work.unit.name],
+    ["Data prevista", fmtDate(ins.plannedDate)],
+    ["Realizada em", fmtDateTime(ins.performedAt)],
+    ["Local", ins.location],
+    ["Responsável", inspector?.name ?? "—"],
+    ["Situação", ins.status.toLowerCase()],
+    ["Não conformidades", String(ins.items.filter((i) => i.result === "NAO_CONFORME").length)],
+  ]);
+  r.heading("Itens verificados");
+  r.table(
+    [{ header: "Item", width: 44 }, { header: "Resultado", width: 14 }, { header: "Criticidade", width: 12 }, { header: "Observação", width: 30 }],
+    ins.items.map((i) => [i.text, RESULT[i.result]!, i.result === "NAO_CONFORME" ? level(i.criticality) : "—", i.observation ?? ""]),
+  );
+  const actions = ins.items.flatMap((i) => i.correctiveActions);
+  r.heading("Ações corretivas geradas");
+  r.table(
+    [{ header: "Ação", width: 44 }, { header: "Responsável", width: 22 }, { header: "Prazo", width: 14 }, { header: "Situação", width: 20 }],
+    actions.map((a) => [a.title, a.responsibleName, fmtDate(a.dueDate), ACTION_STATUS[a.status]!]),
+    "Nenhuma ação gerada.",
+  );
+  r.heading("Conclusão");
+  r.paragraph(ins.summary ?? "Inspeção ainda não concluída.");
+  const pdf = await r.finish();
+  await recordAudit({ action: "relatorio.inspecao.gerado", actor: { userId: actor.userId, email: actor.email }, objectType: "Inspection", objectId: ins.id, unitPath: ins.unitPath, metadata: { obra: ins.work.code } }, meta);
+  return { pdf, fileName: `inspecao-${ins.work.code}-${ins.plannedDate.toISOString().slice(0, 10)}.pdf` };
+}

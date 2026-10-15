@@ -43,7 +43,7 @@ async function approvedWork() {
   const w = await createWork(a, work(t.a1.id), meta());
   let cur = await transitionWork(a, w.id, { action: "solicitar", version: w.version }, meta());
   cur = await transitionWork(a, w.id, { action: "iniciar_triagem", version: cur.version }, meta());
-  cur = await transitionWork(a, w.id, { action: "enviar_aprovacao", version: cur.version }, meta());
+  await transitionWork(a, w.id, { action: "enviar_aprovacao", version: cur.version }, meta());
   const ap = await prisma.approval.findFirstOrThrow({ where: { workId: w.id, status: "PENDENTE" } });
   await decideApproval(await actorOf(analista), ap.id, { decision: "APROVAR", opinion: "Aprovado para testes.", consultedDocumentIds: [] }, meta());
   return prisma.work.findUniqueOrThrow({ where: { id: w.id } });

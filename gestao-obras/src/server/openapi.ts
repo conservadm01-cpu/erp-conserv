@@ -178,6 +178,7 @@ export const openApiDocument = {
     "/api/safety/inspections": { get: op({ summary: "Listar inspeções", tag: "Segurança", query: { workId: u, status: s } }), post: op({ summary: "Planejar inspeção", tag: "Segurança" }) },
     "/api/safety/inspections/{id}": { get: op({ summary: "Detalhar inspeção", tag: "Segurança", params: ["id"] }), put: op({ summary: "Registrar resultados dos itens", tag: "Segurança", params: ["id"] }) },
     "/api/safety/inspections/{id}/complete": { post: op({ summary: "Concluir inspeção (gera ações para não conformidades)", tag: "Segurança", params: ["id"] }) },
+    "/api/safety/inspections/{id}/report": { get: op({ summary: "Relatório de inspeção em PDF", tag: "Relatórios", params: ["id"] }) },
     "/api/safety/risks": { post: op({ summary: "Registrar risco", tag: "Segurança" }) },
     "/api/safety/risks/{id}": { patch: op({ summary: "Alterar risco", tag: "Segurança", params: ["id"] }) },
     "/api/safety/incidents": { post: op({ summary: "Registrar incidente ou quase acidente", tag: "Segurança" }) },

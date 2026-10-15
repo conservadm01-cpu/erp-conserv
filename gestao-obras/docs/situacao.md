@@ -1,6 +1,6 @@
 # Situação do projeto — implementado × pendente
 
-Atualizado ao final da **Fase 2 (obras e documentos)**.
+Atualizado ao final da **Fase 3 (segurança e pessoas)**.
 
 ## Implementado e testado
 
@@ -46,6 +46,20 @@ Atualizado ao final da **Fase 2 (obras e documentos)**.
 - Painel com obras por situação, documentos pendentes/vencidos/a vencer, etapas atrasadas e aprovações pendentes; filtros por região/unidade, tipo, situação e período.
 - Rotina diária de vencimentos (`npm run jobs:daily`).
 
+### Fase 3 — Segurança e pessoas (telas 10–16 e 20)
+- Pessoas por categoria (profissional, empregado, voluntário, outro vínculo), com observação de avaliação jurídica do vínculo; sem dados de saúde.
+- Qualificações, habilitações, registros em conselho, certificados e treinamentos, com validade e conferência em fonte oficial registrada manualmente.
+- Vínculos com obras, atividades exercidas e registro da integração/orientação de segurança.
+- Empresas com CNPJ validado, conferência cadastral manual (nunca automática), contratos, aditivos e ordens de serviço, documentos da empresa.
+- Documentos associados a obra, pessoa, empresa ou equipamento.
+- EPIs: catálogo (CA, validade, vida útil, mínimo), estoque por unidade com bloqueio contra saldo negativo inclusive em operações simultâneas, entregas individuais com confirmação de recebimento (sem simular assinatura), substituições com motivo, devoluções.
+- Ferramentas, máquinas e equipamentos coletivos com inspeção, manutenção, defeito e interdição.
+- Checklists configuráveis, inspeções com resultado por item, criticidade, observações e fotos; relatório de inspeção em PDF.
+- Critérios de criticidade configuráveis (prazo, alerta prioritário, bloqueio).
+- Riscos, incidentes e quase acidentes.
+- Ações corretivas com responsável, prazo, evidência e validação por outra pessoa; não conformidades geram ações automaticamente; ações de nível bloqueante impedem iniciar, retomar ou enviar a obra para vistoria.
+- Central de notificações com contador no cabeçalho; alertas por e-mail via adaptador.
+
 ### Testes
 - Unidade: autorização, criptografia, senha, TOTP, higienização, CSRF, redirecionamento seguro, OpenAPI.
 - Integração (PostgreSQL real): isolamento entre regiões, autenticação, MFA, recuperação de senha, auditoria, papéis.
@@ -55,16 +69,16 @@ Atualizado ao final da **Fase 2 (obras e documentos)**.
 
 | Fase | Itens |
 | --- | --- |
-| 3 — Segurança e pessoas | Profissionais, voluntários (classificação de vínculos), empresas e contratos; EPIs (catálogo, CA, estoque, entregas); equipamentos; inspeções e checklists; riscos; ações corretivas; incidentes; alertas internos e por e-mail. |
 | 4 — Gestão e implantação | Cronograma com linha de base e dependências; orçamento, medições e aditivos; painel consolidado com filtros; relatórios PDF completos; alçadas e fluxos configuráveis; atendimento a titulares; ancoragem externa do hash de auditoria; testes de segurança adicionais; service worker (uso offline). |
 
-Telas da lista original ainda não implementadas: 10–18 e 20; a tela 21 (relatórios) tem por enquanto o dossiê da obra.
+Telas da lista original ainda não implementadas: 17 (orçamentos) e 18 (medições); a tela 21 (relatórios) tem o dossiê da obra e o relatório de inspeção.
 
 ## Limitações conhecidas da Fase 1
 
 - Rate limit geral em memória (por instância) — ver `seguranca.md`.
 - Instalação no celular via manifesto (PWA); sem modo offline ainda.
-- Documentos ainda só se associam a obras; a associação a pessoas, empresas e equipamentos chega com a Fase 3.
+- O registro de entrega de EPI e a confirmação de recebimento não substituem termo assinado; o sistema só registra como a confirmação foi feita.
+- Navegação: o indicador de carregamento aparece no link clicado (menu e abas); um `loading.tsx` por rota foi removido porque fazia o roteador descartar navegações feitas logo após outra.
 - Alçadas por valor financeiro dependem do módulo de orçamento (Fase 4).
 - O `docker-compose.yml` (incluindo o MinIO opcional) não pôde ser executado no ambiente de desenvolvimento usado; os testes rodaram com PostgreSQL local e armazenamento em memória/disco.
 - Nenhuma regra institucional ou normativa foi cadastrada: papéis de exemplo são apenas ponto de partida técnico.

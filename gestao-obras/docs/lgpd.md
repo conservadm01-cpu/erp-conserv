@@ -22,8 +22,15 @@
 | Contatos autorizados das unidades (nome, função, e-mail, telefone) | Comunicação administrativa | Consentimento ou legítimo interesse, conforme o caso | Enquanto o contato estiver vigente |
 | Trilha de auditoria | Rastreabilidade e responsabilização | Legítimo interesse / obrigação legal | Período definido; descarte por expurgo controlado |
 
-Não há dados de saúde, documentos pessoais ou dados sensíveis na Fase 1. Os
-módulos futuros (profissionais, voluntários, EPIs) seguirão o mesmo princípio:
+| Pessoas que atuam em obras: nome, categoria do vínculo, função, contato, identificação interna opcional, unidade | Organização das equipes e controle de qualificações e segurança | Legítimo interesse / obrigação legal conforme o vínculo (validar) | Enquanto houver vínculo + prazo de guarda definido |
+| Qualificações, treinamentos e certificados (nome, número, validade, arquivo) | Comprovar habilitação para atividades de risco | Obrigação legal quando aplicável / legítimo interesse | Conforme exigência aplicável |
+| Entregas de EPI (item, quantidade, data, forma de confirmação) | Comprovar fornecimento de proteção | Obrigação legal quando aplicável | Conforme exigência aplicável |
+| Incidentes e quase acidentes (descrição do fato, sem dados de saúde) | Prevenção e correção | Legítimo interesse / obrigação legal | Período definido |
+
+O cadastro de pessoas **não** possui campos de saúde, diagnóstico, exames ou
+prontuário, e as telas orientam a não enviar esses documentos. A categoria
+"voluntário" não presume dispensa de obrigações: o campo de avaliação jurídica
+do vínculo existe para registrar essa análise. Módulos futuros seguirão o mesmo princípio:
 **coletar somente o necessário**, com finalidade registrada. Dados de saúde, se
 um dia forem necessários, ficarão em estrutura segregada, com acesso mínimo e
 justificativa documentada — e somente após validação jurídica.

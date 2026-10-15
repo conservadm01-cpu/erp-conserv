@@ -76,7 +76,7 @@ test("ciclo da obra: cadastro, documentos, requisitos, tramitação, aprovação
   // 6. Analista central decide com parecer.
   await loginWithFreshMfa(page, "analista@exemplo.test");
   await page.getByRole("navigation", { name: "Menu principal" }).getByRole("link", { name: "Aprovações" }).click();
-  const row = page.locator("tr", { hasText: code });
+  const row = page.locator("section[aria-labelledby=\"ap\"] tr", { hasText: code });
   await row.getByRole("link", { name: "Analisar", exact: true }).click();
   await page.getByLabel(/Projeto da cobertura/).check();
   await page.getByLabel("Parecer").fill("Escopo compatível com a justificativa. Aprovado.");
@@ -86,6 +86,7 @@ test("ciclo da obra: cadastro, documentos, requisitos, tramitação, aprovação
 
   // 7. Obra aprovada, histórico com parecer e dossiê em PDF.
   await page.getByRole("link", { name: "Abrir obra" }).click();
+  await expect(page).toHaveURL(/\/obras\/[0-9a-f-]+$/);
   await expect(page.getByText("Aprovada").first()).toBeVisible();
   await tab(page, /Histórico/).click();
   await expect(page.getByText(/Escopo compatível com a justificativa/)).toBeVisible();

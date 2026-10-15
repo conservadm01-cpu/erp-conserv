@@ -4,7 +4,7 @@ import { buildActor } from "@/server/auth/actor";
 import { hashPassword } from "@/server/auth/password";
 import { systemMeta } from "@/server/http/request-meta";
 import { PERMISSIONS } from "@/server/authz/catalog";
-import { ACTIVITY_TYPES, APPROVAL_POLICIES, CHECKLIST_TEMPLATES, CRITICALITY_LEVELS, DEMO_EPIS, DOCUMENT_CATEGORIES, ORG_UNIT_TYPES, REQUIREMENT_RULES, ROLES, WORK_TYPES } from "../../prisma/seed-data";
+import { ACTIVITY_TYPES, APPROVAL_POLICIES, CHECKLIST_TEMPLATES, CRITICALITY_LEVELS, DOCUMENT_CATEGORIES, ORG_UNIT_TYPES, REQUIREMENT_RULES, ROLES, WORK_TYPES } from "../../prisma/seed-data";
 
 export const PASSWORD = "Teste@Seguro2026!";
 export const meta = () => systemMeta("teste");

@@ -18,10 +18,15 @@ import { DocumentsPanel } from "@/components/works/DocumentsPanel";
 import { RequirementsPanel } from "@/components/works/RequirementsPanel";
 import { APPROVAL_KIND, APPROVAL_STATUS, DECISION, EXECUTION_MODE, PRIORITY, WORK_STATUS } from "@/components/works/labels";
 import { formatDateTime, formatDay, serialize, toInputDate } from "@/lib/format";
+import { workSafetySummary } from "@/server/services/safety.service";
+import { listWorkTeam } from "@/server/services/people.service";
+import { WorkSafetyPanel } from "@/components/safety/WorkSafetyPanel";
+import { PERSON_CATEGORY } from "@/components/phase3/labels";
+import { Badge } from "@/components/ui/Badge";
 
 export const metadata: Metadata = { title: "Obra" };
 
-const TABS = ["resumo", "etapas", "documentos", "requisitos", "historico"] as const;
+const TABS = ["resumo", "etapas", "documentos", "requisitos", "equipe", "seguranca", "historico"] as const;
 type Tab = (typeof TABS)[number];
 
 export default async function WorkPage({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<{ aba?: string }> }) {
@@ -33,6 +38,7 @@ export default async function WorkPage({ params, searchParams }: { params: Promi
   const work = await orNotFound(() => getWork(actor, id));
   const canDocs = canOnWork(actor, "document.read", work);
   const canReqs = canOnWork(actor, "requirement.read", work);
+  const canSafety = canOnWork(actor, "safety.read", work);
   const [documents, requirements, catalogs] = await Promise.all([
     canDocs ? listWorkDocuments(actor, id) : Promise.resolve([]),
     canReqs ? listWorkRequirements(actor, id) : Promise.resolve([]),
@@ -65,6 +71,8 @@ export default async function WorkPage({ params, searchParams }: { params: Promi
           { id: "etapas", label: "Etapas", count: work.stages.length },
           ...(canDocs ? [{ id: "documentos", label: "Documentos", count: documents.length }] : []),
           ...(canReqs ? [{ id: "requisitos", label: "Requisitos", count: pendingReqs }] : []),
+          { id: "equipe", label: "Equipe" },
+          ...(canSafety ? [{ id: "seguranca", label: "Segurança" }] : []),
           { id: "historico", label: "Histórico" },
         ]}
       />
@@ -140,6 +148,10 @@ export default async function WorkPage({ params, searchParams }: { params: Promi
         />
       )}
 
+      {tab === "equipe" && <TeamTab workId={work.id} />}
+
+      {tab === "seguranca" && canSafety && <WorkSafetyPanel workId={work.id} s={await workSafetySummary(actor, work.id)} activities={catalogs.activities} />}
+
       {tab === "historico" && (
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
           <section className="card p-6">
@@ -176,6 +188,30 @@ export default async function WorkPage({ params, searchParams }: { params: Promi
           </section>
         </div>
       )}
+    </div>
+  );
+}
+
+async function TeamTab({ workId }: { workId: string }) {
+  const actor = await requirePageActor();
+  const team = await listWorkTeam(actor, workId);
+  if (!team.length) return <p className="text-sm text-slate-500">Nenhuma pessoa vinculada. Vincule pessoas a partir do cadastro de cada uma, em Pessoas.</p>;
+  return (
+    <div className="card overflow-x-auto">
+      <table className="table-base">
+        <thead><tr><th>Pessoa</th><th>Categoria</th><th>Função</th><th>Período</th><th>Integração de segurança</th></tr></thead>
+        <tbody className="divide-y divide-slate-100">
+          {team.map((a) => (
+            <tr key={a.id}>
+              <td>{a.personVisible ? <Link href={`/pessoas/${a.person.id}`} className="text-brand-700 hover:underline">{a.person.name}</Link> : a.person.name} {a.status === "INATIVO" && <Badge>encerrado</Badge>}</td>
+              <td>{PERSON_CATEGORY[a.person.category]}</td>
+              <td>{a.role}</td>
+              <td className="whitespace-nowrap">{formatDay(a.startDate)} a {formatDay(a.endDate)}</td>
+              <td>{a.safetyBriefingAt ? formatDay(a.safetyBriefingAt) : <Badge tone="amber">pendente</Badge>}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }

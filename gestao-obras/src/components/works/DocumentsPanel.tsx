@@ -19,7 +19,7 @@ type Doc = {
 };
 type Category = { code: string; name: string; requiresExpiry: boolean };
 
-export function DocumentsPanel({ workId, documents, categories, canUpload, canReview, userId }: { workId: string; documents: Doc[]; categories: Category[]; canUpload: boolean; canReview: boolean; userId: string }) {
+export function DocumentsPanel({ workId, uploadPath, documents, categories, canUpload, canReview, userId }: { workId?: string; uploadPath?: string; documents: Doc[]; categories: Category[]; canUpload: boolean; canReview: boolean; userId: string }) {
   const router = useRouter();
   const [showUpload, setShowUpload] = useState(false);
   const [versionFor, setVersionFor] = useState<string | null>(null);
@@ -41,7 +41,7 @@ export function DocumentsPanel({ workId, documents, categories, canUpload, canRe
     Object.entries(meta).forEach(([k, v]) => form.append(k, v));
     const f = fileRef.current?.files?.[0];
     if (f) form.append("file", f);
-    const res = await upload.run(() => apiUpload(`/api/works/${workId}/documents`, form));
+    const res = await upload.run(() => apiUpload(uploadPath ?? `/api/works/${workId}/documents`, form));
     if (res) {
       setShowUpload(false);
       setMeta({ categoryCode: "", title: "", issuer: "", documentNumber: "", issueDate: "", expiryDate: "" });

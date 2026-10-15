@@ -8,11 +8,13 @@ abrangência nacional, múltiplas regiões e unidades locais.
 > regra institucional é configurável e deve ser validada pelos responsáveis
 > autorizados antes do uso com dados reais.
 
-**Situação atual: Fases 1 e 2 concluídas** — fundação (autenticação com MFA,
+**Situação atual: Fases 1, 2 e 3 concluídas** — fundação (autenticação com MFA,
 hierarquia organizacional, permissões por escopo, auditoria imutável) e gestão
 de obras e documentos (obras com máquina de estados, etapas, repositório
 documental privado e versionado, matriz de requisitos/NRs, aprovação central e
-dossiê em PDF). Veja o que está pronto e o que falta em
+dossiê em PDF), além de segurança e pessoas (profissionais, voluntários,
+empresas e contratos, EPIs, equipamentos, inspeções, riscos, incidentes, ações
+corretivas e alertas). Veja o que está pronto e o que falta em
 [`docs/situacao.md`](docs/situacao.md).
 
 ## Tecnologias e versões
@@ -111,6 +113,7 @@ Senha de todos: `Demo@Obras2026!`
 | gestor.sul@exemplo.test | Gestor regional | Região Demonstração Sul (exige MFA) |
 | auditor@exemplo.test | Auditor | Gestão central (exige MFA) |
 | analista@exemplo.test | Analista da gestão central | Gestão central (exige MFA) — analisa documentos e decide aprovações |
+| seguranca.norte@exemplo.test | Técnico de segurança | Região Demonstração Norte (exige MFA) |
 | consulta.alfa@exemplo.test | Consulta | Unidade Local Alfa |
 
 No primeiro acesso de perfis com MFA, o sistema pede o cadastro de um
@@ -146,7 +149,11 @@ Downloads usam sempre links temporários vinculados ao usuário.
 
 ### Rotina diária
 
-`npm run jobs:daily` marca como vencidos os documentos com validade expirada.
+`npm run jobs:daily` marca como vencidos os documentos com validade expirada e
+gera os alertas (documentos, qualificações, integração de segurança, inspeções e
+ações atrasadas, etapas atrasadas, obras paradas, aprovações pendentes, estoque
+de EPI e equipamentos com inspeção/manutenção vencida). Alertas e itens críticos
+também são enviados por e-mail pelo adaptador configurado.
 Agende-a uma vez por dia (no Windows, pelo Agendador de Tarefas).
 
 ## Banco de dados e migrações

@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { LinkPending } from "./LinkPending";
 
 /** Abas por link (estado na URL, compatível com voltar/avançar). */
 export function Tabs({ tabs, current, base }: { tabs: { id: string; label: string; count?: number }[]; current: string; base: string }) {
@@ -9,11 +10,13 @@ export function Tabs({ tabs, current, base }: { tabs: { id: string; label: strin
           <li key={t.id}>
             <Link
               href={`${base}?aba=${t.id}`}
+              prefetch={false}
               aria-current={t.id === current ? "page" : undefined}
               className={`inline-block border-b-2 px-4 py-2 text-sm font-medium ${t.id === current ? "border-brand-700 text-brand-900" : "border-transparent text-slate-600 hover:text-slate-900"}`}
             >
               {t.label}
               {t.count !== undefined && <span className="ml-1.5 rounded-full bg-slate-100 px-1.5 text-xs text-slate-600">{t.count}</span>}
+              <LinkPending />
             </Link>
           </li>
         ))}
