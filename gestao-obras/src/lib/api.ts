@@ -38,6 +38,29 @@ export async function api<T = unknown>(path: string, init: { method?: string; bo
   return data as T;
 }
 
+/** Envio de formulário com arquivo (multipart). */
+export async function apiUpload<T = unknown>(path: string, form: FormData): Promise<T> {
+  let res: Response;
+  try {
+    res = await fetch(path, { method: "POST", body: form, credentials: "same-origin", cache: "no-store" });
+  } catch {
+    throw new ApiError(0, "SEM_CONEXAO", "Não foi possível conectar ao servidor. Verifique sua conexão.");
+  }
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const e = data?.error ?? {};
+    const details = e.details && typeof e.details === "object" && !Array.isArray(e.details) ? e.details : {};
+    throw new ApiError(res.status, e.code ?? "ERRO", e.message ?? "Erro inesperado.", details, e.correlationId);
+  }
+  return data as T;
+}
+
+/** Solicita a URL temporária e inicia o download. */
+export async function downloadVersion(documentId: string, versionId: string) {
+  const { url } = await api<{ url: string }>(`/api/documents/${documentId}/versions/${versionId}/download`, { method: "POST" });
+  window.location.assign(url);
+}
+
 export const STATE_ROUTES: Record<string, string> = {
   OK: "/",
   MFA_PENDENTE: "/mfa",

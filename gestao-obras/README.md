@@ -8,9 +8,11 @@ abrangência nacional, múltiplas regiões e unidades locais.
 > regra institucional é configurável e deve ser validada pelos responsáveis
 > autorizados antes do uso com dados reais.
 
-**Situação atual: Fase 1 — fundação executável** (autenticação com MFA,
-hierarquia organizacional, papéis e permissões por escopo, auditoria imutável,
-layout principal e testes). Veja o que está pronto e o que falta em
+**Situação atual: Fases 1 e 2 concluídas** — fundação (autenticação com MFA,
+hierarquia organizacional, permissões por escopo, auditoria imutável) e gestão
+de obras e documentos (obras com máquina de estados, etapas, repositório
+documental privado e versionado, matriz de requisitos/NRs, aprovação central e
+dossiê em PDF). Veja o que está pronto e o que falta em
 [`docs/situacao.md`](docs/situacao.md).
 
 ## Tecnologias e versões
@@ -26,6 +28,8 @@ layout principal e testes). Veja o que está pronto e o que falta em
 | Tailwind CSS | 3.4.19 |
 | Vitest / Playwright | 3.2.4 / 1.56.1 |
 | bcryptjs / otplib (TOTP) | 3.0.3 / 12.0.1 |
+| PDFKit (relatórios) | 0.17.2 |
+| AWS SDK S3 (armazenamento opcional) | 3.999.0 |
 
 Versões fixadas em `package.json` e `package-lock.json`.
 
@@ -106,6 +110,7 @@ Senha de todos: `Demo@Obras2026!`
 | gestor.norte@exemplo.test | Gestor regional | Região Demonstração Norte (exige MFA) |
 | gestor.sul@exemplo.test | Gestor regional | Região Demonstração Sul (exige MFA) |
 | auditor@exemplo.test | Auditor | Gestão central (exige MFA) |
+| analista@exemplo.test | Analista da gestão central | Gestão central (exige MFA) — analisa documentos e decide aprovações |
 | consulta.alfa@exemplo.test | Consulta | Unidade Local Alfa |
 
 No primeiro acesso de perfis com MFA, o sistema pede o cadastro de um
@@ -121,6 +126,28 @@ ou equivalentes de código aberto).
 
 Os mesmos comandos funcionam, trocando `Copy-Item` por `cp`. Sem Docker, use um
 PostgreSQL 16 local e ajuste `DATABASE_URL`.
+
+### Fluxo de uma obra (demonstração)
+
+1. Entre como `gestor.norte@exemplo.test`, abra **Obras → Nova obra**, cadastre e envie documentos.
+2. Use os botões de situação: *Enviar solicitação → Iniciar triagem → Enviar para aprovação*.
+3. Entre como `analista@exemplo.test`, abra **Aprovações**, registre o parecer e decida.
+4. Na obra, baixe o **dossiê em PDF**.
+
+Por segregação de funções, quem solicita não aprova a própria solicitação, e
+quem envia um arquivo não o analisa.
+
+### Arquivos enviados
+
+Por padrão ficam em `.data/storage` (fora da pasta pública). Para usar um
+armazenamento compatível com S3, veja as variáveis `STORAGE_*` e `S3_*` no
+`.env.example`; o `docker-compose.yml` tem um MinIO opcional (`--profile s3`).
+Downloads usam sempre links temporários vinculados ao usuário.
+
+### Rotina diária
+
+`npm run jobs:daily` marca como vencidos os documentos com validade expirada.
+Agende-a uma vez por dia (no Windows, pelo Agendador de Tarefas).
 
 ## Banco de dados e migrações
 

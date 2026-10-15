@@ -5,6 +5,7 @@ import { can, canAnywhere, permissionsAt } from "@/server/authz/authorize";
 import { getUser } from "@/server/services/user.service";
 import { listOrgUnits } from "@/server/services/org-unit.service";
 import { listAssignableRoles } from "@/server/services/role.service";
+import { listWorks } from "@/server/services/work.service";
 import { orNotFound } from "@/server/http/page-guard";
 import { uuid } from "@/server/validation/common";
 import { PageHeader } from "@/components/ui/PageHeader";
@@ -21,9 +22,9 @@ export default async function UserPage({ params }: { params: Promise<{ id: strin
   if (!uuid.safeParse(id).success) notFound();
   const user = await orNotFound(() => getUser(actor, id));
   const manageable = canAnywhere(actor, "user.manage");
-  const [units, roles] = manageable
-    ? await Promise.all([listOrgUnits(actor, { status: "ATIVA" }), listAssignableRoles(actor)])
-    : [[], []];
+  const [units, roles, works] = manageable
+    ? await Promise.all([listOrgUnits(actor, { status: "ATIVA" }), listAssignableRoles(actor), listWorks(actor)])
+    : [[], [], []];
 
   return (
     <div className="max-w-5xl space-y-6">
@@ -43,6 +44,7 @@ export default async function UserPage({ params }: { params: Promise<{ id: strin
         scopes={user.scopes.map((s) => ({ ...s, createdAt: s.createdAt.toISOString() }))}
         units={units.filter((u) => can(actor, "user.manage", u.path)).map((u) => ({ id: u.id, name: u.name, depth: u.depth, held: [...permissionsAt(actor, u.path)] }))}
         roles={roles}
+        works={works.filter((w) => can(actor, "user.manage", w.unitPath)).map((w) => ({ id: w.id, code: w.code, title: w.title, unitId: w.unitId }))}
       />
       <p className="text-xs text-slate-500">Último acesso: {user.lastLoginAt ? formatDateTime(user.lastLoginAt) : "nunca"} · Cadastro: {formatDate(user.createdAt)}</p>
     </div>

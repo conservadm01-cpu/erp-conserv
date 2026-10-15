@@ -15,7 +15,8 @@
    - `APP_URL=https://seu-dominio`;
    - `APP_ENCRYPTION_KEY` (32 bytes base64, gerada uma vez e guardada com segurança — perdê-la invalida os MFAs cadastrados);
    - `TRUST_PROXY=true` somente se houver proxy confiável à frente;
-   - `MAIL_DRIVER=smtp` e `SMTP_*`.
+   - `MAIL_DRIVER=smtp` e `SMTP_*`;
+   - `STORAGE_DRIVER=s3` e `S3_*` (bucket privado, sem acesso público, com versionamento e criptografia habilitados) — ou `STORAGE_DRIVER=local` com `STORAGE_LOCAL_DIR` em volume persistente e com backup.
 3. **Migrações** (com `obras_owner`): `npx prisma migrate deploy`.
 4. **Dados iniciais**: `SEED_MODE=base SEED_ADMIN_EMAIL=... SEED_ADMIN_PASSWORD=... npm run db:seed`.
    O administrador inicial deverá trocar a senha e cadastrar MFA no primeiro acesso.
@@ -23,7 +24,8 @@
 5. **Aplicação**: `docker build -t gestao-obras .` e execute com as variáveis acima,
    ou `npm ci && npx next build && npx next start`.
 6. **Proxy/HTTPS**: TLS 1.2+, HSTS (`Strict-Transport-Security: max-age=31536000; includeSubDomains`), limite de tamanho de corpo e rate limit.
-7. **Monitoramento**: `GET /api/health` para verificação de disponibilidade; coletar logs (contêm `correlationId`, sem dados sensíveis).
+7. **Rotina diária**: agende `npm run jobs:daily` (vencimento de documentos).
+8. **Monitoramento**: `GET /api/health` para verificação de disponibilidade; coletar logs (contêm `correlationId`, sem dados sensíveis).
 
 ## Checklist antes de colocar dados reais
 

@@ -18,6 +18,7 @@ type Scope = {
   canRemove: boolean;
   role: { name: string; requiresMfa: boolean };
   unit: { name: string; status: string };
+  work: { id: string; code: string; title: string } | null;
   grantedBy: { name: string } | null;
 };
 type UnitOpt = { id: string; name: string; depth: number; held: string[] };
@@ -28,15 +29,16 @@ export type UserAdminProps = {
   scopes: Scope[];
   units: UnitOpt[];
   roles: RoleOpt[];
+  works: { id: string; code: string; title: string; unitId: string }[];
 };
 
 type Dialog = null | { kind: "status"; status: "ATIVO" | "BLOQUEADO" | "INATIVO" } | { kind: "mfa" } | { kind: "scope"; scope: Scope };
 
-export function UserAdmin({ user, scopes, units, roles }: UserAdminProps) {
+export function UserAdmin({ user, scopes, units, roles, works }: UserAdminProps) {
   const router = useRouter();
   const [dialog, setDialog] = useState<Dialog>(null);
   const [profile, setProfile] = useState({ name: user.name, homeUnitId: user.homeUnitId });
-  const [scopeForm, setScopeForm] = useState({ roleId: "", unitId: "", includeDescendants: true });
+  const [scopeForm, setScopeForm] = useState({ roleId: "", unitId: "", workId: "", includeDescendants: true });
   const [tempPassword, setTempPassword] = useState("");
   const [notice, setNotice] = useState<string | null>(null);
   const profileSubmit = useSubmit();
@@ -56,8 +58,11 @@ export function UserAdmin({ user, scopes, units, roles }: UserAdminProps) {
   }
   async function addScope(e: React.FormEvent) {
     e.preventDefault();
-    const res = await scopeSubmit.run(() => api(`/api/users/${user.id}/scopes`, { body: scopeForm }));
-    if (res) { setScopeForm({ roleId: "", unitId: "", includeDescendants: true }); setNotice("Acesso concedido."); router.refresh(); }
+    const body = scopeForm.workId
+      ? { roleId: scopeForm.roleId, workId: scopeForm.workId, includeDescendants: false }
+      : { roleId: scopeForm.roleId, unitId: scopeForm.unitId, includeDescendants: scopeForm.includeDescendants };
+    const res = await scopeSubmit.run(() => api(`/api/users/${user.id}/scopes`, { body }));
+    if (res) { setScopeForm({ roleId: "", unitId: "", workId: "", includeDescendants: true }); setNotice("Acesso concedido."); router.refresh(); }
   }
   async function setPassword(e: React.FormEvent) {
     e.preventDefault();
@@ -82,7 +87,7 @@ export function UserAdmin({ user, scopes, units, roles }: UserAdminProps) {
                   <tr key={s.id}>
                     <td>{s.role.name} {s.role.requiresMfa && <Badge tone="blue">exige MFA</Badge>}</td>
                     <td>{s.unit.name} {s.unit.status !== "ATIVA" && <StatusBadge status={s.unit.status} />}</td>
-                    <td>{s.includeDescendants ? "Unidade e subordinadas" : "Somente a unidade"}</td>
+                    <td>{s.work ? `Somente a obra ${s.work.code}` : s.includeDescendants ? "Unidade e subordinadas" : "Somente a unidade"}</td>
                     <td>{s.grantedBy?.name ?? "—"} <span className="text-xs text-slate-500">{new Date(s.createdAt).toLocaleDateString("pt-BR")}</span></td>
                     <td className="text-right">{s.canRemove && <Button variant="ghost" onClick={() => setDialog({ kind: "scope", scope: s })}>Revogar</Button>}</td>
                   </tr>
@@ -93,7 +98,7 @@ export function UserAdmin({ user, scopes, units, roles }: UserAdminProps) {
         )}
         {user.canManage && (
           <form onSubmit={addScope} className="mt-6 grid grid-cols-1 gap-3 border-t border-slate-100 pt-4 sm:grid-cols-7" noValidate>
-            <SelectField className="sm:col-span-3" label="Unidade" value={scopeForm.unitId} onChange={(e) => setScopeForm({ ...scopeForm, unitId: e.target.value, roleId: "" })} error={scopeSubmit.fieldErrors.unitId}>
+            <SelectField className="sm:col-span-3" label="Unidade" value={scopeForm.unitId} onChange={(e) => setScopeForm({ ...scopeForm, unitId: e.target.value, roleId: "", workId: "" })} error={scopeSubmit.fieldErrors.unitId}>
               <option value="">Selecione…</option>
               {units.map((u) => <option key={u.id} value={u.id}>{"— ".repeat(u.depth)}{u.name}</option>)}
             </SelectField>
@@ -102,7 +107,11 @@ export function UserAdmin({ user, scopes, units, roles }: UserAdminProps) {
               {grantableRoles.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
             </SelectField>
             <div className="flex flex-col justify-end gap-2 sm:col-span-2">
-              <CheckboxField label="Incluir subordinadas" checked={scopeForm.includeDescendants} onChange={(e) => setScopeForm({ ...scopeForm, includeDescendants: e.target.checked })} />
+              <SelectField label="Restringir a uma obra (opcional)" value={scopeForm.workId} onChange={(e) => setScopeForm({ ...scopeForm, workId: e.target.value })} disabled={!selectedUnit}>
+                <option value="">Toda a unidade</option>
+                {works.filter((w) => w.unitId === scopeForm.unitId).map((w) => <option key={w.id} value={w.id}>{w.code} — {w.title}</option>)}
+              </SelectField>
+              {!scopeForm.workId && <CheckboxField label="Incluir subordinadas" checked={scopeForm.includeDescendants} onChange={(e) => setScopeForm({ ...scopeForm, includeDescendants: e.target.checked })} />}
               <Button type="submit" loading={scopeSubmit.pending} disabled={!scopeForm.roleId || !scopeForm.unitId}>Conceder acesso</Button>
             </div>
             {scopeSubmit.error && <div className="sm:col-span-7"><Alert tone="error">{scopeSubmit.error}</Alert></div>}

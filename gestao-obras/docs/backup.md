@@ -2,9 +2,14 @@
 
 ## O que é copiado
 
-Todo o banco PostgreSQL (estrutura, dados, triggers da auditoria). Arquivos
-enviados (a partir da Fase 2) ficarão no armazenamento de objetos e terão
-procedimento próprio.
+Todo o banco PostgreSQL (estrutura, dados, triggers da auditoria). Os
+**arquivos enviados** ficam fora do banco e precisam de cópia própria:
+
+- `STORAGE_DRIVER=local`: inclua a pasta `STORAGE_LOCAL_DIR` (padrão `.data/storage`) no mesmo backup, no mesmo horário do `pg_dump`.
+- `STORAGE_DRIVER=s3`: habilite versionamento e replicação/retenção no bucket.
+
+A integridade de cada arquivo pode ser conferida pelo SHA-256 registrado na
+versão do documento.
 
 ## Linux / servidor (pg_dump instalado)
 

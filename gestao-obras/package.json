@@ -20,7 +20,8 @@
     "test:unit": "vitest run tests/unit",
     "test:integration": "vitest run tests/integration",
     "test:e2e": "playwright test",
-    "postinstall": "prisma generate"
+    "postinstall": "prisma generate",
+    "jobs:daily": "tsx scripts/daily-jobs.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "3.999.0",

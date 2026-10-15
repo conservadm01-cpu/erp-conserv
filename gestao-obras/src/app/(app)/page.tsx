@@ -1,38 +1,123 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { z } from "zod";
 import { requirePageActor } from "@/server/auth/page-context";
 import { canAnywhere } from "@/server/authz/authorize";
 import { getDashboard } from "@/server/services/dashboard.service";
+import { listOrgUnits } from "@/server/services/org-unit.service";
+import { listWorkCatalogs } from "@/server/services/work.service";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { Forbidden } from "@/components/Forbidden";
-import { Alert } from "@/components/ui/Alert";
+import { WORK_STATUS } from "@/components/works/labels";
 
 export const metadata: Metadata = { title: "Painel" };
 
-function Stat({ label, value, href, tone = "default" }: { label: string; value: number; href?: string; tone?: "default" | "warn" }) {
+const filterSchema = z.object({
+  unitId: z.string().uuid().optional(),
+  typeCode: z.string().max(40).optional(),
+  status: z.enum(["RASCUNHO", "SOLICITADA", "EM_TRIAGEM", "EM_APROVACAO", "APROVADA", "EM_EXECUCAO", "SUSPENSA", "EM_VISTORIA", "CONCLUIDA", "REJEITADA", "ARQUIVADA"]).optional(),
+  from: z.coerce.date().optional(),
+  to: z.coerce.date().optional(),
+});
+
+function Stat({ label, value, href, tone = "default" }: { label: string; value: number; href?: string; tone?: "default" | "warn" | "bad" }) {
+  const color = value > 0 && tone === "warn" ? "text-amber-700" : value > 0 && tone === "bad" ? "text-red-700" : "text-slate-900";
   const body = (
-    <div className={`card p-4 ${href ? "hover:border-brand-500" : ""}`}>
+    <div className={`card h-full p-4 ${href ? "hover:border-brand-500" : ""}`}>
       <p className="text-xs font-medium uppercase tracking-wide text-slate-500">{label}</p>
-      <p className={`mt-1 text-2xl font-semibold ${tone === "warn" && value > 0 ? "text-amber-700" : "text-slate-900"}`}>{value.toLocaleString("pt-BR")}</p>
+      <p className={`mt-1 text-2xl font-semibold tabular-nums ${color}`}>{value.toLocaleString("pt-BR")}</p>
     </div>
   );
   return href ? <Link href={href}>{body}</Link> : body;
 }
 
-export default async function DashboardPage() {
+export default async function DashboardPage({ searchParams }: { searchParams: Promise<Record<string, string | undefined>> }) {
   const actor = await requirePageActor();
   if (!canAnywhere(actor, "dashboard.view")) return <Forbidden />;
-  const d = await getDashboard(actor);
+  const sp = await searchParams;
+  const parsed = filterSchema.safeParse(Object.fromEntries(Object.entries(sp).filter(([, v]) => v)));
+  const f = parsed.success ? parsed.data : {};
+  const [d, units, { types }] = await Promise.all([getDashboard(actor, f), listOrgUnits(actor, { status: "ATIVA" }), listWorkCatalogs()]);
+  const w = d.works;
+  const maxStatus = w ? Math.max(1, ...Object.values(w.byStatus)) : 1;
+
   return (
     <div className="space-y-8">
-      <PageHeader title="Painel" description={<>Indicadores calculados a partir do banco de dados, limitados ao seu escopo de acesso.</>} />
+      <PageHeader title="Painel" description="Indicadores calculados a partir do banco de dados, limitados ao seu escopo de acesso." />
+
+      {w && (
+        <>
+          <form className="grid grid-cols-1 gap-2 sm:grid-cols-6" aria-label="Filtros do painel">
+            <div className="sm:col-span-2">
+              <label className="label" htmlFor="unitId">Região / unidade</label>
+              <select id="unitId" name="unitId" defaultValue={f.unitId ?? ""} className="input">
+                <option value="">Todo o escopo</option>
+                {units.map((u) => <option key={u.id} value={u.id}>{"— ".repeat(u.depth)}{u.name}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="label" htmlFor="typeCode">Tipo de obra</label>
+              <select id="typeCode" name="typeCode" defaultValue={f.typeCode ?? ""} className="input">
+                <option value="">Todos</option>
+                {types.map((t) => <option key={t.code} value={t.code}>{t.name}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="label" htmlFor="status">Situação</label>
+              <select id="status" name="status" defaultValue={f.status ?? ""} className="input">
+                <option value="">Todas</option>
+                {Object.entries(WORK_STATUS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+              </select>
+            </div>
+            <div><label className="label" htmlFor="from">Cadastro de</label><input id="from" name="from" type="date" defaultValue={sp.from} className="input" /></div>
+            <div className="flex items-end gap-2">
+              <div className="flex-1"><label className="label" htmlFor="to">até</label><input id="to" name="to" type="date" defaultValue={sp.to} className="input" /></div>
+              <button className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm hover:bg-slate-50">Filtrar</button>
+            </div>
+          </form>
+
+          <section aria-labelledby="sec-obras">
+            <h2 id="sec-obras" className="mb-3 text-sm font-semibold text-slate-700">Obras</h2>
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
+              <Stat label="Total" value={w.total} href="/obras" />
+              <Stat label="Em planejamento" value={w.planejamento} />
+              <Stat label="Em execução" value={w.execucao} href="/obras?status=EM_EXECUCAO" />
+              <Stat label="Suspensas" value={w.suspensas} tone="warn" href="/obras?status=SUSPENSA" />
+              <Stat label="Concluídas" value={w.concluidas} href="/obras?status=CONCLUIDA" />
+            </div>
+            {w.total > 0 && (
+              <div className="card mt-3 p-4">
+                <p className="mb-2 text-xs font-medium uppercase tracking-wide text-slate-500">Obras por situação</p>
+                <ul className="space-y-1.5">
+                  {Object.entries(WORK_STATUS).filter(([k]) => w.byStatus[k]).map(([k, v]) => (
+                    <li key={k} className="grid grid-cols-[9rem_1fr_2.5rem] items-center gap-2 text-sm">
+                      <span className="truncate">{v.label}</span>
+                      <span className="h-2.5 rounded-full bg-slate-100"><span className="block h-2.5 rounded-full bg-brand-500" style={{ width: `${(w.byStatus[k]! / maxStatus) * 100}%` }} /></span>
+                      <span className="text-right tabular-nums">{w.byStatus[k]}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </section>
+
+          <section aria-labelledby="sec-docs">
+            <h2 id="sec-docs" className="mb-3 text-sm font-semibold text-slate-700">Documentos, prazos e aprovações</h2>
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
+              <Stat label="Aguardando análise" value={w.documentos.pendentes} tone="warn" href="/documentos?status=ENVIADO" />
+              <Stat label="Vencidos" value={w.documentos.vencidos} tone="bad" href="/documentos?status=VENCIDO" />
+              <Stat label="Vencem em 30 dias" value={w.documentos.aVencer30} tone="warn" href="/documentos?expiring=30" />
+              <Stat label="Etapas atrasadas" value={w.etapasAtrasadas} tone="bad" />
+              {w.aprovacoesPendentes !== null && <Stat label="Aprovações pendentes" value={w.aprovacoesPendentes} tone="warn" href="/aprovacoes" />}
+            </div>
+          </section>
+        </>
+      )}
 
       <section aria-labelledby="sec-org">
         <h2 id="sec-org" className="mb-3 text-sm font-semibold text-slate-700">Estrutura organizacional</h2>
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-          {d.units.map((u) => (
-            <Stat key={u.typeCode} label={`${u.typeName} (ativas)`} value={u.ativas} href={canAnywhere(actor, "org.read") ? "/organizacao" : undefined} />
-          ))}
+          {d.units.map((u) => <Stat key={u.typeCode} label={`${u.typeName} (ativas)`} value={u.ativas} href={canAnywhere(actor, "org.read") ? "/organizacao" : undefined} />)}
         </div>
       </section>
 
@@ -56,10 +141,6 @@ export default async function DashboardPage() {
           </div>
         </section>
       )}
-
-      <Alert tone="info" title="Fase 1 — fundação">
-        Os indicadores de obras, documentos, inspeções, cronograma e orçamento serão incluídos nas próximas fases, à medida que os módulos forem implementados.
-      </Alert>
     </div>
   );
 }
