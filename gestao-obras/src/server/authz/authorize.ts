@@ -10,6 +10,8 @@ export type ActorScope = {
   unitName: string;
   unitPath: string;
   includeDescendants: boolean;
+  /** Quando definido, o papel vale só para esta obra. */
+  workId: string | null;
   permissions: readonly string[];
 };
 
@@ -23,7 +25,9 @@ export type Actor = {
   scopes: readonly ActorScope[];
 };
 
-export function scopeCovers(scope: Pick<ActorScope, "unitPath" | "includeDescendants">, unitPath: string): boolean {
+export function scopeCovers(scope: Pick<ActorScope, "unitPath" | "includeDescendants"> & { workId?: string | null }, unitPath: string): boolean {
+  // Escopos de obra não concedem acesso à unidade como um todo.
+  if (scope.workId) return false;
   return scope.includeDescendants ? unitPath.startsWith(scope.unitPath) : unitPath === scope.unitPath;
 }
 
@@ -35,6 +39,32 @@ export function can(actor: Actor, permission: PermissionCode, unitPath: string):
 /** O ator possui a permissão em ao menos uma unidade? */
 export function canAnywhere(actor: Actor, permission: PermissionCode): boolean {
   return actor.scopes.some((s) => s.permissions.includes(permission));
+}
+
+/** Permissão em uma obra: por escopo organizacional ou por escopo específico da obra. */
+export function canOnWork(actor: Actor, permission: PermissionCode, work: { id: string; unitPath: string }): boolean {
+  return can(actor, permission, work.unitPath) || actor.scopes.some((s) => s.workId === work.id && s.permissions.includes(permission));
+}
+
+export function assertCanOnWork(actor: Actor, permission: PermissionCode, work: { id: string; unitPath: string }, message?: string): void {
+  if (!canOnWork(actor, permission, work)) throw Errors.forbidden(message);
+}
+
+/** Obras em que o ator tem a permissão por escopo de obra. */
+export function workIdsFor(actor: Actor, permission: PermissionCode): string[] {
+  return [...new Set(actor.scopes.filter((s) => s.workId && s.permissions.includes(permission)).map((s) => s.workId!))];
+}
+
+/**
+ * Filtro Prisma para registros ligados a obras (campos `unitPath` e `workId`/`id`).
+ * Retorna `null` quando o ator não tem a permissão em lugar algum.
+ */
+export function workScopedWhere(actor: Actor, permission: PermissionCode, workField: "id" | "workId" = "workId") {
+  const org = pathWhere(actor, permission, "unitPath");
+  const ids = workIdsFor(actor, permission);
+  const conditions: Record<string, unknown>[] = [...(org?.OR ?? [])];
+  if (ids.length) conditions.push({ [workField]: { in: ids } });
+  return conditions.length ? { OR: conditions } : null;
 }
 
 export function permissionsAt(actor: Actor, unitPath: string): Set<string> {
@@ -60,7 +90,7 @@ function grantCovers(o: PathGrant, g: PathGrant): boolean {
 export function grantsFor(actor: Actor, permission: PermissionCode): PathGrant[] {
   const unique = new Map<string, PathGrant>();
   for (const s of actor.scopes) {
-    if (!s.permissions.includes(permission)) continue;
+    if (s.workId || !s.permissions.includes(permission)) continue;
     unique.set(`${s.unitPath}|${s.includeDescendants}`, { path: s.unitPath, includeDescendants: s.includeDescendants });
   }
   const grants = [...unique.values()];

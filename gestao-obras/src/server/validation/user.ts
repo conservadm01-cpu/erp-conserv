@@ -18,11 +18,15 @@ export const userStatusSchema = z.object({
   reason: requiredText(500, "Justificativa"),
 });
 
-export const addScopeSchema = z.object({
-  roleId: uuid,
-  unitId: uuid,
-  includeDescendants: z.boolean().default(true),
-});
+export const addScopeSchema = z
+  .object({
+    roleId: uuid,
+    unitId: uuid.optional(),
+    /** Quando informado, o papel vale apenas para esta obra. */
+    workId: uuid.optional(),
+    includeDescendants: z.boolean().default(true),
+  })
+  .refine((v) => Boolean(v.unitId) !== Boolean(v.workId), { message: "Informe a unidade ou a obra.", path: ["unitId"] });
 
 export const temporaryPasswordSchema = z.object({
   temporaryPassword: z.string().min(1).max(128),

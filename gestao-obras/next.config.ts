@@ -5,7 +5,7 @@ const nextConfig: NextConfig = {
   outputFileTracingRoot: process.cwd(),
   poweredByHeader: false,
   reactStrictMode: true,
-  serverExternalPackages: ["@prisma/client", "bcryptjs", "nodemailer"],
+  serverExternalPackages: ["@prisma/client", "bcryptjs", "nodemailer", "pdfkit"],
   async headers() {
     return [
       {

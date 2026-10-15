@@ -12,12 +12,12 @@ import { hashPassword, passwordPolicyIssues } from "../src/server/auth/password"
 import { PERMISSIONS } from "../src/server/authz/catalog";
 import { recordAudit } from "../src/server/audit/audit";
 import { systemMeta } from "../src/server/http/request-meta";
-import { ORG_UNIT_TYPES, ROLES } from "./seed-data";
+import { ACTIVITY_TYPES, APPROVAL_POLICIES, DOCUMENT_CATEGORIES, ORG_UNIT_TYPES, REQUIREMENT_RULES, ROLES, WORK_TYPES } from "./seed-data";
 
 const prisma = new PrismaClient();
 export const DEMO_PASSWORD = "Demo@Obras2026!";
 
-async function seedBase() {
+async function seedBase(mode: string) {
   for (const t of ORG_UNIT_TYPES) {
     await prisma.orgUnitType.upsert({ where: { code: t.code }, update: { name: t.name, allowedParentCodes: t.allowedParentCodes, sortOrder: t.sortOrder }, create: t });
   }
@@ -30,12 +30,19 @@ async function seedBase() {
       update: r.isSystem ? { isSystem: true, requiresMfa: true } : {},
       create: { code: r.code, name: r.name, description: r.description, requiresMfa: r.requiresMfa, isSystem: r.isSystem },
     });
-    // Papéis de sistema recebem sempre todas as permissões do catálogo; os demais só na criação.
+    // Papéis de sistema recebem sempre todas as permissões do catálogo; os demais só na criação
+    // (no modo demonstração, também recebem permissões novas do exemplo).
     const existing = await prisma.rolePermission.count({ where: { roleId: role.id } });
-    if (r.isSystem || existing === 0) {
+    if (r.isSystem || existing === 0 || mode === "demo") {
       await prisma.rolePermission.createMany({ data: r.permissions.map((permissionCode) => ({ roleId: role.id, permissionCode })), skipDuplicates: true });
     }
   }
+  for (const t of WORK_TYPES) await prisma.workType.upsert({ where: { code: t.code }, update: {}, create: t });
+  for (const a of ACTIVITY_TYPES) await prisma.activityType.upsert({ where: { code: a.code }, update: {}, create: a });
+  for (const c of DOCUMENT_CATEGORIES) await prisma.documentCategory.upsert({ where: { code: c.code }, update: {}, create: c });
+  for (const p of APPROVAL_POLICIES) await prisma.approvalPolicy.upsert({ where: { kind: p.kind }, update: {}, create: p });
+  // Regras de requisito: criadas uma única vez; alterações posteriores são feitas pela tela de configuração.
+  for (const r of REQUIREMENT_RULES) await prisma.requirementRule.upsert({ where: { code: r.code }, update: {}, create: r });
   let root = await prisma.organizationUnit.findFirst({ where: { depth: 0 } });
   if (!root) {
     const id = randomUUID();
@@ -62,11 +69,8 @@ async function ensureUser(opts: { email: string; name: string; password: string;
 
 async function grant(userId: string, roleCode: string, unitId: string) {
   const role = await prisma.role.findUniqueOrThrow({ where: { code: roleCode } });
-  await prisma.userScope.upsert({
-    where: { userId_roleId_unitId: { userId, roleId: role.id, unitId } },
-    update: {},
-    create: { userId, roleId: role.id, unitId },
-  });
+  const existing = await prisma.userScope.findFirst({ where: { userId, roleId: role.id, unitId, workId: null } });
+  if (!existing) await prisma.userScope.create({ data: { userId, roleId: role.id, unitId } });
 }
 
 async function ensureUnit(code: string, name: string, typeCode: string, parent: { id: string; path: string; depth: number }, extra: Record<string, string> = {}) {
@@ -91,6 +95,7 @@ async function seedDemo(root: { id: string; path: string; depth: number }) {
     { email: "gestor.norte@exemplo.test", name: "Gestor Norte Demonstração", unit: norte, role: "GESTOR_REGIONAL" },
     { email: "gestor.sul@exemplo.test", name: "Gestor Sul Demonstração", unit: sul, role: "GESTOR_REGIONAL" },
     { email: "auditor@exemplo.test", name: "Auditor Demonstração", unit: root, role: "AUDITOR" },
+    { email: "analista@exemplo.test", name: "Analista Central Demonstração", unit: root, role: "ANALISTA_CENTRAL" },
     { email: "consulta.alfa@exemplo.test", name: "Consulta Alfa Demonstração", unit: alfa, role: "CONSULTA" },
   ];
   for (const u of users) {
@@ -105,7 +110,7 @@ async function main() {
   if (mode === "demo" && process.env.NODE_ENV === "production") {
     throw new Error("SEED_MODE=demo não é permitido em produção.");
   }
-  const root = await seedBase();
+  const root = await seedBase(mode);
 
   if (mode === "base") {
     const email = process.env.SEED_ADMIN_EMAIL?.trim().toLowerCase();

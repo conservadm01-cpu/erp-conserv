@@ -62,6 +62,7 @@ model OrganizationUnit {
   contacts    OrgUnitContact[]
   users       User[]
   scopes      UserScope[]
+  works       Work[]
 
   @@index([parentId])
   @@index([typeCode])
@@ -173,12 +174,16 @@ model UserScope {
   unit               OrganizationUnit @relation(fields: [unitId], references: [id], onDelete: Restrict)
   /// Se verdadeiro, vale para a unidade e todas as descendentes.
   includeDescendants Boolean          @default(true) @map("include_descendants")
+  /// Quando definido, o papel vale somente para esta obra (unitId = unidade da obra).
+  workId             String?          @map("work_id") @db.Uuid
+  work               Work?            @relation(fields: [workId], references: [id], onDelete: Restrict)
   grantedById        String?          @map("granted_by_id") @db.Uuid
   grantedBy          User?            @relation("ScopeGrantedBy", fields: [grantedById], references: [id], onDelete: SetNull)
   createdAt          DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
 
-  @@unique([userId, roleId, unitId])
+  @@unique([userId, roleId, unitId, workId])
   @@index([unitId])
+  @@index([workId])
   @@map("user_scope")
 }
 
@@ -277,4 +282,374 @@ model AuditEvent {
   @@index([action])
   @@index([objectType, objectId])
   @@map("audit_event")
+}
+
+// ---------------------------------------------------------------------------
+// Fase 2 — Obras, etapas, documentos, requisitos e aprovações
+// ---------------------------------------------------------------------------
+
+/// Tipos de obra configuráveis (ex.: reforma, construção nova).
+model WorkType {
+  code      String   @id @db.VarChar(40)
+  name      String   @db.VarChar(120)
+  active    Boolean  @default(true)
+  sortOrder Int      @default(0) @map("sort_order")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  works     Work[]
+
+  @@map("work_type")
+}
+
+/// Atividades configuráveis usadas na aplicabilidade de requisitos (ex.: trabalho em altura).
+model ActivityType {
+  code        String   @id @db.VarChar(40)
+  name        String   @db.VarChar(120)
+  description String?  @db.VarChar(500)
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@map("activity_type")
+}
+
+enum WorkStatus {
+  RASCUNHO
+  SOLICITADA
+  EM_TRIAGEM
+  EM_APROVACAO
+  APROVADA
+  EM_EXECUCAO
+  SUSPENSA
+  EM_VISTORIA
+  CONCLUIDA
+  REJEITADA
+  ARQUIVADA
+}
+
+enum WorkPriority {
+  BAIXA
+  MEDIA
+  ALTA
+  URGENTE
+}
+
+enum ExecutionMode {
+  VOLUNTARIOS
+  EMPRESA_CONTRATADA
+  MISTA
+}
+
+/// Sequência anual para o código das obras (OB-AAAA-NNNNN).
+model WorkCodeSequence {
+  year  Int @id
+  value Int @default(0)
+
+  @@map("work_code_sequence")
+}
+
+model Work {
+  id              String                  @id @default(uuid()) @db.Uuid
+  code            String                  @unique @db.VarChar(20)
+  title           String                  @db.VarChar(200)
+  unitId          String                  @map("unit_id") @db.Uuid
+  unit            OrganizationUnit        @relation(fields: [unitId], references: [id], onDelete: Restrict)
+  /// Cópia do caminho da unidade, para filtros de escopo eficientes.
+  unitPath        String                  @map("unit_path") @db.VarChar(1000)
+  typeCode        String                  @map("type_code") @db.VarChar(40)
+  type            WorkType                @relation(fields: [typeCode], references: [code], onDelete: Restrict)
+  activities      String[]                @default([])
+  status          WorkStatus              @default(RASCUNHO)
+  priority        WorkPriority            @default(MEDIA)
+  executionMode   ExecutionMode           @default(VOLUNTARIOS) @map("execution_mode")
+  scope           String                  @db.VarChar(4000)
+  justification   String                  @db.VarChar(4000)
+  street          String?                 @db.VarChar(200)
+  number          String?                 @db.VarChar(20)
+  district        String?                 @db.VarChar(120)
+  city            String?                 @db.VarChar(120)
+  state           String?                 @db.Char(2)
+  postalCode      String?                 @map("postal_code") @db.VarChar(9)
+  plannedStart    DateTime?               @map("planned_start") @db.Date
+  plannedEnd      DateTime?               @map("planned_end") @db.Date
+  responsibleName String?                 @map("responsible_name") @db.VarChar(200)
+  /// Incrementada a cada alteração de dados; usada no controle de concorrência e nas aprovações.
+  version         Int                     @default(1)
+  createdAt       DateTime                @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt       DateTime                @updatedAt @map("updated_at") @db.Timestamptz(3)
+  createdById     String                  @map("created_by_id") @db.Uuid
+  updatedById     String?                 @map("updated_by_id") @db.Uuid
+  stages          WorkStage[]
+  statusHistory   WorkStatusChange[]
+  documents       Document[]
+  evaluations     RequirementEvaluation[]
+  approvals       Approval[]
+  scopes          UserScope[]
+
+  @@index([unitPath])
+  @@index([status])
+  @@map("work")
+}
+
+model WorkStatusChange {
+  id         String      @id @default(uuid()) @db.Uuid
+  workId     String      @map("work_id") @db.Uuid
+  work       Work        @relation(fields: [workId], references: [id], onDelete: Restrict)
+  fromStatus WorkStatus? @map("from_status")
+  toStatus   WorkStatus  @map("to_status")
+  reason     String?     @db.VarChar(2000)
+  actorId    String      @map("actor_id") @db.Uuid
+  approvalId String?     @map("approval_id") @db.Uuid
+  createdAt  DateTime    @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@index([workId, createdAt])
+  @@map("work_status_change")
+}
+
+enum StageStatus {
+  NAO_INICIADA
+  EM_ANDAMENTO
+  CONCLUIDA
+  CANCELADA
+}
+
+model WorkStage {
+  id              String      @id @default(uuid()) @db.Uuid
+  workId          String      @map("work_id") @db.Uuid
+  work            Work        @relation(fields: [workId], references: [id], onDelete: Restrict)
+  name            String      @db.VarChar(200)
+  sortOrder       Int         @default(0) @map("sort_order")
+  status          StageStatus @default(NAO_INICIADA)
+  plannedStart    DateTime?   @map("planned_start") @db.Date
+  plannedEnd      DateTime?   @map("planned_end") @db.Date
+  actualStart     DateTime?   @map("actual_start") @db.Date
+  actualEnd       DateTime?   @map("actual_end") @db.Date
+  progress        Int         @default(0)
+  responsibleName String?     @map("responsible_name") @db.VarChar(200)
+  notes           String?     @db.VarChar(2000)
+  createdAt       DateTime    @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt       DateTime    @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@index([workId, sortOrder])
+  @@map("work_stage")
+}
+
+enum DocumentStatus {
+  ENVIADO
+  EM_REVISAO
+  APROVADO
+  REJEITADO
+  VENCIDO
+  SUBSTITUIDO
+}
+
+/// Categorias documentais configuráveis.
+model DocumentCategory {
+  code           String     @id @db.VarChar(40)
+  name           String     @db.VarChar(120)
+  requiresExpiry Boolean    @default(false) @map("requires_expiry")
+  active         Boolean    @default(true)
+  createdAt      DateTime   @default(now()) @map("created_at") @db.Timestamptz(3)
+  documents      Document[]
+
+  @@map("document_category")
+}
+
+model Document {
+  id             String                  @id @default(uuid()) @db.Uuid
+  workId         String                  @map("work_id") @db.Uuid
+  work           Work                    @relation(fields: [workId], references: [id], onDelete: Restrict)
+  unitPath       String                  @map("unit_path") @db.VarChar(1000)
+  categoryCode   String                  @map("category_code") @db.VarChar(40)
+  category       DocumentCategory        @relation(fields: [categoryCode], references: [code], onDelete: Restrict)
+  title          String                  @db.VarChar(200)
+  issuer         String?                 @db.VarChar(200)
+  documentNumber String?                 @map("document_number") @db.VarChar(100)
+  issueDate      DateTime?               @map("issue_date") @db.Date
+  expiryDate     DateTime?               @map("expiry_date") @db.Date
+  status         DocumentStatus          @default(ENVIADO)
+  reviewerNote   String?                 @map("reviewer_note") @db.VarChar(2000)
+  reviewedById   String?                 @map("reviewed_by_id") @db.Uuid
+  reviewedAt     DateTime?               @map("reviewed_at") @db.Timestamptz(3)
+  createdById    String                  @map("created_by_id") @db.Uuid
+  createdAt      DateTime                @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt      DateTime                @updatedAt @map("updated_at") @db.Timestamptz(3)
+  versions       DocumentVersion[]
+  evaluations    RequirementEvaluation[]
+
+  @@index([workId])
+  @@index([unitPath])
+  @@index([status, expiryDate])
+  @@map("document")
+}
+
+model DocumentVersion {
+  id           String    @id @default(uuid()) @db.Uuid
+  documentId   String    @map("document_id") @db.Uuid
+  document     Document  @relation(fields: [documentId], references: [id], onDelete: Restrict)
+  versionNo    Int       @map("version_no")
+  storageKey   String    @unique @map("storage_key") @db.VarChar(300)
+  fileName     String    @map("file_name") @db.VarChar(255)
+  mimeType     String    @map("mime_type") @db.VarChar(100)
+  sizeBytes    Int       @map("size_bytes")
+  sha256       String    @db.Char(64)
+  uploadedById String    @map("uploaded_by_id") @db.Uuid
+  uploadedAt   DateTime  @default(now()) @map("uploaded_at") @db.Timestamptz(3)
+  /// Preenchido quando uma versão mais nova a substitui.
+  supersededAt DateTime? @map("superseded_at") @db.Timestamptz(3)
+  changeNote   String?   @map("change_note") @db.VarChar(500)
+
+  @@unique([documentId, versionNo])
+  @@map("document_version")
+}
+
+enum RequirementClassification {
+  LEGAL_OBRIGATORIO
+  LEGAL_CONDICIONAL
+  CONTRATUAL
+  INSTITUCIONAL_APROVADO
+  BOA_PRATICA
+  INFORMATIVO
+}
+
+enum RequirementRuleStatus {
+  /// Regra cadastrada, ainda não confirmada por responsável: aparece como "pendente de confirmação".
+  PENDENTE_VALIDACAO
+  VALIDADA
+  INATIVA
+}
+
+enum WorkCheckpoint {
+  TRIAGEM
+  APROVACAO
+  INICIO_EXECUCAO
+  VISTORIA
+  ENCERRAMENTO
+}
+
+model RequirementRule {
+  id                   String                    @id @default(uuid()) @db.Uuid
+  code                 String                    @unique @db.VarChar(40)
+  name                 String                    @db.VarChar(200)
+  description          String?                   @db.VarChar(2000)
+  workTypes            String[]                  @default([]) @map("work_types")
+  activities           String[]                  @default([])
+  /// Formas de execução às quais a regra se aplica (vazio = qualquer).
+  executionModes       ExecutionMode[]           @default([]) @map("execution_modes")
+  applicabilityNote    String?                   @map("applicability_note") @db.VarChar(2000)
+  evidence             String                    @db.VarChar(500)
+  documentCategoryCode String?                   @map("document_category_code") @db.VarChar(40)
+  classification       RequirementClassification
+  legalBasis           String?                   @map("legal_basis") @db.VarChar(500)
+  sourceUrl            String?                   @map("source_url") @db.VarChar(500)
+  normVersion          String?                   @map("norm_version") @db.VarChar(100)
+  lastReviewedAt       DateTime?                 @map("last_reviewed_at") @db.Date
+  validatedById        String?                   @map("validated_by_id") @db.Uuid
+  validatedAt          DateTime?                 @map("validated_at") @db.Timestamptz(3)
+  nextReviewAt         DateTime?                 @map("next_review_at") @db.Date
+  checkpoint           WorkCheckpoint
+  /// Bloqueia o avanço no ponto de verificação (só produz efeito em regras validadas).
+  blocking             Boolean                   @default(false)
+  status               RequirementRuleStatus     @default(PENDENTE_VALIDACAO)
+  createdAt            DateTime                  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt            DateTime                  @updatedAt @map("updated_at") @db.Timestamptz(3)
+  evaluations          RequirementEvaluation[]
+
+  @@map("requirement_rule")
+}
+
+enum EvaluationStatus {
+  PENDENTE
+  ATENDIDO
+  NAO_ATENDIDO
+  DISPENSADO_JUSTIFICADO
+  NAO_APLICAVEL
+}
+
+model RequirementEvaluation {
+  id            String           @id @default(uuid()) @db.Uuid
+  workId        String           @map("work_id") @db.Uuid
+  work          Work             @relation(fields: [workId], references: [id], onDelete: Restrict)
+  ruleId        String           @map("rule_id") @db.Uuid
+  rule          RequirementRule  @relation(fields: [ruleId], references: [id], onDelete: Restrict)
+  status        EvaluationStatus @default(PENDENTE)
+  documentId    String?          @map("document_id") @db.Uuid
+  document      Document?        @relation(fields: [documentId], references: [id], onDelete: SetNull)
+  justification String?          @db.VarChar(2000)
+  evaluatedById String?          @map("evaluated_by_id") @db.Uuid
+  evaluatedAt   DateTime?        @map("evaluated_at") @db.Timestamptz(3)
+  createdAt     DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt     DateTime         @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@unique([workId, ruleId])
+  @@map("requirement_evaluation")
+}
+
+enum ApprovalKind {
+  SOLICITACAO_OBRA
+  ENCERRAMENTO_OBRA
+}
+
+enum ApprovalStatus {
+  PENDENTE
+  APROVADA
+  REJEITADA
+  DEVOLVIDA
+  CANCELADA
+}
+
+/// Configuração de cada tipo de aprovação (alçadas configuráveis).
+model ApprovalPolicy {
+  kind               ApprovalKind @id
+  name               String       @db.VarChar(120)
+  /// Número de decisões favoráveis necessárias.
+  stepsRequired      Int          @default(1) @map("steps_required")
+  /// Impede que o solicitante decida a própria solicitação.
+  requireSegregation Boolean      @default(true) @map("require_segregation")
+  updatedAt          DateTime     @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@map("approval_policy")
+}
+
+model Approval {
+  id                 String         @id @default(uuid()) @db.Uuid
+  kind               ApprovalKind
+  workId             String         @map("work_id") @db.Uuid
+  work               Work           @relation(fields: [workId], references: [id], onDelete: Restrict)
+  unitPath           String         @map("unit_path") @db.VarChar(1000)
+  /// Versão da obra submetida e cópia dos dados no momento da submissão.
+  subjectVersion     Int            @map("subject_version")
+  snapshot           Json
+  status             ApprovalStatus @default(PENDENTE)
+  stepsRequired      Int            @map("steps_required")
+  requireSegregation Boolean        @map("require_segregation")
+  requesterId        String         @map("requester_id") @db.Uuid
+  requestNote        String?        @map("request_note") @db.VarChar(2000)
+  decidedAt          DateTime?      @map("decided_at") @db.Timestamptz(3)
+  createdAt          DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
+  steps              ApprovalStep[]
+
+  @@index([status, unitPath])
+  @@index([workId])
+  @@map("approval")
+}
+
+enum ApprovalDecision {
+  APROVAR
+  REJEITAR
+  DEVOLVER
+}
+
+model ApprovalStep {
+  id                   String           @id @default(uuid()) @db.Uuid
+  approvalId           String           @map("approval_id") @db.Uuid
+  approval             Approval         @relation(fields: [approvalId], references: [id], onDelete: Restrict)
+  stepNo               Int              @map("step_no")
+  approverId           String           @map("approver_id") @db.Uuid
+  decision             ApprovalDecision
+  opinion              String           @db.VarChar(4000)
+  consultedDocumentIds String[]         @default([]) @map("consulted_document_ids")
+  decidedAt            DateTime         @default(now()) @map("decided_at") @db.Timestamptz(3)
+
+  @@unique([approvalId, stepNo])
+  @@unique([approvalId, approverId])
+  @@map("approval_step")
 }

@@ -75,6 +75,25 @@ export async function readJson<T>(req: NextRequest, schema: ZodType<T, ZodTypeDe
   return schema.parse(raw);
 }
 
+/** Lê um formulário multipart com um arquivo no campo "file" e campos de texto. */
+export async function readMultipart(req: NextRequest, maxBytes: number) {
+  const length = Number(req.headers.get("content-length") ?? "0");
+  if (length > maxBytes + 64_000) throw Errors.invalid("Arquivo muito grande.", { file: ["Arquivo muito grande."] });
+  if (!req.headers.get("content-type")?.startsWith("multipart/form-data")) throw Errors.invalid("Envie o arquivo como formulário multipart.");
+  let form: FormData;
+  try {
+    form = await req.formData();
+  } catch {
+    throw Errors.invalid("Formulário inválido.");
+  }
+  const file = form.get("file");
+  if (!(file instanceof File)) throw Errors.invalid("Selecione um arquivo.", { file: ["Selecione um arquivo."] });
+  if (file.size > maxBytes) throw Errors.invalid("Arquivo muito grande.", { file: ["Arquivo muito grande."] });
+  const fields: Record<string, string> = {};
+  for (const [k, v] of form.entries()) if (typeof v === "string") fields[k] = v;
+  return { fields, file: { name: file.name, bytes: new Uint8Array(await file.arrayBuffer()) } };
+}
+
 export function readQuery<T>(req: NextRequest, schema: ZodType<T, ZodTypeDef, unknown>): T {
   return schema.parse(Object.fromEntries(req.nextUrl.searchParams.entries()));
 }

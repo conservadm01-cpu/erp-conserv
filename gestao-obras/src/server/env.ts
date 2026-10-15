@@ -21,6 +21,16 @@ const schema = z.object({
   SMTP_SECURE: boolish,
   SMTP_USER: z.string().optional(),
   SMTP_PASSWORD: z.string().optional(),
+  STORAGE_DRIVER: z.enum(["local", "memory", "s3"]).default("local"),
+  STORAGE_LOCAL_DIR: z.string().default(".data/storage"),
+  S3_BUCKET: z.string().optional(),
+  S3_REGION: z.string().default("us-east-1"),
+  S3_ENDPOINT: z.string().url().optional(),
+  S3_ACCESS_KEY_ID: z.string().optional(),
+  S3_SECRET_ACCESS_KEY: z.string().optional(),
+  S3_FORCE_PATH_STYLE: boolish,
+  UPLOAD_MAX_MB: z.coerce.number().int().min(1).max(100).default(20),
+  DOWNLOAD_URL_TTL_SECONDS: z.coerce.number().int().min(30).max(3600).default(300),
 });
 
 export type Env = z.infer<typeof schema>;
@@ -48,6 +58,9 @@ export function env() {
   const encryptionKey = Buffer.from(keyB64, "base64");
   if (encryptionKey.length !== 32) {
     throw new Error("APP_ENCRYPTION_KEY deve conter exatamente 32 bytes em base64.");
+  }
+  if (e.STORAGE_DRIVER === "s3" && !e.S3_BUCKET) {
+    throw new Error("STORAGE_DRIVER=s3 exige S3_BUCKET.");
   }
   if (e.MAIL_DRIVER === "smtp" && !e.SMTP_HOST) {
     throw new Error("MAIL_DRIVER=smtp exige SMTP_HOST.");

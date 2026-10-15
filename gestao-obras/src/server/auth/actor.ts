@@ -49,6 +49,7 @@ export async function buildActor(user: Pick<User, "id" | "email" | "name" | "hom
       unitName: s.unit.name,
       unitPath: s.unit.path,
       includeDescendants: s.includeDescendants,
+      workId: s.workId,
       permissions: s.role.permissions.map((p) => p.permissionCode),
     })),
   };

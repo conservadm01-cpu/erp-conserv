@@ -53,6 +53,7 @@ export async function getUser(actor: Actor, id: string) {
     include: {
       role: { select: { id: true, code: true, name: true, requiresMfa: true } },
       unit: { select: { id: true, name: true, code: true, path: true, status: true } },
+      work: { select: { id: true, code: true, title: true } },
       grantedBy: { select: { name: true } },
     },
     orderBy: { createdAt: "asc" },
@@ -185,13 +186,18 @@ export async function resetUserMfa(actor: Actor, id: string, meta: RequestMeta) 
 export async function addUserScope(
   actor: Actor,
   userId: string,
-  input: { roleId: string; unitId: string; includeDescendants: boolean },
+  input: { roleId: string; unitId?: string; workId?: string; includeDescendants: boolean },
   meta: RequestMeta,
 ) {
   const user = await loadManageable(actor, userId);
+  let work: { id: string; code: string; unitId: string } | null = null;
+  if (input.workId) {
+    work = await prisma.work.findUnique({ where: { id: input.workId }, select: { id: true, code: true, unitId: true, unitPath: true } });
+    if (!work) throw Errors.notFound("Obra");
+  }
   const [role, unit] = await Promise.all([
     prisma.role.findUnique({ where: { id: input.roleId }, include: { permissions: true } }),
-    prisma.organizationUnit.findUnique({ where: { id: input.unitId } }),
+    prisma.organizationUnit.findUnique({ where: { id: work ? work.unitId : input.unitId! } }),
   ]);
   if (!role) throw Errors.notFound("Papel");
   if (!unit || !can(actor, "org.read", unit.path)) throw Errors.notFound("Unidade");
@@ -208,7 +214,7 @@ export async function addUserScope(
   }
   return prisma.$transaction(async (tx) => {
     const scope = await tx.userScope.create({
-      data: { userId, roleId: role.id, unitId: unit.id, includeDescendants: input.includeDescendants, grantedById: actor.userId },
+      data: { userId, roleId: role.id, unitId: unit.id, workId: work?.id ?? null, includeDescendants: work ? false : input.includeDescendants, grantedById: actor.userId },
     });
     await recordAudit(
       {
@@ -217,7 +223,7 @@ export async function addUserScope(
         objectType: "UserScope",
         objectId: scope.id,
         unitPath: unit.path,
-        metadata: { usuario: user.email, papel: role.code, unidade: unit.code, incluiSubordinadas: input.includeDescendants },
+        metadata: { usuario: user.email, papel: role.code, unidade: unit.code, obra: work?.code, incluiSubordinadas: work ? false : input.includeDescendants },
       },
       meta,
       tx,

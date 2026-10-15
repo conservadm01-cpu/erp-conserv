@@ -4,7 +4,7 @@ import { buildActor } from "@/server/auth/actor";
 import { hashPassword } from "@/server/auth/password";
 import { systemMeta } from "@/server/http/request-meta";
 import { PERMISSIONS } from "@/server/authz/catalog";
-import { ORG_UNIT_TYPES, ROLES } from "../../prisma/seed-data";
+import { ACTIVITY_TYPES, APPROVAL_POLICIES, DOCUMENT_CATEGORIES, ORG_UNIT_TYPES, REQUIREMENT_RULES, ROLES, WORK_TYPES } from "../../prisma/seed-data";
 
 export const PASSWORD = "Teste@Seguro2026!";
 export const meta = () => systemMeta("teste");
@@ -21,6 +21,11 @@ export async function ensureBase() {
     });
     await prisma.rolePermission.createMany({ data: r.permissions.map((permissionCode) => ({ roleId: role.id, permissionCode })), skipDuplicates: true });
   }
+  for (const t of WORK_TYPES) await prisma.workType.upsert({ where: { code: t.code }, update: {}, create: t });
+  for (const a of ACTIVITY_TYPES) await prisma.activityType.upsert({ where: { code: a.code }, update: {}, create: a });
+  for (const c of DOCUMENT_CATEGORIES) await prisma.documentCategory.upsert({ where: { code: c.code }, update: {}, create: c });
+  for (const p of APPROVAL_POLICIES) await prisma.approvalPolicy.upsert({ where: { kind: p.kind }, update: {}, create: p });
+  for (const r of REQUIREMENT_RULES) await prisma.requirementRule.upsert({ where: { code: r.code }, update: {}, create: r });
   let root = await prisma.organizationUnit.findFirst({ where: { depth: 0 } });
   if (!root) {
     const id = randomUUID();
@@ -48,7 +53,7 @@ export async function makeTree() {
   return { root, regA, regB, a1, a2, b1, suffix: s };
 }
 
-export async function makeUser(opts: { unit: { id: string }; role?: string; scopeUnit?: { id: string }; includeDescendants?: boolean; email?: string; mustChangePassword?: boolean }) {
+export async function makeUser(opts: { unit: { id: string }; role?: string; scopeUnit?: { id: string }; includeDescendants?: boolean; email?: string; mustChangePassword?: boolean; workId?: string }) {
   passwordHash ??= await hashPassword(PASSWORD);
   const user = await prisma.user.create({
     data: {
@@ -62,7 +67,7 @@ export async function makeUser(opts: { unit: { id: string }; role?: string; scop
   if (opts.role) {
     const role = await prisma.role.findUniqueOrThrow({ where: { code: opts.role } });
     await prisma.userScope.create({
-      data: { userId: user.id, roleId: role.id, unitId: (opts.scopeUnit ?? opts.unit).id, includeDescendants: opts.includeDescendants ?? true },
+      data: { userId: user.id, roleId: role.id, unitId: (opts.scopeUnit ?? opts.unit).id, includeDescendants: opts.includeDescendants ?? true, workId: opts.workId ?? null },
     });
   }
   return user;

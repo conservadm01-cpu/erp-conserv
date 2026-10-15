@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { can, canAnywhere, grantsFor, pathWhere, permissionsAt, scopeCovers, type Actor, type ActorScope } from "@/server/authz/authorize";
 
 const scope = (unitPath: string, permissions: string[], includeDescendants = true): ActorScope => ({
-  scopeId: unitPath, roleId: "r", roleCode: "R", roleName: "R", unitId: "u", unitName: "U", unitPath, includeDescendants, permissions,
+  scopeId: unitPath, roleId: "r", roleCode: "R", roleName: "R", unitId: "u", unitName: "U", unitPath, includeDescendants, workId: null, permissions,
 });
 const actor = (...scopes: ActorScope[]): Actor => ({ userId: "x", email: "x@exemplo.test", name: "X", sessionId: "s", homeUnitId: "h", homeUnitPath: "/root/", scopes });
 
