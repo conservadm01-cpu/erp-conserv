@@ -75,6 +75,12 @@ export async function generateWorkDossier(actor: Actor, workId: string, meta: Re
     );
   }
 
+  const milestones = await prisma.workMilestone.findMany({ where: { workId }, orderBy: { plannedDate: "asc" } });
+  if (milestones.length) {
+    r.heading("Marcos do cronograma");
+    r.table([{ header: "Marco", width: 50 }, { header: "Previsto", width: 25 }, { header: "Realizado", width: 25 }], milestones.map((m) => [m.name, fmtDate(m.plannedDate), fmtDate(m.actualDate)]));
+  }
+
   r.heading("Documentos");
   r.table(
     [{ header: "Documento", width: 30 }, { header: "Categoria", width: 18 }, { header: "Situação", width: 12 }, { header: "Validade", width: 11 }, { header: "Versão / SHA-256", width: 29 }],
@@ -84,6 +90,24 @@ export async function generateWorkDossier(actor: Actor, workId: string, meta: Re
     }),
     "Nenhum documento enviado.",
   );
+
+  if (canOnWork(actor, "safety.read", work)) {
+    const [inspections, actions] = await Promise.all([
+      prisma.inspection.count({ where: { workId, status: "CONCLUIDA" } }),
+      prisma.correctiveAction.findMany({ where: { workId }, orderBy: { dueDate: "asc" } }),
+    ]);
+    r.heading("Segurança");
+    r.paragraph(`${inspections} inspeção(ões) concluída(s) · ${actions.length} ação(ões) corretiva(s), ${actions.filter((a) => ["ABERTA", "EM_ANDAMENTO", "AGUARDANDO_VALIDACAO"].includes(a.status)).length} em aberto.`);
+    if (actions.length) r.table([{ header: "Ação", width: 50 }, { header: "Prazo", width: 20 }, { header: "Situação", width: 30 }], actions.map((a) => [a.title, fmtDate(a.dueDate), a.status.toLowerCase().replace(/_/g, " ")]));
+  }
+
+  if (canOnWork(actor, "budget.read", work)) {
+    const { budgetSummary } = await import("./budget.service");
+    const b = await budgetSummary(prisma, workId);
+    const brl = (v: number) => v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+    r.heading("Orçamento");
+    r.fields([["Versão aprovada", b.approvedVersion ? `v${b.approvedVersion}` : "nenhuma"], ["Orçado", brl(b.totals.orcado)], ["Contratado + comprometido", brl(b.totals.contratado + b.totals.comprometido)], ["Medido", brl(b.totals.medido)], ["Pago (registrado)", brl(b.totals.pago)], ["Saldo a comprometer", brl(b.totals.saldo)]]);
+  }
 
   r.heading("Histórico de situação");
   r.table(

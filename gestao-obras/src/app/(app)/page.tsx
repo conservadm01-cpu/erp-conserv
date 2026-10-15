@@ -31,6 +31,15 @@ function Stat({ label, value, href, tone = "default" }: { label: string; value: 
   return href ? <Link href={href}>{body}</Link> : body;
 }
 
+function Money({ label, value }: { label: string; value: number }) {
+  return (
+    <div className="card h-full p-4">
+      <p className="text-xs font-medium uppercase tracking-wide text-slate-500">{label}</p>
+      <p className="mt-1 text-xl font-semibold tabular-nums text-slate-900">{value.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}</p>
+    </div>
+  );
+}
+
 export default async function DashboardPage({ searchParams }: { searchParams: Promise<Record<string, string | undefined>> }) {
   const actor = await requirePageActor();
   if (!canAnywhere(actor, "dashboard.view")) return <Forbidden />;
@@ -103,14 +112,44 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
 
           <section aria-labelledby="sec-docs">
             <h2 id="sec-docs" className="mb-3 text-sm font-semibold text-slate-700">Documentos, prazos e aprovações</h2>
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-6">
               <Stat label="Aguardando análise" value={w.documentos.pendentes} tone="warn" href="/documentos?status=ENVIADO" />
               <Stat label="Vencidos" value={w.documentos.vencidos} tone="bad" href="/documentos?status=VENCIDO" />
               <Stat label="Vencem em 30 dias" value={w.documentos.aVencer30} tone="warn" href="/documentos?expiring=30" />
               <Stat label="Etapas atrasadas" value={w.etapasAtrasadas} tone="bad" />
+              <Stat label="Obras com atraso" value={w.obrasComAtraso} tone="bad" />
               {w.aprovacoesPendentes !== null && <Stat label="Aprovações pendentes" value={w.aprovacoesPendentes} tone="warn" href="/aprovacoes" />}
             </div>
           </section>
+
+          {w.seguranca && (
+            <section aria-labelledby="sec-seg">
+              <h2 id="sec-seg" className="mb-3 text-sm font-semibold text-slate-700">Segurança do trabalho</h2>
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+                <Stat label="Ações corretivas abertas" value={w.seguranca.acoesAbertas} tone="warn" href="/seguranca/acoes" />
+                <Stat label="Ações atrasadas" value={w.seguranca.acoesAtrasadas} tone="bad" href="/seguranca/acoes" />
+                <Stat label="Inspeções em andamento" value={w.seguranca.inspecoesPendentes} tone="warn" href="/seguranca/inspecoes" />
+              </div>
+            </section>
+          )}
+
+          {w.financeiro && (
+            <section aria-labelledby="sec-fin">
+              <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
+                <h2 id="sec-fin" className="text-sm font-semibold text-slate-700">Financeiro (registro gerencial)</h2>
+                <Link href="/orcamentos" className="text-sm text-brand-700 hover:underline">Ver por obra</Link>
+              </div>
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                <Money label="Orçado (aprovado)" value={w.financeiro.orcado} />
+                <Money label="Comprometido" value={w.financeiro.comprometido} />
+                <Money label="Medido (aprovado)" value={w.financeiro.realizado} />
+                <Money label="Pago (registrado)" value={w.financeiro.pago} />
+              </div>
+            </section>
+          )}
+          {canAnywhere(actor, "report.generate") && (
+            <p className="text-sm"><Link href="/relatorios" className="text-brand-700 hover:underline">Gerar relatórios em PDF (inclui visão consolidada por região)</Link></p>
+          )}
         </>
       )}
 

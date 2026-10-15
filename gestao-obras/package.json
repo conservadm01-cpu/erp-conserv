@@ -21,7 +21,8 @@
     "test:integration": "vitest run tests/integration",
     "test:e2e": "playwright test",
     "postinstall": "prisma generate",
-    "jobs:daily": "tsx scripts/daily-jobs.ts"
+    "jobs:daily": "tsx scripts/daily-jobs.ts",
+    "audit:anchor": "tsx scripts/audit-anchor.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "3.999.0",

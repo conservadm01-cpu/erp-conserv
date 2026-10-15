@@ -12,7 +12,7 @@ import { hashPassword, passwordPolicyIssues } from "../src/server/auth/password"
 import { PERMISSIONS } from "../src/server/authz/catalog";
 import { recordAudit } from "../src/server/audit/audit";
 import { systemMeta } from "../src/server/http/request-meta";
-import { ACTIVITY_TYPES, APPROVAL_POLICIES, CHECKLIST_TEMPLATES, CRITICALITY_LEVELS, DEMO_EPIS, DOCUMENT_CATEGORIES, ORG_UNIT_TYPES, REQUIREMENT_RULES, ROLES, WORK_TYPES } from "./seed-data";
+import { ACTIVITY_TYPES, APPROVAL_POLICIES, CHECKLIST_TEMPLATES, CRITICALITY_LEVELS, DEMO_EPIS, DOCUMENT_CATEGORIES, ORG_UNIT_TYPES, REQUIREMENT_RULES, ROLES, SYSTEM_SETTINGS, WORK_TYPES } from "./seed-data";
 
 const prisma = new PrismaClient();
 export const DEMO_PASSWORD = "Demo@Obras2026!";
@@ -43,6 +43,7 @@ async function seedBase(mode: string) {
   for (const p of APPROVAL_POLICIES) await prisma.approvalPolicy.upsert({ where: { kind: p.kind }, update: {}, create: p });
   // Regras de requisito: criadas uma única vez; alterações posteriores são feitas pela tela de configuração.
   for (const r of REQUIREMENT_RULES) await prisma.requirementRule.upsert({ where: { code: r.code }, update: {}, create: r });
+  for (const st of SYSTEM_SETTINGS) await prisma.systemSetting.upsert({ where: { key: st.key }, update: {}, create: st });
   for (const c of CRITICALITY_LEVELS) await prisma.criticalityLevel.upsert({ where: { code: c.code }, update: {}, create: c });
   for (const t of CHECKLIST_TEMPLATES) {
     if (!(await prisma.checklistTemplate.findFirst({ where: { name: t.name } }))) {

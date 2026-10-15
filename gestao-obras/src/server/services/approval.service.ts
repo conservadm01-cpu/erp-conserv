@@ -8,13 +8,51 @@ import { findApprovalTransition, STATUS_LABEL } from "../domain/work-state";
 import { getRootUnit } from "./org-unit.service";
 import { blockingIssues } from "./requirement.service";
 import { applyStatusChange } from "./work.service";
+import { applySubjectOutcome, assertSubjectPending, SUBJECT_KINDS } from "./approval-subjects";
+import { Prisma as P } from "@prisma/client";
 
 const auditActor = (a: Actor) => ({ userId: a.userId, email: a.email });
 
-const EXPECTED_STATUS: Record<ApprovalKind, Work["status"]> = {
+const EXPECTED_STATUS: Partial<Record<ApprovalKind, Work["status"]>> = {
   SOLICITACAO_OBRA: "EM_APROVACAO",
   ENCERRAMENTO_OBRA: "EM_VISTORIA",
 };
+
+/** Número de decisões: pela faixa de valor (se houver alçadas) ou pela política do tipo. */
+async function stepsFor(tx: Tx, kind: ApprovalKind, amount: number | null, fallback: number) {
+  if (amount === null) return fallback;
+  const tiers = await tx.approvalTier.findMany({ where: { kind } });
+  if (!tiers.length) return fallback;
+  const sorted = tiers.sort((a, b) => (a.upToAmount === null ? 1 : b.upToAmount === null ? -1 : Number(a.upToAmount) - Number(b.upToAmount)));
+  const tier = sorted.find((t) => t.upToAmount === null || amount <= Number(t.upToAmount));
+  return tier?.stepsRequired ?? fallback;
+}
+
+/** Abre aprovação para orçamento, medição, despesa ou mudança de escopo. */
+export async function openSubjectApproval(
+  tx: Tx,
+  actor: Actor,
+  work: Work,
+  input: { kind: ApprovalKind; subjectId: string; amount: number | null; snapshot: Record<string, unknown>; note: string | null },
+  meta: RequestMeta,
+) {
+  const policy = await tx.approvalPolicy.findUnique({ where: { kind: input.kind } });
+  if (!policy) throw Errors.conflict("Fluxo de aprovação não configurado.");
+  const steps = await stepsFor(tx, input.kind, input.amount, policy.stepsRequired);
+  const approval = await tx.approval.create({
+    data: {
+      kind: input.kind, workId: work.id, unitPath: work.unitPath, subjectId: input.subjectId, amount: input.amount === null ? null : new P.Decimal(input.amount),
+      subjectVersion: work.version, snapshot: input.snapshot as P.InputJsonValue, stepsRequired: steps, requireSegregation: policy.requireSegregation,
+      requesterId: actor.userId, requestNote: input.note,
+    },
+  });
+  await recordAudit(
+    { action: "aprovacao.aberta", actor: auditActor(actor), objectType: "Approval", objectId: approval.id, unitPath: work.unitPath, metadata: { obra: work.code, tipo: input.kind, objeto: input.subjectId, valor: input.amount ?? undefined, decisoesNecessarias: steps } },
+    meta,
+    tx,
+  );
+  return approval;
+}
 
 /** Abre uma aprovação copiando a política vigente e os dados submetidos (chamado na transição). */
 export async function openApproval(tx: Tx, actor: Actor, work: Work, kind: ApprovalKind, note: string | null, meta: RequestMeta) {
@@ -78,7 +116,7 @@ export async function listInbox(actor: Actor) {
     approvals: approvals.map((a) => ({
       ...a,
       requesterName: requesters.find((r) => r.id === a.requesterId)?.name ?? "—",
-      ownRequest: a.requireSegregation && (a.requesterId === actor.userId || a.work.createdById === actor.userId),
+      ownRequest: a.requireSegregation && (a.requesterId === actor.userId || (!SUBJECT_KINDS.includes(a.kind) && a.work.createdById === actor.userId)),
       alreadyDecided: a.steps.some((s) => s.approverId === actor.userId),
     })),
     documents: documents.map((d) => ({ ...d, ownUpload: d.versions.some((v) => v.uploadedById === actor.userId) })),
@@ -94,9 +132,9 @@ export async function getApproval(actor: Actor, id: string) {
   const [documents, people, issues] = await Promise.all([
     prisma.document.findMany({ where: { workId: approval.workId }, include: { category: { select: { name: true } } }, orderBy: { createdAt: "asc" } }),
     prisma.user.findMany({ where: { id: { in: [approval.requesterId, ...approval.steps.map((s) => s.approverId)] } }, select: { id: true, name: true } }),
-    blockingIssues(prisma, approval.workId, approval.kind === "SOLICITACAO_OBRA" ? "APROVACAO" : "ENCERRAMENTO"),
+    SUBJECT_KINDS.includes(approval.kind) ? Promise.resolve([]) : blockingIssues(prisma, approval.workId, approval.kind === "SOLICITACAO_OBRA" ? "APROVACAO" : "ENCERRAMENTO"),
   ]);
-  const own = approval.requireSegregation && (approval.requesterId === actor.userId || approval.work.createdById === actor.userId);
+  const own = approval.requireSegregation && (approval.requesterId === actor.userId || (!SUBJECT_KINDS.includes(approval.kind) && approval.work.createdById === actor.userId));
   return {
     ...approval,
     documents,
@@ -125,12 +163,15 @@ export async function decideApproval(
       throw Errors.forbidden("Você não pode decidir aprovações desta obra.");
     }
     if (approval.status !== "PENDENTE") throw Errors.conflict("Esta aprovação já foi concluída.");
-    if (approval.requireSegregation && (approval.requesterId === actor.userId || work.createdById === actor.userId)) {
+    const isSubject = SUBJECT_KINDS.includes(approval.kind);
+    if (approval.requireSegregation && (approval.requesterId === actor.userId || (!isSubject && work.createdById === actor.userId))) {
       await recordAudit({ action: "aprovacao.negada_segregacao", result: "NEGADO", actor: auditActor(actor), objectType: "Approval", objectId: id, unitPath: work.unitPath }, meta);
       throw Errors.forbidden("Por segregação de funções, você não pode decidir uma solicitação que você mesmo fez ou cadastrou.");
     }
     if (approval.steps.some((s) => s.approverId === actor.userId)) throw Errors.conflict("Você já registrou sua decisão nesta aprovação.");
-    if (work.status !== EXPECTED_STATUS[approval.kind] || work.version !== approval.subjectVersion) {
+    if (isSubject) {
+      await assertSubjectPending(tx, approval.kind, approval.subjectId!);
+    } else if (work.status !== EXPECTED_STATUS[approval.kind] || work.version !== approval.subjectVersion) {
       throw Errors.conflict("A obra mudou depois da submissão. A aprovação precisa ser reaberta.");
     }
     if (input.consultedDocumentIds.length) {
@@ -151,13 +192,23 @@ export async function decideApproval(
     if (input.decision === "APROVAR" && favorable < approval.stepsRequired) {
       return { status: "PENDENTE" as const, remaining: approval.stepsRequired - favorable };
     }
+    const final = input.decision === "APROVAR" ? "APROVADA" : input.decision === "REJEITAR" ? "REJEITADA" : "DEVOLVIDA";
+    if (isSubject) {
+      await tx.approval.update({ where: { id }, data: { status: final, decidedAt: new Date() } });
+      await applySubjectOutcome(tx, approval.kind, approval.subjectId!, work.id, input.decision, actor.userId);
+      await recordAudit(
+        { action: `aprovacao.${approval.kind.toLowerCase()}.${final.toLowerCase()}`, actor: auditActor(actor), objectType: approval.kind, objectId: approval.subjectId!, unitPath: work.unitPath, metadata: { obra: work.code, aprovacao: id } },
+        meta,
+        tx,
+      );
+      return { status: final, remaining: 0 };
+    }
     const transition = findApprovalTransition(work.status, input.decision);
     if (!transition) throw Errors.conflict(`Decisão incompatível com a situação "${STATUS_LABEL[work.status]}".`);
     if (input.decision === "APROVAR" && transition.checkpoint) {
       const issues = await blockingIssues(tx, work.id, transition.checkpoint);
       if (issues.length) throw Errors.conflict(`Há requisito(s) bloqueante(s) pendente(s): ${issues.map((i) => i.rule.name).join("; ")}.`);
     }
-    const final = input.decision === "APROVAR" ? "APROVADA" : input.decision === "REJEITAR" ? "REJEITADA" : "DEVOLVIDA";
     await tx.approval.update({ where: { id }, data: { status: final, decidedAt: new Date() } });
     await applyStatusChange(tx, work, transition.to, { actor, reason: input.decision === "APROVAR" ? null : input.opinion, approvalId: id, action: transition.action }, meta);
     return { status: final, remaining: 0 };
@@ -186,6 +237,26 @@ export async function updatePolicy(actor: Actor, kind: ApprovalKind, input: { st
       tx,
     );
     return updated;
+  });
+}
+
+export async function listTiers() {
+  return prisma.approvalTier.findMany({ orderBy: [{ kind: "asc" }, { upToAmount: { sort: "asc", nulls: "last" } }] });
+}
+
+/** Substitui as faixas de alçada de um tipo (somente gestão central). */
+export async function replaceTiers(actor: Actor, kind: ApprovalKind, tiers: { upToAmount: number | null; stepsRequired: number }[], meta: RequestMeta) {
+  const root = await getRootUnit();
+  if (!root) throw Errors.conflict("Estrutura organizacional não inicializada.");
+  assertCan(actor, "approval.policy.manage", root.path, "A configuração de alçadas é restrita à gestão central.");
+  const open = tiers.filter((t) => t.upToAmount === null).length;
+  if (tiers.length && open !== 1) throw Errors.invalid("Inclua exatamente uma faixa sem limite superior (acima do último valor).");
+  const limits = tiers.filter((t) => t.upToAmount !== null).map((t) => t.upToAmount!);
+  if (new Set(limits).size !== limits.length) throw Errors.invalid("Há faixas com o mesmo limite.");
+  return prisma.$transaction(async (tx) => {
+    await tx.approvalTier.deleteMany({ where: { kind } });
+    if (tiers.length) await tx.approvalTier.createMany({ data: tiers.map((t) => ({ kind, upToAmount: t.upToAmount === null ? null : new P.Decimal(t.upToAmount), stepsRequired: t.stepsRequired })) });
+    await recordAudit({ action: "aprovacao.alcadas.alteradas", actor: auditActor(actor), objectType: "ApprovalTier", objectId: kind, metadata: { faixas: tiers } }, meta, tx);
   });
 }
 

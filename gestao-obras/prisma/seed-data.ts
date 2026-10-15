@@ -32,6 +32,7 @@ export const ROLES: { code: string; name: string; description: string; requiresM
       "requirement.read", "requirement.evaluate", "report.generate",
       "person.read", "person.manage", "company.read", "company.manage", "contract.manage", "epi.read", "epi.stock",
       "equipment.read", "equipment.manage", "safety.read", "safety.inspect", "safety.action",
+      "budget.read", "budget.manage",
     ],
   },
   {
@@ -55,7 +56,7 @@ export const ROLES: { code: string; name: string; description: string; requiresM
     permissions: [
       "dashboard.view", "org.read", "work.read", "document.read", "document.review", "requirement.read",
       "requirement.evaluate", "requirement.waive", "approval.decide", "report.generate",
-      "person.read", "company.read", "epi.read", "equipment.read", "safety.read", "safety.validate",
+      "person.read", "company.read", "epi.read", "equipment.read", "safety.read", "safety.validate", "budget.read",
     ],
   },
   {
@@ -64,7 +65,7 @@ export const ROLES: { code: string; name: string; description: string; requiresM
     description: "Acompanha uma obra específica: etapas, documentos e requisitos. Atribuído por obra.",
     requiresMfa: false,
     isSystem: false,
-    permissions: ["work.read", "work.manage", "document.read", "document.upload", "requirement.read", "report.generate", "safety.read", "safety.action"],
+    permissions: ["work.read", "work.manage", "document.read", "document.upload", "requirement.read", "report.generate", "safety.read", "safety.action", "budget.read"],
   },
   {
     code: "AUDITOR",
@@ -74,7 +75,7 @@ export const ROLES: { code: string; name: string; description: string; requiresM
     isSystem: false,
     permissions: [
       "dashboard.view", "org.read", "user.read", "role.read", "audit.read", "work.read", "document.read", "requirement.read", "report.generate",
-      "person.read", "company.read", "epi.read", "equipment.read", "safety.read",
+      "person.read", "company.read", "epi.read", "equipment.read", "safety.read", "budget.read",
     ],
   },
   {
@@ -121,6 +122,18 @@ export const DOCUMENT_CATEGORIES = [
 export const APPROVAL_POLICIES = [
   { kind: "SOLICITACAO_OBRA" as const, name: "Aprovação de solicitação de obra", stepsRequired: 1, requireSegregation: true },
   { kind: "ENCERRAMENTO_OBRA" as const, name: "Aprovação de vistoria e encerramento", stepsRequired: 1, requireSegregation: true },
+  { kind: "MUDANCA_ESCOPO" as const, name: "Aprovação de mudança de escopo", stepsRequired: 1, requireSegregation: true },
+  { kind: "ORCAMENTO" as const, name: "Aprovação de orçamento e aditivos", stepsRequired: 1, requireSegregation: true },
+  { kind: "MEDICAO" as const, name: "Aprovação de medição", stepsRequired: 1, requireSegregation: true },
+  { kind: "DESPESA" as const, name: "Aprovação de despesa", stepsRequired: 1, requireSegregation: true },
+];
+
+/** Parâmetros iniciais (técnicos, configuráveis). */
+export const SYSTEM_SETTINGS = [
+  { key: "budget.deviationAlertPercent", value: 10 },
+  { key: "retention.loginAttemptsDays", value: 180 },
+  { key: "retention.sessionsDays", value: 90 },
+  { key: "privacy.responseDays", value: 15 },
 ];
 
 /**

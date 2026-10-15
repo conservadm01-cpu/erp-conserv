@@ -35,7 +35,7 @@ export function EntityForm({
   fields: FieldDef[];
   initial?: Record<string, Value>;
   action: string;
-  method?: "POST" | "PATCH" | "PUT";
+  method?: "POST" | "PATCH" | "PUT" | "DELETE";
   submitLabel?: string;
   /** "refresh" recarrega os dados; um texto com ":id" navega para o registro criado. */
   onDone?: "refresh" | string;
@@ -122,12 +122,12 @@ export function Reveal({ label, children, variant = "primary" }: { label: string
 }
 
 /** Botão que executa uma chamada simples à API (com confirmação opcional por justificativa). */
-export function ActionButton({ label, action, method = "POST", body = {}, variant = "secondary", confirmText }: { label: string; action: string; method?: "POST" | "PATCH" | "PUT"; body?: Record<string, unknown>; variant?: "primary" | "secondary" | "danger" | "ghost"; confirmText?: string }) {
+export function ActionButton({ label, action, method = "POST", body = {}, variant = "secondary", confirmText }: { label: string; action: string; method?: "POST" | "PATCH" | "PUT" | "DELETE"; body?: Record<string, unknown>; variant?: "primary" | "secondary" | "danger" | "ghost"; confirmText?: string }) {
   const router = useRouter();
   const [asking, setAsking] = useState(false);
   const { pending, error, run } = useSubmit();
   async function go() {
-    const res = await run(() => api(action, { method, body }));
+    const res = await run(() => api(action, method === "DELETE" ? { method } : { method, body }));
     setAsking(false);
     if (res) router.refresh();
   }

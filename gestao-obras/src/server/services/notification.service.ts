@@ -214,6 +214,20 @@ export async function generateAlerts(now = new Date()) {
     }
   }
 
+  // Desvios orçamentários acima do percentual configurado.
+  const { budgetSummary } = await import("./budget.service");
+  const financed = await prisma.work.findMany({ where: { status: { in: ["APROVADA", "EM_EXECUCAO", "SUSPENSA", "EM_VISTORIA"] }, budgets: { some: { status: "APROVADO" } } } });
+  for (const w of financed) {
+    const summary = await budgetSummary(prisma, w.id);
+    for (const r of summary.rows.filter((x) => x.alerta)) {
+      created += await notify(await recipientsFor("budget.manage", w.unitPath, w.id), {
+        kind: "orcamento.desvio", severity: "ALERTA",
+        title: `Desvio orçamentário: ${w.code}`, body: `Categoria ${r.category}: realizado acima do orçado em ${r.desvioPct}% (limite ${summary.threshold}%).`,
+        link: `/obras/${w.id}?aba=orcamento`, dedupKey: `desvio:${w.id}:${r.category}:${Math.floor(r.desvioPct / 10)}`,
+      });
+    }
+  }
+
   // Equipamentos com inspeção ou manutenção vencida.
   const dueEquipment = await prisma.equipment.findMany({
     where: { status: { not: "BAIXADO" }, OR: [{ nextInspectionAt: { lt: today } }, { nextMaintenanceAt: { lt: today } }] },

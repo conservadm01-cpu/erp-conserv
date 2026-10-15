@@ -39,6 +39,10 @@ export const PERMISSIONS = {
   "safety.inspect": { module: "Segurança", description: "Realizar inspeções e registrar riscos e incidentes" },
   "safety.action": { module: "Segurança", description: "Criar ações corretivas e registrar evidências de correção" },
   "safety.validate": { module: "Segurança", description: "Validar o encerramento de ações corretivas" },
+  "budget.read": { module: "Orçamento", description: "Consultar orçamentos, lançamentos e medições" },
+  "budget.manage": { module: "Orçamento", description: "Elaborar orçamentos, registrar lançamentos e medições e submetê-los à aprovação" },
+  "privacy.manage": { module: "Privacidade", description: "Atender solicitações de titulares de dados (somente na raiz)" },
+  "settings.manage": { module: "Configurações", description: "Alterar parâmetros do sistema (somente na raiz)" },
   "safety.config": { module: "Segurança", description: "Configurar checklists e critérios de criticidade (somente na raiz)" },
 } as const;
 

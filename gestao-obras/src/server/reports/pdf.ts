@@ -106,6 +106,18 @@ export class Report {
     this.doc.moveDown(0.4);
   }
 
+  /** Imagem ajustada à largura útil (máximo de 300 pt de altura). */
+  image(bytes: Buffer) {
+    this.ensureSpace(310);
+    try {
+      this.doc.image(bytes, MARGIN, this.doc.y, { fit: [this.width, 300], align: "center" });
+      this.doc.y += 306;
+    } catch {
+      this.paragraph("Imagem não pôde ser incorporada (arquivo inválido ou formato não suportado).", { muted: true, size: 8.5 });
+    }
+    this.doc.x = MARGIN;
+  }
+
   /** Cabeçalho e rodapé em todas as páginas; encerra e devolve o PDF. */
   async finish(): Promise<Buffer> {
     const range = this.doc.bufferedPageRange();

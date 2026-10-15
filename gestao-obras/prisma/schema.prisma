@@ -394,6 +394,13 @@ model Work {
   risks                Risk[]
   incidents            Incident[]
   correctiveActions    CorrectiveAction[]
+  workMilestones       WorkMilestone[]
+  scheduleBaselines    ScheduleBaseline[]
+  workDiaryEntries     WorkDiaryEntry[]
+  scopeChanges         ScopeChange[]
+  budgets              Budget[]
+  costEntries          CostEntry[]
+  measurements         Measurement[]
 
   @@index([unitPath])
   @@index([status])
@@ -436,6 +443,10 @@ model WorkStage {
   progress        Int         @default(0)
   responsibleName String?     @map("responsible_name") @db.VarChar(200)
   notes           String?     @db.VarChar(2000)
+  /// Etapas que precisam terminar antes desta começar.
+  dependsOnIds    String[]    @default([]) @map("depends_on_ids")
+  /// Justificativa registrada quando a etapa atrasa.
+  delayReason     String?     @map("delay_reason") @db.VarChar(1000)
   createdAt       DateTime    @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt       DateTime    @updatedAt @map("updated_at") @db.Timestamptz(3)
 
@@ -608,6 +619,10 @@ model RequirementEvaluation {
 enum ApprovalKind {
   SOLICITACAO_OBRA
   ENCERRAMENTO_OBRA
+  MUDANCA_ESCOPO
+  ORCAMENTO
+  MEDICAO
+  DESPESA
 }
 
 enum ApprovalStatus {
@@ -638,6 +653,10 @@ model Approval {
   work               Work           @relation(fields: [workId], references: [id], onDelete: Restrict)
   unitPath           String         @map("unit_path") @db.VarChar(1000)
   /// Versão da obra submetida e cópia dos dados no momento da submissão.
+  /// Objeto aprovado quando não é a própria obra (orçamento, medição, despesa, mudança de escopo).
+  subjectId          String?        @map("subject_id") @db.Uuid
+  /// Valor envolvido, usado na seleção da alçada.
+  amount             Decimal?       @db.Decimal(14, 2)
   subjectVersion     Int            @map("subject_version")
   snapshot           Json
   status             ApprovalStatus @default(PENDENTE)
@@ -651,6 +670,7 @@ model Approval {
 
   @@index([status, unitPath])
   @@index([workId])
+  @@index([subjectId])
   @@map("approval")
 }
 
@@ -1234,4 +1254,279 @@ model Notification {
   @@unique([userId, dedupKey])
   @@index([userId, readAt])
   @@map("notification")
+}
+
+// ---------------------------------------------------------------------------
+// Fase 4 — Cronograma, diário, escopo, orçamento, medições, alçadas e privacidade
+// ---------------------------------------------------------------------------
+
+enum MilestoneKind {
+  APROVACAO
+  ENTREGA
+  MARCO
+}
+
+model WorkMilestone {
+  id          String        @id @default(uuid()) @db.Uuid
+  workId      String        @map("work_id") @db.Uuid
+  work        Work          @relation(fields: [workId], references: [id], onDelete: Restrict)
+  name        String        @db.VarChar(200)
+  kind        MilestoneKind @default(MARCO)
+  plannedDate DateTime      @map("planned_date") @db.Date
+  actualDate  DateTime?     @map("actual_date") @db.Date
+  notes       String?       @db.VarChar(1000)
+  createdAt   DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime      @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@index([workId, plannedDate])
+  @@map("work_milestone")
+}
+
+/// Linha de base do cronograma: cópia imutável de etapas e marcos.
+model ScheduleBaseline {
+  id          String   @id @default(uuid()) @db.Uuid
+  workId      String   @map("work_id") @db.Uuid
+  work        Work     @relation(fields: [workId], references: [id], onDelete: Restrict)
+  version     Int
+  reason      String   @db.VarChar(1000)
+  snapshot    Json
+  createdById String   @map("created_by_id") @db.Uuid
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@unique([workId, version])
+  @@map("schedule_baseline")
+}
+
+model WorkDiaryEntry {
+  id          String   @id @default(uuid()) @db.Uuid
+  workId      String   @map("work_id") @db.Uuid
+  work        Work     @relation(fields: [workId], references: [id], onDelete: Restrict)
+  date        DateTime @db.Date
+  weather     String?  @db.VarChar(120)
+  workforce   Int?
+  activities  String   @db.VarChar(4000)
+  occurrences String?  @db.VarChar(4000)
+  authorId    String   @map("author_id") @db.Uuid
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@index([workId, date])
+  @@map("work_diary_entry")
+}
+
+enum RequestStatus {
+  RASCUNHO
+  EM_APROVACAO
+  APROVADA
+  REJEITADA
+  DEVOLVIDA
+  CANCELADA
+}
+
+/// Pedido de mudança de escopo depois da aprovação da obra.
+model ScopeChange {
+  id                    String        @id @default(uuid()) @db.Uuid
+  workId                String        @map("work_id") @db.Uuid
+  work                  Work          @relation(fields: [workId], references: [id], onDelete: Restrict)
+  proposedScope         String        @map("proposed_scope") @db.VarChar(4000)
+  proposedJustification String        @map("proposed_justification") @db.VarChar(4000)
+  reason                String        @db.VarChar(2000)
+  previousScope         String        @map("previous_scope") @db.VarChar(4000)
+  status                RequestStatus @default(EM_APROVACAO)
+  requesterId           String        @map("requester_id") @db.Uuid
+  createdAt             DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
+  decidedAt             DateTime?     @map("decided_at") @db.Timestamptz(3)
+
+  @@index([workId])
+  @@map("scope_change")
+}
+
+enum BudgetStatus {
+  RASCUNHO
+  EM_APROVACAO
+  APROVADO
+  REJEITADO
+  SUBSTITUIDO
+}
+
+enum BudgetCategory {
+  MATERIAIS
+  SERVICOS
+  MAO_DE_OBRA
+  LOCACOES
+  OUTRAS
+}
+
+model Budget {
+  id            String       @id @default(uuid()) @db.Uuid
+  workId        String       @map("work_id") @db.Uuid
+  work          Work         @relation(fields: [workId], references: [id], onDelete: Restrict)
+  version       Int
+  status        BudgetStatus @default(RASCUNHO)
+  /// Motivo desta versão (orçamento inicial, revisão, aditivo).
+  reason        String       @db.VarChar(1000)
+  contractId    String?      @map("contract_id") @db.Uuid
+  total         Decimal      @default(0) @db.Decimal(14, 2)
+  createdById   String       @map("created_by_id") @db.Uuid
+  submittedById String?      @map("submitted_by_id") @db.Uuid
+  submittedAt   DateTime?    @map("submitted_at") @db.Timestamptz(3)
+  approvedAt    DateTime?    @map("approved_at") @db.Timestamptz(3)
+  createdAt     DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt     DateTime     @updatedAt @map("updated_at") @db.Timestamptz(3)
+  lines         BudgetLine[]
+
+  @@unique([workId, version])
+  @@map("budget")
+}
+
+model BudgetLine {
+  id          String         @id @default(uuid()) @db.Uuid
+  budgetId    String         @map("budget_id") @db.Uuid
+  budget      Budget         @relation(fields: [budgetId], references: [id], onDelete: Cascade)
+  /// Identificador estável da linha entre versões (para comparar e medir).
+  lineKey     String         @map("line_key") @db.Uuid
+  sortOrder   Int            @default(0) @map("sort_order")
+  category    BudgetCategory
+  description String         @db.VarChar(300)
+  unit        String         @db.VarChar(20)
+  quantity    Decimal        @db.Decimal(14, 3)
+  unitPrice   Decimal        @map("unit_price") @db.Decimal(14, 2)
+  companyId   String?        @map("company_id") @db.Uuid
+
+  @@index([budgetId])
+  @@index([lineKey])
+  @@map("budget_line")
+}
+
+enum CostKind {
+  CONTRATADO
+  COMPROMETIDO
+  PAGO
+}
+
+enum CostStatus {
+  REGISTRADO
+  AGUARDANDO_APROVACAO
+  APROVADO
+  REJEITADO
+  CANCELADO
+}
+
+/// Lançamentos financeiros (registro; o sistema não executa pagamentos).
+model CostEntry {
+  id          String         @id @default(uuid()) @db.Uuid
+  workId      String         @map("work_id") @db.Uuid
+  work        Work           @relation(fields: [workId], references: [id], onDelete: Restrict)
+  unitPath    String         @map("unit_path") @db.VarChar(1000)
+  lineKey     String?        @map("line_key") @db.Uuid
+  category    BudgetCategory
+  kind        CostKind
+  status      CostStatus
+  amount      Decimal        @db.Decimal(14, 2)
+  date        DateTime       @db.Date
+  description String         @db.VarChar(500)
+  companyId   String?        @map("company_id") @db.Uuid
+  contractId  String?        @map("contract_id") @db.Uuid
+  /// Cotação, nota fiscal ou comprovante (documento da obra).
+  documentId  String?        @map("document_id") @db.Uuid
+  createdById String         @map("created_by_id") @db.Uuid
+  createdAt   DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@index([workId, kind])
+  @@map("cost_entry")
+}
+
+model Measurement {
+  id          String            @id @default(uuid()) @db.Uuid
+  workId      String            @map("work_id") @db.Uuid
+  work        Work              @relation(fields: [workId], references: [id], onDelete: Restrict)
+  number      Int
+  contractId  String?           @map("contract_id") @db.Uuid
+  periodStart DateTime          @map("period_start") @db.Date
+  periodEnd   DateTime          @map("period_end") @db.Date
+  status      RequestStatus     @default(RASCUNHO)
+  notes       String?           @db.VarChar(2000)
+  total       Decimal           @default(0) @db.Decimal(14, 2)
+  createdById String            @map("created_by_id") @db.Uuid
+  createdAt   DateTime          @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime          @updatedAt @map("updated_at") @db.Timestamptz(3)
+  items       MeasurementItem[]
+
+  @@unique([workId, number])
+  @@map("measurement")
+}
+
+model MeasurementItem {
+  id            String      @id @default(uuid()) @db.Uuid
+  measurementId String      @map("measurement_id") @db.Uuid
+  measurement   Measurement @relation(fields: [measurementId], references: [id], onDelete: Cascade)
+  lineKey       String      @map("line_key") @db.Uuid
+  quantity      Decimal     @db.Decimal(14, 3)
+  amount        Decimal     @db.Decimal(14, 2)
+  notes         String?     @db.VarChar(500)
+
+  @@unique([measurementId, lineKey])
+  @@map("measurement_item")
+}
+
+/// Alçadas por valor (opcionais). Sem faixas, vale a política do tipo.
+model ApprovalTier {
+  id            String       @id @default(uuid()) @db.Uuid
+  kind          ApprovalKind
+  /// Limite superior da faixa; nulo = acima de todas as anteriores.
+  upToAmount    Decimal?     @map("up_to_amount") @db.Decimal(14, 2)
+  stepsRequired Int          @map("steps_required")
+  createdAt     DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@index([kind])
+  @@map("approval_tier")
+}
+
+/// Parâmetros configuráveis do sistema.
+model SystemSetting {
+  key         String   @id @db.VarChar(80)
+  value       Json
+  updatedById String?  @map("updated_by_id") @db.Uuid
+  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@map("system_setting")
+}
+
+enum PrivacySubject {
+  USUARIO
+  PESSOA
+}
+
+enum PrivacyRequestKind {
+  ACESSO
+  CORRECAO
+  ANONIMIZACAO
+  ELIMINACAO
+  OPOSICAO
+  INFORMACAO
+}
+
+enum PrivacyRequestStatus {
+  ABERTA
+  ATENDIDA
+  RECUSADA
+}
+
+/// Registro de atendimento aos titulares de dados (LGPD).
+model PrivacyRequest {
+  id          String               @id @default(uuid()) @db.Uuid
+  subjectType PrivacySubject       @map("subject_type")
+  subjectId   String               @map("subject_id") @db.Uuid
+  kind        PrivacyRequestKind
+  status      PrivacyRequestStatus @default(ABERTA)
+  channel     String               @db.VarChar(120)
+  details     String               @db.VarChar(2000)
+  resolution  String?              @db.VarChar(2000)
+  dueDate     DateTime             @map("due_date") @db.Date
+  createdById String               @map("created_by_id") @db.Uuid
+  handledById String?              @map("handled_by_id") @db.Uuid
+  createdAt   DateTime             @default(now()) @map("created_at") @db.Timestamptz(3)
+  closedAt    DateTime?            @map("closed_at") @db.Timestamptz(3)
+
+  @@index([status])
+  @@map("privacy_request")
 }

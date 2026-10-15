@@ -73,3 +73,26 @@ export function safeNext(next: string | null | undefined): string {
   if (!next || !next.startsWith("/") || next.startsWith("//") || next.startsWith("/\\")) return "/";
   return next;
 }
+
+/** Baixa um arquivo gerado pela API (ex.: relatório PDF), mostrando o erro do servidor quando houver. */
+export async function downloadFile(path: string, fallbackName: string) {
+  let res: Response;
+  try {
+    res = await fetch(path, { credentials: "same-origin", cache: "no-store" });
+  } catch {
+    throw new ApiError(0, "SEM_CONEXAO", "Não foi possível conectar ao servidor. Verifique sua conexão.");
+  }
+  if (!res.ok) {
+    const e = (await res.json().catch(() => ({})))?.error ?? {};
+    throw new ApiError(res.status, e.code ?? "ERRO", e.message ?? "Erro inesperado.", e.details && typeof e.details === "object" ? e.details : {}, e.correlationId);
+  }
+  const name = /filename="([^"]+)"/.exec(res.headers.get("Content-Disposition") ?? "")?.[1] ?? fallbackName;
+  const url = URL.createObjectURL(await res.blob());
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 10_000);
+}

@@ -55,6 +55,17 @@ export const CHECKPOINT: Record<string, string> = {
 export const PRIORITY: Record<string, string> = { BAIXA: "Baixa", MEDIA: "Média", ALTA: "Alta", URGENTE: "Urgente" };
 export const EXECUTION_MODE: Record<string, string> = { VOLUNTARIOS: "Voluntários", EMPRESA_CONTRATADA: "Empresa contratada", MISTA: "Mista" };
 export const STAGE_STATUS: Record<string, string> = { NAO_INICIADA: "Não iniciada", EM_ANDAMENTO: "Em andamento", CONCLUIDA: "Concluída", CANCELADA: "Cancelada" };
-export const APPROVAL_KIND: Record<string, string> = { SOLICITACAO_OBRA: "Solicitação de obra", ENCERRAMENTO_OBRA: "Vistoria e encerramento" };
+export const APPROVAL_KIND: Record<string, string> = {
+  SOLICITACAO_OBRA: "Solicitação de obra", ENCERRAMENTO_OBRA: "Vistoria e encerramento", MUDANCA_ESCOPO: "Mudança de escopo",
+  ORCAMENTO: "Orçamento / aditivo", MEDICAO: "Medição", DESPESA: "Despesa",
+};
+export const BUDGET_CATEGORY: Record<string, string> = { MATERIAIS: "Materiais", SERVICOS: "Serviços", MAO_DE_OBRA: "Mão de obra", LOCACOES: "Locações", OUTRAS: "Outras despesas" };
+export const BUDGET_STATUS: Record<string, string> = { RASCUNHO: "Rascunho", EM_APROVACAO: "Em aprovação", APROVADO: "Aprovado", REJEITADO: "Rejeitado", SUBSTITUIDO: "Substituído" };
+export const REQUEST_STATUS: Record<string, string> = { RASCUNHO: "Rascunho", EM_APROVACAO: "Em aprovação", APROVADA: "Aprovada", REJEITADA: "Rejeitada", DEVOLVIDA: "Devolvida", CANCELADA: "Cancelada" };
+export const COST_KIND: Record<string, string> = { CONTRATADO: "Contratado", COMPROMETIDO: "Comprometido (exige aprovação)", PAGO: "Pago (registro)" };
+export const COST_STATUS: Record<string, string> = { REGISTRADO: "Registrado", AGUARDANDO_APROVACAO: "Aguardando aprovação", APROVADO: "Aprovado", REJEITADO: "Rejeitado", CANCELADO: "Cancelado" };
+export const MILESTONE_KIND: Record<string, string> = { APROVACAO: "Aprovação", ENTREGA: "Entrega", MARCO: "Marco" };
 export const APPROVAL_STATUS: Record<string, string> = { PENDENTE: "Pendente", APROVADA: "Aprovada", REJEITADA: "Rejeitada", DEVOLVIDA: "Devolvida", CANCELADA: "Cancelada" };
 export const DECISION: Record<string, string> = { APROVAR: "Aprovou", REJEITAR: "Rejeitou", DEVOLVER: "Devolveu" };
+export const PRIVACY_KIND: Record<string, string> = { ACESSO: "Acesso aos dados", CORRECAO: "Correção", ANONIMIZACAO: "Anonimização", ELIMINACAO: "Eliminação", OPOSICAO: "Oposição", INFORMACAO: "Informação sobre tratamento" };
+export const PRIVACY_STATUS: Record<string, string> = { ABERTA: "Aberta", ATENDIDA: "Atendida", RECUSADA: "Recusada" };

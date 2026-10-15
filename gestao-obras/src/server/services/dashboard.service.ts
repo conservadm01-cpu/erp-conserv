@@ -84,6 +84,15 @@ async function workIndicators(actor: Actor, f: DashboardFilter) {
   const docScope = workScopedWhere(actor, "document.read", "workId");
   const docWhere: Prisma.DocumentWhereInput = { AND: [docScope ?? { id: "00000000-0000-0000-0000-000000000000" }, { work: workWhere }] };
   const approvalScope = workScopedWhere(actor, "approval.decide", "workId");
+  const safetyScope = workScopedWhere(actor, "safety.read", "workId");
+  const { financialTotals } = await import("./budget.service");
+  const [finance, openActions, lateActions, pendingInspections, lateSchedules] = await Promise.all([
+    financialTotals(actor, workWhere),
+    safetyScope ? prisma.correctiveAction.count({ where: { AND: [safetyScope, { work: workWhere }, { status: { in: ["ABERTA", "EM_ANDAMENTO", "AGUARDANDO_VALIDACAO"] } }] } }) : Promise.resolve(null),
+    safetyScope ? prisma.correctiveAction.count({ where: { AND: [safetyScope, { work: workWhere }, { status: { in: ["ABERTA", "EM_ANDAMENTO"] } }, { dueDate: { lt: today } }] } }) : Promise.resolve(null),
+    safetyScope ? prisma.inspection.count({ where: { AND: [safetyScope, { work: workWhere }, { status: { in: ["PLANEJADA", "EM_ANDAMENTO"] } }] } }) : Promise.resolve(null),
+    prisma.work.count({ where: { AND: [workWhere, { stages: { some: { status: { in: ["NAO_INICIADA", "EM_ANDAMENTO"] }, plannedEnd: { lt: today } } } }] } }),
+  ]);
   const [byStatus, pending, expired, expiring, approvals, lateStages] = await Promise.all([
     prisma.work.groupBy({ by: ["status"], where: workWhere, _count: { _all: true } }),
     prisma.document.count({ where: { AND: [docWhere, { status: { in: ["ENVIADO", "EM_REVISAO"] } }] } }),
@@ -103,5 +112,8 @@ async function workIndicators(actor: Actor, f: DashboardFilter) {
     documentos: { pendentes: pending, vencidos: expired, aVencer30: expiring },
     aprovacoesPendentes: approvals,
     etapasAtrasadas: lateStages,
+    obrasComAtraso: lateSchedules,
+    seguranca: safetyScope ? { acoesAbertas: openActions ?? 0, acoesAtrasadas: lateActions ?? 0, inspecoesPendentes: pendingInspections ?? 0 } : null,
+    financeiro: finance,
   };
 }

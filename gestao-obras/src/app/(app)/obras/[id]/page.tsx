@@ -23,10 +23,17 @@ import { listWorkTeam } from "@/server/services/people.service";
 import { WorkSafetyPanel } from "@/components/safety/WorkSafetyPanel";
 import { PERSON_CATEGORY } from "@/components/phase3/labels";
 import { Badge } from "@/components/ui/Badge";
+import { EntityForm, Reveal } from "@/components/ui/EntityForm";
+import { getSchedule, listDiary, listScopeChanges } from "@/server/services/schedule.service";
+import { getWorkBudget } from "@/server/services/budget.service";
+import { SchedulePanel } from "@/components/phase4/SchedulePanel";
+import { DiaryPanel } from "@/components/phase4/DiaryPanel";
+import { BudgetPanel } from "@/components/phase4/BudgetPanel";
+import { REQUEST_STATUS } from "@/components/works/labels";
 
 export const metadata: Metadata = { title: "Obra" };
 
-const TABS = ["resumo", "etapas", "documentos", "requisitos", "equipe", "seguranca", "historico"] as const;
+const TABS = ["resumo", "etapas", "diario", "orcamento", "documentos", "requisitos", "equipe", "seguranca", "historico"] as const;
 type Tab = (typeof TABS)[number];
 
 export default async function WorkPage({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<{ aba?: string }> }) {
@@ -39,6 +46,8 @@ export default async function WorkPage({ params, searchParams }: { params: Promi
   const canDocs = canOnWork(actor, "document.read", work);
   const canReqs = canOnWork(actor, "requirement.read", work);
   const canSafety = canOnWork(actor, "safety.read", work);
+  const canBudget = canOnWork(actor, "budget.read", work);
+  const canScopeChange = work.allowed.edit && ["APROVADA", "EM_EXECUCAO", "SUSPENSA"].includes(work.status);
   const [documents, requirements, catalogs] = await Promise.all([
     canDocs ? listWorkDocuments(actor, id) : Promise.resolve([]),
     canReqs ? listWorkRequirements(actor, id) : Promise.resolve([]),
@@ -68,7 +77,9 @@ export default async function WorkPage({ params, searchParams }: { params: Promi
         current={tab}
         tabs={[
           { id: "resumo", label: "Resumo" },
-          { id: "etapas", label: "Etapas", count: work.stages.length },
+          { id: "etapas", label: "Cronograma", count: work.stages.length },
+          { id: "diario", label: "Diário" },
+          ...(canBudget ? [{ id: "orcamento", label: "Orçamento" }] : []),
           ...(canDocs ? [{ id: "documentos", label: "Documentos", count: documents.length }] : []),
           ...(canReqs ? [{ id: "requisitos", label: "Requisitos", count: pendingReqs }] : []),
           { id: "equipe", label: "Equipe" },
@@ -120,6 +131,25 @@ export default async function WorkPage({ params, searchParams }: { params: Promi
                 <Link href={`${base}?aba=requisitos`} className="text-brand-700 hover:underline">Ver requisitos</Link>
               </div>
             )}
+            {canScopeChange && (
+              <div className="card p-4 text-sm">
+                <h2 className="mb-2 font-semibold text-slate-700">Mudança de escopo</h2>
+                <p className="mb-2 text-xs text-slate-500">Com a obra aprovada, o escopo só muda após decisão na aprovação central.</p>
+                <Reveal label="Solicitar mudança de escopo">
+                  <EntityForm
+                    action={`/api/works/${work.id}/scope-changes`}
+                    submitLabel="Enviar para aprovação"
+                    successMessage="Solicitação enviada para a aprovação central."
+                    initial={{ proposedScope: work.scope, proposedJustification: work.justification }}
+                    fields={[
+                      { name: "proposedScope", label: "Novo escopo", type: "textarea", required: true, maxLength: 4000 },
+                      { name: "proposedJustification", label: "Justificativa", type: "textarea", required: true, maxLength: 4000 },
+                      { name: "reason", label: "Motivo da mudança", type: "textarea", required: true, maxLength: 2000 },
+                    ]}
+                  />
+                </Reveal>
+              </div>
+            )}
             {work.approvals.some((a) => a.status === "PENDENTE") && (
               <div className="card p-4 text-sm">
                 <h2 className="mb-2 font-semibold text-slate-700">Aprovação em andamento</h2>
@@ -132,7 +162,16 @@ export default async function WorkPage({ params, searchParams }: { params: Promi
         </div>
       )}
 
-      {tab === "etapas" && <StagesPanel workId={work.id} stages={serialize(work.stages)} canEdit={work.allowed.edit} />}
+      {tab === "etapas" && (
+        <div className="space-y-6">
+          <SchedulePanel workId={work.id} s={await getSchedule(actor, work.id)} />
+          <StagesPanel workId={work.id} stages={serialize(work.stages)} canEdit={work.allowed.edit} />
+        </div>
+      )}
+
+      {tab === "diario" && <DiaryPanel workId={work.id} entries={await listDiary(actor, work.id)} canWrite={work.allowed.edit && !["ARQUIVADA", "REJEITADA", "CANCELADA"].includes(work.status)} />}
+
+      {tab === "orcamento" && canBudget && <BudgetTab workId={work.id} />}
 
       {tab === "documentos" && canDocs && (
         <DocumentsPanel workId={work.id} documents={serialize(documents)} categories={await listCategories()} canUpload={work.allowed.upload} canReview={work.allowed.review} userId={actor.userId} />
@@ -154,6 +193,7 @@ export default async function WorkPage({ params, searchParams }: { params: Promi
 
       {tab === "historico" && (
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+          <ScopeChanges workId={work.id} />
           <section className="card p-6">
             <h2 className="mb-3 text-sm font-semibold text-slate-700">Mudanças de situação</h2>
             <ol className="space-y-3 text-sm">
@@ -189,6 +229,40 @@ export default async function WorkPage({ params, searchParams }: { params: Promi
         </div>
       )}
     </div>
+  );
+}
+
+async function BudgetTab({ workId }: { workId: string }) {
+  const actor = await requirePageActor();
+  const [b, documents] = await Promise.all([getWorkBudget(actor, workId), workDocOptions(actor, workId)]);
+  return <BudgetPanel b={b} companies={b.options.companies} contracts={b.options.contracts} documents={documents} />;
+}
+
+async function workDocOptions(actor: Awaited<ReturnType<typeof requirePageActor>>, workId: string) {
+  try {
+    return (await listWorkDocuments(actor, workId)).map((d) => ({ id: d.id, title: d.title }));
+  } catch {
+    return [];
+  }
+}
+
+async function ScopeChanges({ workId }: { workId: string }) {
+  const actor = await requirePageActor();
+  const changes = await listScopeChanges(actor, workId);
+  if (!changes.length) return null;
+  return (
+    <section className="card p-6 lg:col-span-2">
+      <h2 className="mb-3 text-sm font-semibold text-slate-700">Mudanças de escopo</h2>
+      <ul className="space-y-3 text-sm">
+        {changes.map((c) => (
+          <li key={c.id} className="border-l-2 border-slate-200 pl-3">
+            <p><strong>{REQUEST_STATUS[c.status] ?? c.status}</strong> · {formatDateTime(c.createdAt)}</p>
+            <p className="text-slate-700">{c.reason}</p>
+            <details className="mt-1"><summary className="cursor-pointer text-brand-700">Escopo proposto</summary><p className="whitespace-pre-line">{c.proposedScope}</p></details>
+          </li>
+        ))}
+      </ul>
+    </section>
   );
 }
 

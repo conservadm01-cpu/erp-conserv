@@ -14,6 +14,7 @@ import { formatDateTime } from "@/lib/format";
 
 export const metadata: Metadata = { title: "Aprovação" };
 
+type GenericSnapshot = { titulo: string; resumo: [string, string][]; linhas?: { colunas: string[]; valores: string[][] } };
 type Snapshot = { codigo: string; titulo: string; escopo: string; justificativa: string; formaExecucao: string; inicioPrevisto: string | null; terminoPrevisto: string | null; etapas: { nome: string; situacao: string; progresso: number }[] };
 
 export default async function ApprovalPage({ params }: { params: Promise<{ id: string }> }) {
@@ -33,14 +34,8 @@ export default async function ApprovalPage({ params }: { params: Promise<{ id: s
         <section className="card space-y-3 p-6 text-sm">
           <h2 className="font-semibold text-slate-700">Dados submetidos</h2>
           <p className="text-xs text-slate-500">Cópia registrada no momento da submissão; alterações posteriores na obra invalidam esta aprovação.</p>
-          <div><p className="text-slate-500">Escopo</p><p className="whitespace-pre-line">{snap.escopo}</p></div>
-          <div><p className="text-slate-500">Justificativa</p><p className="whitespace-pre-line">{snap.justificativa}</p></div>
-          <p><span className="text-slate-500">Forma de execução:</span> {EXECUTION_MODE[snap.formaExecucao] ?? snap.formaExecucao} · <span className="text-slate-500">Previsão:</span> {snap.inicioPrevisto ?? "—"} a {snap.terminoPrevisto ?? "—"}</p>
-          {a.requestNote && <div><p className="text-slate-500">Observação do solicitante</p><p>{a.requestNote}</p></div>}
-          <div>
-            <p className="text-slate-500">Etapas</p>
-            {snap.etapas.length ? <ul className="list-disc pl-5">{snap.etapas.map((e, i) => <li key={i}>{e.nome} ({e.progresso}%)</li>)}</ul> : <p>Nenhuma etapa.</p>}
-          </div>
+          {"resumo" in (a.snapshot as object) ? <GenericSnapshotView snap={a.snapshot as GenericSnapshot} /> : <WorkSnapshotView snap={snap} />}
+          {a.requestNote && <div><p className="text-slate-500">Observação do solicitante</p><p className="whitespace-pre-line">{a.requestNote}</p></div>}
           <div>
             <p className="text-slate-500">Documentos da obra</p>
             {a.documents.length ? <ul className="space-y-1">{a.documents.map((d) => <li key={d.id}>{d.title} · {d.category.name} <DocStatusBadge status={d.status} /></li>)}</ul> : <p>Nenhum documento.</p>}
@@ -71,11 +66,49 @@ export default async function ApprovalPage({ params }: { params: Promise<{ id: s
             </Alert>
           ) : (
             <Alert tone={a.status === "APROVADA" ? "success" : "info"} title={a.status === "APROVADA" ? "Solicitação aprovada" : `Aprovação ${APPROVAL_STATUS[a.status]?.toLowerCase()}`}>
-              Decisão aplicada à obra em {a.decidedAt ? formatDateTime(a.decidedAt) : "—"}.
+              Decisão registrada em {a.decidedAt ? formatDateTime(a.decidedAt) : "—"}.
             </Alert>
           )}
         </section>
       </div>
     </div>
+  );
+}
+
+function WorkSnapshotView({ snap }: { snap: Snapshot }) {
+  return (
+    <>
+          <div><p className="text-slate-500">Escopo</p><p className="whitespace-pre-line">{snap.escopo}</p></div>
+          <div><p className="text-slate-500">Justificativa</p><p className="whitespace-pre-line">{snap.justificativa}</p></div>
+          <p><span className="text-slate-500">Forma de execução:</span> {EXECUTION_MODE[snap.formaExecucao] ?? snap.formaExecucao} · <span className="text-slate-500">Previsão:</span> {snap.inicioPrevisto ?? "—"} a {snap.terminoPrevisto ?? "—"}</p>
+          <div>
+            <p className="text-slate-500">Etapas</p>
+            {snap.etapas.length ? <ul className="list-disc pl-5">{snap.etapas.map((e, i) => <li key={i}>{e.nome} ({e.progresso}%)</li>)}</ul> : <p>Nenhuma etapa.</p>}
+          </div>
+    </>
+  );
+}
+
+/** Solicitações vinculadas a orçamento, medição, despesa ou mudança de escopo. */
+function GenericSnapshotView({ snap }: { snap: GenericSnapshot }) {
+  return (
+    <>
+      <p className="font-medium">{snap.titulo}</p>
+      <dl className="space-y-2">
+        {snap.resumo.map(([k, v]) => (
+          <div key={k}><dt className="text-slate-500">{k}</dt><dd className="whitespace-pre-line">{v}</dd></div>
+        ))}
+      </dl>
+      {snap.linhas && snap.linhas.valores.length > 0 && (
+        <div className="overflow-x-auto">
+          <table className="table-base">
+            <thead><tr>{snap.linhas.colunas.map((c) => <th key={c}>{c}</th>)}</tr></thead>
+            <tbody className="divide-y divide-slate-100">
+              {snap.linhas.valores.map((row, i) => <tr key={i}>{row.map((v, j) => <td key={j}>{v}</td>)}</tr>)}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </>
   );
 }
