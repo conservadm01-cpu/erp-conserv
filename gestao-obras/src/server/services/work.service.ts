@@ -190,6 +190,11 @@ export async function transitionWork(actor: Actor, id: string, input: { action: 
     throw Errors.invalid("Informe a justificativa (mínimo de 10 caracteres).", { reason: ["Justificativa obrigatória."] });
   }
   if (work.version !== input.version) throw Errors.conflict("A obra foi alterada por outra pessoa. Recarregue a página e tente novamente.");
+  if (["iniciar_execucao", "retomar", "enviar_vistoria"].includes(t.action)) {
+    const { blockingActions } = await import("./safety.service");
+    const open = await blockingActions(prisma, work.id);
+    if (open.length) throw Errors.conflict(`Há ${open.length} ação(ões) corretiva(s) de criticidade que impede(m) o avanço: ${open.map((a) => a.title).join("; ")}.`);
+  }
   if (t.checkpoint) {
     const issues = await blockingIssues(prisma, work.id, t.checkpoint);
     if (issues.length) {

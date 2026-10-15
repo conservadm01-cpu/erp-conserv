@@ -61,7 +61,14 @@ export async function listInbox(actor: Actor) {
     reviewScope
       ? prisma.document.findMany({
           where: { AND: [reviewScope, { status: { in: ["ENVIADO", "EM_REVISAO"] } }] },
-          include: { work: { select: { id: true, code: true, title: true } }, category: { select: { name: true } }, versions: { where: { supersededAt: null }, select: { uploadedById: true } } },
+          include: {
+            work: { select: { id: true, code: true, title: true } },
+            person: { select: { id: true, name: true } },
+            company: { select: { id: true, legalName: true } },
+            equipment: { select: { id: true, name: true } },
+            category: { select: { name: true } },
+            versions: { where: { supersededAt: null }, select: { uploadedById: true } },
+          },
           orderBy: { createdAt: "asc" },
         })
       : [],

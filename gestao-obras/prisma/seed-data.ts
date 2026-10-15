@@ -30,6 +30,20 @@ export const ROLES: { code: string; name: string; description: string; requiresM
       "dashboard.view", "org.read", "org.manage", "user.read", "user.manage", "role.read", "audit.read",
       "work.read", "work.create", "work.manage", "work.transition", "document.read", "document.upload",
       "requirement.read", "requirement.evaluate", "report.generate",
+      "person.read", "person.manage", "company.read", "company.manage", "contract.manage", "epi.read", "epi.stock",
+      "equipment.read", "equipment.manage", "safety.read", "safety.inspect", "safety.action",
+    ],
+  },
+  {
+    code: "TECNICO_SEGURANCA",
+    name: "Técnico de segurança",
+    description: "Realiza inspeções, acompanha riscos, incidentes e ações corretivas e valida encerramentos.",
+    requiresMfa: true,
+    isSystem: false,
+    permissions: [
+      "dashboard.view", "org.read", "work.read", "document.read", "document.upload", "requirement.read",
+      "person.read", "epi.read", "epi.stock", "equipment.read", "equipment.manage",
+      "safety.read", "safety.inspect", "safety.action", "safety.validate", "report.generate",
     ],
   },
   {
@@ -41,6 +55,7 @@ export const ROLES: { code: string; name: string; description: string; requiresM
     permissions: [
       "dashboard.view", "org.read", "work.read", "document.read", "document.review", "requirement.read",
       "requirement.evaluate", "requirement.waive", "approval.decide", "report.generate",
+      "person.read", "company.read", "epi.read", "equipment.read", "safety.read", "safety.validate",
     ],
   },
   {
@@ -49,7 +64,7 @@ export const ROLES: { code: string; name: string; description: string; requiresM
     description: "Acompanha uma obra específica: etapas, documentos e requisitos. Atribuído por obra.",
     requiresMfa: false,
     isSystem: false,
-    permissions: ["work.read", "work.manage", "document.read", "document.upload", "requirement.read", "report.generate"],
+    permissions: ["work.read", "work.manage", "document.read", "document.upload", "requirement.read", "report.generate", "safety.read", "safety.action"],
   },
   {
     code: "AUDITOR",
@@ -57,7 +72,10 @@ export const ROLES: { code: string; name: string; description: string; requiresM
     description: "Consulta a trilha de auditoria e a estrutura, sem alterar dados.",
     requiresMfa: true,
     isSystem: false,
-    permissions: ["dashboard.view", "org.read", "user.read", "role.read", "audit.read", "work.read", "document.read", "requirement.read", "report.generate"],
+    permissions: [
+      "dashboard.view", "org.read", "user.read", "role.read", "audit.read", "work.read", "document.read", "requirement.read", "report.generate",
+      "person.read", "company.read", "epi.read", "equipment.read", "safety.read",
+    ],
   },
   {
     code: "CONSULTA",
@@ -65,7 +83,7 @@ export const ROLES: { code: string; name: string; description: string; requiresM
     description: "Visualiza o painel, a estrutura e as obras da sua unidade.",
     requiresMfa: false,
     isSystem: false,
-    permissions: ["dashboard.view", "org.read", "work.read", "document.read", "requirement.read"],
+    permissions: ["dashboard.view", "org.read", "work.read", "document.read", "requirement.read", "safety.read"],
   },
 ];
 
@@ -139,4 +157,37 @@ export const REQUIREMENT_RULES = [
   nr("NR-18", "NR-18 — Segurança e saúde no trabalho na indústria da construção", ["CONSTRUCAO_CIVIL", "DEMOLICAO"], "Documentação de gestão de segurança aplicável ao canteiro", { category: "ANALISE_RISCO" }),
   nr("NR-33", "NR-33 — Segurança e saúde nos trabalhos em espaços confinados", ["ESPACO_CONFINADO"], "Permissão de entrada e capacitação para espaço confinado", { category: "ANALISE_RISCO" }),
   nr("NR-35", "NR-35 — Trabalho em altura", ["TRABALHO_ALTURA"], "Análise de risco e evidência de capacitação para trabalho em altura", { category: "TREINAMENTO" }),
+];
+
+/** Critérios de criticidade iniciais (técnicos, ajustáveis na configuração). */
+export const CRITICALITY_LEVELS = [
+  { code: "BAIXA", name: "Baixa", rank: 1, responseDays: 30, priorityAlert: false, blocksProgress: false },
+  { code: "MEDIA", name: "Média", rank: 2, responseDays: 15, priorityAlert: false, blocksProgress: false },
+  { code: "ALTA", name: "Alta", rank: 3, responseDays: 5, priorityAlert: true, blocksProgress: false },
+  { code: "CRITICA", name: "Crítica", rank: 4, responseDays: 1, priorityAlert: true, blocksProgress: true },
+];
+
+/** Checklist de exemplo (genérico, sem citar exigências normativas específicas). */
+export const CHECKLIST_TEMPLATES = [
+  {
+    name: "Inspeção geral de canteiro (exemplo)",
+    workTypes: [] as string[],
+    items: [
+      { text: "Área de trabalho organizada e acessos desobstruídos", defaultCriticality: "MEDIA" },
+      { text: "Isolamento e sinalização da área de risco", defaultCriticality: "ALTA" },
+      { text: "Trabalhadores usando os EPIs definidos para a atividade", defaultCriticality: "ALTA" },
+      { text: "Escadas, andaimes e plataformas em bom estado", defaultCriticality: "CRITICA" },
+      { text: "Instalações elétricas provisórias protegidas", defaultCriticality: "CRITICA" },
+      { text: "Extintores acessíveis e dentro da validade", defaultCriticality: "MEDIA" },
+      { text: "Instalações sanitárias e água potável disponíveis", defaultCriticality: "MEDIA" },
+      { text: "Materiais armazenados de forma estável", defaultCriticality: "BAIXA" },
+    ],
+  },
+];
+
+/** EPIs fictícios para demonstração (CA e fabricantes inventados, marcados como exemplo). */
+export const DEMO_EPIS = [
+  { name: "Capacete de segurança (exemplo)", epiType: "Proteção da cabeça", manufacturer: "Fabricante Exemplo", caNumber: "00000", minStock: 10, indicatedFor: ["CONSTRUCAO_CIVIL"] },
+  { name: "Cinto tipo paraquedista (exemplo)", epiType: "Proteção contra quedas", manufacturer: "Fabricante Exemplo", caNumber: "00001", minStock: 4, indicatedFor: ["TRABALHO_ALTURA"] },
+  { name: "Luva de raspa (exemplo)", epiType: "Proteção das mãos", manufacturer: "Fabricante Exemplo", caNumber: "00002", minStock: 20, indicatedFor: ["CONSTRUCAO_CIVIL", "DEMOLICAO"] },
 ];

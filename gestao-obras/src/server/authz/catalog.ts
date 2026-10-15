@@ -25,6 +25,21 @@ export const PERMISSIONS = {
   "approval.decide": { module: "Aprovações", description: "Decidir aprovações de obras" },
   "approval.policy.manage": { module: "Aprovações", description: "Configurar fluxos e alçadas de aprovação (somente na raiz)" },
   "report.generate": { module: "Relatórios", description: "Gerar relatórios em PDF" },
+  "person.read": { module: "Pessoas", description: "Consultar profissionais, voluntários e demais pessoas" },
+  "person.manage": { module: "Pessoas", description: "Cadastrar pessoas, qualificações e vínculos com obras" },
+  "company.read": { module: "Empresas", description: "Consultar empresas e contratos" },
+  "company.manage": { module: "Empresas", description: "Cadastrar empresas e registrar conferência cadastral" },
+  "contract.manage": { module: "Empresas", description: "Cadastrar contratos, aditivos e ordens de serviço" },
+  "epi.read": { module: "EPIs", description: "Consultar catálogo, estoque e entregas de EPI" },
+  "epi.stock": { module: "EPIs", description: "Movimentar estoque e registrar entregas e devoluções de EPI" },
+  "epi.manage": { module: "EPIs", description: "Manter o catálogo de EPIs (somente na raiz)" },
+  "equipment.read": { module: "Equipamentos", description: "Consultar ferramentas e equipamentos" },
+  "equipment.manage": { module: "Equipamentos", description: "Cadastrar equipamentos e registrar inspeções e manutenções" },
+  "safety.read": { module: "Segurança", description: "Consultar inspeções, riscos, incidentes e ações corretivas" },
+  "safety.inspect": { module: "Segurança", description: "Realizar inspeções e registrar riscos e incidentes" },
+  "safety.action": { module: "Segurança", description: "Criar ações corretivas e registrar evidências de correção" },
+  "safety.validate": { module: "Segurança", description: "Validar o encerramento de ações corretivas" },
+  "safety.config": { module: "Segurança", description: "Configurar checklists e critérios de criticidade (somente na raiz)" },
 } as const;
 
 export type PermissionCode = keyof typeof PERMISSIONS;

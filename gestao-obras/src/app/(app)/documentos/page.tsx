@@ -4,6 +4,7 @@ import { requirePageActor } from "@/server/auth/page-context";
 import { canAnywhere } from "@/server/authz/authorize";
 import { listCategories, searchDocuments } from "@/server/services/document.service";
 import { documentSearchQuery } from "@/server/validation/document";
+import { ownerInfo } from "@/server/services/document.service";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { Forbidden } from "@/components/Forbidden";
 import { EmptyState } from "@/components/ui/EmptyState";
@@ -49,12 +50,12 @@ export default async function DocumentsPage({ searchParams }: { searchParams: Pr
       ) : (
         <div className="card overflow-x-auto">
           <table className="table-base">
-            <thead><tr><th>Documento</th><th>Obra</th><th>Categoria</th><th>Versão</th><th>Validade</th><th>Situação</th></tr></thead>
+            <thead><tr><th>Documento</th><th>Vinculado a</th><th>Categoria</th><th>Versão</th><th>Validade</th><th>Situação</th></tr></thead>
             <tbody className="divide-y divide-slate-100">
               {docs.map((d) => (
                 <tr key={d.id}>
                   <td className="font-medium">{d.title}{d.documentNumber ? <span className="block text-xs text-slate-500">nº {d.documentNumber}</span> : null}</td>
-                  <td><Link href={`/obras/${d.work.id}?aba=documentos`} className="text-brand-700 hover:underline">{d.work.code}</Link><span className="block text-xs text-slate-500">{d.work.title}</span></td>
+                  <td><span className="block text-xs text-slate-500">{ownerInfo(d).kind}</span><Link href={ownerInfo(d).href} className="text-brand-700 hover:underline">{ownerInfo(d).label}</Link></td>
                   <td>{d.category.name}</td>
                   <td>v{d.versions[0]?.versionNo ?? "—"}</td>
                   <td className="whitespace-nowrap">{formatDay(d.expiryDate)}</td>

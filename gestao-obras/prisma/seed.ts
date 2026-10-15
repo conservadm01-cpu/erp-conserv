@@ -12,7 +12,7 @@ import { hashPassword, passwordPolicyIssues } from "../src/server/auth/password"
 import { PERMISSIONS } from "../src/server/authz/catalog";
 import { recordAudit } from "../src/server/audit/audit";
 import { systemMeta } from "../src/server/http/request-meta";
-import { ACTIVITY_TYPES, APPROVAL_POLICIES, DOCUMENT_CATEGORIES, ORG_UNIT_TYPES, REQUIREMENT_RULES, ROLES, WORK_TYPES } from "./seed-data";
+import { ACTIVITY_TYPES, APPROVAL_POLICIES, CHECKLIST_TEMPLATES, CRITICALITY_LEVELS, DEMO_EPIS, DOCUMENT_CATEGORIES, ORG_UNIT_TYPES, REQUIREMENT_RULES, ROLES, WORK_TYPES } from "./seed-data";
 
 const prisma = new PrismaClient();
 export const DEMO_PASSWORD = "Demo@Obras2026!";
@@ -43,6 +43,12 @@ async function seedBase(mode: string) {
   for (const p of APPROVAL_POLICIES) await prisma.approvalPolicy.upsert({ where: { kind: p.kind }, update: {}, create: p });
   // Regras de requisito: criadas uma única vez; alterações posteriores são feitas pela tela de configuração.
   for (const r of REQUIREMENT_RULES) await prisma.requirementRule.upsert({ where: { code: r.code }, update: {}, create: r });
+  for (const c of CRITICALITY_LEVELS) await prisma.criticalityLevel.upsert({ where: { code: c.code }, update: {}, create: c });
+  for (const t of CHECKLIST_TEMPLATES) {
+    if (!(await prisma.checklistTemplate.findFirst({ where: { name: t.name } }))) {
+      await prisma.checklistTemplate.create({ data: { name: t.name, workTypes: t.workTypes, items: { create: t.items.map((i, n) => ({ ...i, sortOrder: n })) } } });
+    }
+  }
   let root = await prisma.organizationUnit.findFirst({ where: { depth: 0 } });
   if (!root) {
     const id = randomUUID();
@@ -96,11 +102,15 @@ async function seedDemo(root: { id: string; path: string; depth: number }) {
     { email: "gestor.sul@exemplo.test", name: "Gestor Sul Demonstração", unit: sul, role: "GESTOR_REGIONAL" },
     { email: "auditor@exemplo.test", name: "Auditor Demonstração", unit: root, role: "AUDITOR" },
     { email: "analista@exemplo.test", name: "Analista Central Demonstração", unit: root, role: "ANALISTA_CENTRAL" },
+    { email: "seguranca.norte@exemplo.test", name: "Técnico de Segurança Norte Demonstração", unit: norte, role: "TECNICO_SEGURANCA" },
     { email: "consulta.alfa@exemplo.test", name: "Consulta Alfa Demonstração", unit: alfa, role: "CONSULTA" },
   ];
   for (const u of users) {
     const user = await ensureUser({ email: u.email, name: u.name, password: DEMO_PASSWORD, homeUnitId: u.unit.id, mustChangePassword: false });
     await grant(user.id, u.role, u.unit.id);
+  }
+  for (const e of DEMO_EPIS) {
+    if (!(await prisma.epiCatalog.findFirst({ where: { name: e.name } }))) await prisma.epiCatalog.create({ data: e });
   }
   return users.map((u) => `${u.email} (${u.role})`);
 }

@@ -4,7 +4,8 @@ import type { Prisma } from "@prisma/client";
 import { prisma, type Db } from "../db";
 import { env } from "../env";
 import { recordAudit } from "../audit/audit";
-import { assertCanOnWork, canOnWork, workScopedWhere, type Actor } from "../authz/authorize";
+import { assertCanOnWork, can, canOnWork, workScopedWhere, type Actor } from "../authz/authorize";
+import type { PermissionCode } from "../authz/catalog";
 import { Errors } from "../http/errors";
 import type { RequestMeta } from "../http/request-meta";
 import { getStorage } from "../storage/storage";
@@ -27,8 +28,60 @@ function checkFile(file: UploadedFile) {
   return { mime, fileName: sanitizeFileName(file.name, mime), sha256: createHash("sha256").update(file.bytes).digest("hex") };
 }
 
-function storageKey(workId: string) {
-  return `obras/${workId}/${randomUUID()}`;
+function storageKey(prefix: string) {
+  return `${prefix}/${randomUUID()}`;
+}
+
+/** Permissão sobre um documento: pela obra (inclui escopo de obra) ou pela unidade do dono. */
+export function canOnDocument(actor: Actor, permission: PermissionCode, doc: { unitPath: string; work: { id: string; unitPath: string } | null }) {
+  return doc.work ? canOnWork(actor, permission, doc.work) : can(actor, permission, doc.unitPath);
+}
+
+export type DocumentOwner = { kind: "work" | "person" | "company" | "equipment"; id: string };
+
+const ownerInclude = {
+  work: { select: { id: true, code: true, title: true } },
+  person: { select: { id: true, name: true } },
+  company: { select: { id: true, legalName: true } },
+  equipment: { select: { id: true, name: true } },
+} as const;
+
+/** Rótulo e link do dono, para listagens. */
+export function ownerInfo(d: { work: { id: string; code: string; title: string } | null; person: { id: string; name: string } | null; company: { id: string; legalName: string } | null; equipment: { id: string; name: string } | null }) {
+  if (d.work) return { label: `${d.work.code} — ${d.work.title}`, href: `/obras/${d.work.id}?aba=documentos`, kind: "Obra" };
+  if (d.person) return { label: d.person.name, href: `/pessoas/${d.person.id}`, kind: "Pessoa" };
+  if (d.company) return { label: d.company.legalName, href: `/empresas/${d.company.id}`, kind: "Empresa" };
+  if (d.equipment) return { label: d.equipment.name, href: `/equipamentos/${d.equipment.id}`, kind: "Equipamento" };
+  return { label: "—", href: "#", kind: "—" };
+}
+
+async function resolveOwner(actor: Actor, owner: DocumentOwner) {
+  const notFound = () => Errors.notFound(owner.kind === "work" ? "Obra" : "Registro");
+  if (owner.kind === "work") {
+    const work = await prisma.work.findUnique({ where: { id: owner.id } });
+    if (!work || !canOnWork(actor, "document.read", work)) throw notFound();
+    assertCanOnWork(actor, "document.upload", work, "Você não pode enviar documentos para esta obra.");
+    if (work.status === "ARQUIVADA") throw Errors.conflict("Obras arquivadas não recebem documentos.");
+    return { unitPath: work.unitPath, link: { workId: work.id }, label: work.code, work };
+  }
+  const rec =
+    owner.kind === "person"
+      ? await prisma.person.findUnique({ where: { id: owner.id }, select: { unitPath: true, name: true, status: true } })
+      : owner.kind === "company"
+        ? await prisma.company.findUnique({ where: { id: owner.id }, select: { unitPath: true, legalName: true, status: true } })
+        : await prisma.equipment.findUnique({ where: { id: owner.id }, select: { unitPath: true, name: true, status: true } });
+  if (!rec || !can(actor, "document.read", rec.unitPath)) throw notFound();
+  if (!can(actor, "document.upload", rec.unitPath)) throw Errors.forbidden("Você não pode enviar documentos para este registro.");
+  const label = "name" in rec ? rec.name : "legalName" in rec ? rec.legalName : "";
+  const link = owner.kind === "person" ? { personId: owner.id } : owner.kind === "company" ? { companyId: owner.id } : { equipmentId: owner.id };
+  return { unitPath: rec.unitPath, link, label, work: null };
+}
+
+export async function listOwnerDocuments(actor: Actor, owner: Exclude<DocumentOwner["kind"], "work">, id: string, unitPath: string) {
+  if (!can(actor, "document.read", unitPath)) return [];
+  const where = owner === "person" ? { personId: id } : owner === "company" ? { companyId: id } : { equipmentId: id };
+  await markExpiredDocuments(prisma, where);
+  return prisma.document.findMany({ where, include: { category: true, versions: { orderBy: { versionNo: "desc" } } }, orderBy: { createdAt: "asc" } });
 }
 
 /** Marca como vencidos os documentos aprovados com validade expirada. Retorna quantos mudaram. */
@@ -39,7 +92,7 @@ export async function markExpiredDocuments(db: Db = prisma, filter: Prisma.Docum
 
 async function loadDocument(actor: Actor, id: string) {
   const doc = await prisma.document.findUnique({ where: { id }, include: { work: true } });
-  if (!doc || !canOnWork(actor, "document.read", doc.work)) throw Errors.notFound("Documento");
+  if (!doc || !canOnDocument(actor, "document.read", doc)) throw Errors.notFound("Documento");
   return doc;
 }
 
@@ -76,33 +129,34 @@ export async function searchDocuments(actor: Actor, q: { q?: string; status?: Pr
           : {},
       ],
     },
-    include: { category: { select: { name: true } }, work: { select: { id: true, code: true, title: true } }, versions: { where: { supersededAt: null }, select: { versionNo: true } } },
+    include: { category: { select: { name: true } }, ...ownerInclude, versions: { where: { supersededAt: null }, select: { versionNo: true } } },
     orderBy: { updatedAt: "desc" },
     take: 300,
   });
 }
 
 export async function uploadDocument(actor: Actor, workId: string, metaIn: DocumentMeta, file: UploadedFile, meta: RequestMeta) {
-  const work = await prisma.work.findUnique({ where: { id: workId } });
-  if (!work || !canOnWork(actor, "document.read", work)) throw Errors.notFound("Obra");
-  assertCanOnWork(actor, "document.upload", work, "Você não pode enviar documentos para esta obra.");
-  if (work.status === "ARQUIVADA") throw Errors.conflict("Obras arquivadas não recebem documentos.");
+  return uploadOwnedDocument(actor, { kind: "work", id: workId }, metaIn, file, meta);
+}
+
+export async function uploadOwnedDocument(actor: Actor, owner: DocumentOwner, metaIn: DocumentMeta, file: UploadedFile, meta: RequestMeta) {
+  const target = await resolveOwner(actor, owner);
   const category = await prisma.documentCategory.findUnique({ where: { code: metaIn.categoryCode } });
   if (!category || !category.active) throw Errors.invalid("Categoria inválida.", { categoryCode: ["Selecione uma categoria."] });
   if (category.requiresExpiry && !metaIn.expiryDate) throw Errors.invalid("Esta categoria exige data de validade.", { expiryDate: ["Informe a validade."] });
   const info = checkFile(file);
-  const key = storageKey(work.id);
+  const key = storageKey(`${owner.kind}/${owner.id}`);
   await getStorage().put(key, file.bytes, info.mime);
   try {
     return await prisma.$transaction(async (tx) => {
       const doc = await tx.document.create({
-        data: { ...metaIn, workId: work.id, unitPath: work.unitPath, createdById: actor.userId, status: "ENVIADO" },
+        data: { ...metaIn, ...target.link, unitPath: target.unitPath, createdById: actor.userId, status: "ENVIADO" },
       });
       await tx.documentVersion.create({
         data: { documentId: doc.id, versionNo: 1, storageKey: key, fileName: info.fileName, mimeType: info.mime, sizeBytes: file.bytes.length, sha256: info.sha256, uploadedById: actor.userId },
       });
       await recordAudit(
-        { action: "documento.enviado", actor: auditActor(actor), objectType: "Document", objectId: doc.id, unitPath: work.unitPath, metadata: { obra: work.code, titulo: doc.title, categoria: doc.categoryCode, sha256: info.sha256, bytes: file.bytes.length } },
+        { action: "documento.enviado", actor: auditActor(actor), objectType: "Document", objectId: doc.id, unitPath: target.unitPath, metadata: { dono: owner.kind, referencia: target.label, titulo: doc.title, categoria: doc.categoryCode, sha256: info.sha256, bytes: file.bytes.length } },
         meta,
         tx,
       );
@@ -117,10 +171,10 @@ export async function uploadDocument(actor: Actor, workId: string, metaIn: Docum
 
 export async function addDocumentVersion(actor: Actor, documentId: string, input: { changeNote: string; expiryDate: Date | null }, file: UploadedFile, meta: RequestMeta) {
   const doc = await loadDocument(actor, documentId);
-  assertCanOnWork(actor, "document.upload", doc.work, "Você não pode substituir documentos desta obra.");
-  if (doc.work.status === "ARQUIVADA") throw Errors.conflict("Obras arquivadas não recebem documentos.");
+  if (!canOnDocument(actor, "document.upload", doc)) throw Errors.forbidden("Você não pode substituir este documento.");
+  if (doc.work?.status === "ARQUIVADA") throw Errors.conflict("Obras arquivadas não recebem documentos.");
   const info = checkFile(file);
-  const key = storageKey(doc.workId);
+  const key = storageKey(doc.workId ? `work/${doc.workId}` : `doc/${doc.id}`);
   await getStorage().put(key, file.bytes, info.mime);
   try {
     return await prisma.$transaction(async (tx) => {
@@ -136,7 +190,7 @@ export async function addDocumentVersion(actor: Actor, documentId: string, input
         data: { status: "ENVIADO", reviewerNote: null, reviewedAt: null, reviewedById: null, ...(input.expiryDate ? { expiryDate: input.expiryDate } : {}) },
       });
       await recordAudit(
-        { action: "documento.substituido", actor: auditActor(actor), objectType: "Document", objectId: documentId, unitPath: doc.unitPath, metadata: { obra: doc.work.code, versao: versionNo, versaoAnterior: current?.versionNo, motivo: input.changeNote, sha256: info.sha256 } },
+        { action: "documento.substituido", actor: auditActor(actor), objectType: "Document", objectId: documentId, unitPath: doc.unitPath, metadata: { obra: doc.work?.code, versao: versionNo, versaoAnterior: current?.versionNo, motivo: input.changeNote, sha256: info.sha256 } },
         meta,
         tx,
       );
@@ -150,7 +204,7 @@ export async function addDocumentVersion(actor: Actor, documentId: string, input
 
 export async function reviewDocument(actor: Actor, documentId: string, input: { decision: "INICIAR" | "APROVAR" | "REJEITAR"; note?: string | null }, meta: RequestMeta) {
   const doc = await loadDocument(actor, documentId);
-  assertCanOnWork(actor, "document.review", doc.work, "Você não pode analisar documentos desta obra.");
+  if (!canOnDocument(actor, "document.review", doc)) throw Errors.forbidden("Você não pode analisar este documento.");
   const current = await prisma.documentVersion.findFirst({ where: { documentId, supersededAt: null }, orderBy: { versionNo: "desc" } });
   if (current?.uploadedById === actor.userId) throw Errors.forbidden("Por segregação de funções, quem enviou o arquivo não pode analisá-lo.");
   if (input.decision === "INICIAR" && doc.status !== "ENVIADO") throw Errors.conflict("Somente documentos enviados podem entrar em análise.");
@@ -164,7 +218,7 @@ export async function reviewDocument(actor: Actor, documentId: string, input: { 
     });
     if (changed.count !== 1) throw Errors.conflict("O documento foi alterado por outra pessoa. Recarregue a página.");
     await recordAudit(
-      { action: `documento.analise.${input.decision.toLowerCase()}`, actor: auditActor(actor), objectType: "Document", objectId: documentId, unitPath: doc.unitPath, metadata: { obra: doc.work.code, de: doc.status, para: status, versao: current?.versionNo, parecer: input.note ?? undefined } },
+      { action: `documento.analise.${input.decision.toLowerCase()}`, actor: auditActor(actor), objectType: "Document", objectId: documentId, unitPath: doc.unitPath, metadata: { obra: doc.work?.code, de: doc.status, para: status, versao: current?.versionNo, parecer: input.note ?? undefined } },
       meta,
       tx,
     );
@@ -180,7 +234,7 @@ export async function requestDownload(actor: Actor, documentId: string, versionI
   if (!version) throw Errors.notFound("Versão");
   const url = await getStorage().downloadUrl({ key: version.storageKey, fileName: version.fileName, mimeType: version.mimeType, userId: actor.userId });
   await recordAudit(
-    { action: "documento.download", actor: auditActor(actor), objectType: "DocumentVersion", objectId: version.id, unitPath: doc.unitPath, metadata: { obra: doc.work.code, documento: doc.title, versao: version.versionNo } },
+    { action: "documento.download", actor: auditActor(actor), objectType: "DocumentVersion", objectId: version.id, unitPath: doc.unitPath, metadata: { obra: doc.work?.code, documento: doc.title, versao: version.versionNo } },
     meta,
   );
   return { url, expiresInSeconds: env().DOWNLOAD_URL_TTL_SECONDS };
