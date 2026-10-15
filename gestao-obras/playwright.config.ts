@@ -13,7 +13,7 @@ export default defineConfig({
   reporter: [["list"]],
   use: { baseURL: `http://localhost:${PORT}`, trace: "retain-on-failure", locale: "pt-BR" },
   projects: [
-    { name: "desktop", use: { ...devices["Desktop Chrome"] } },
+    { name: "desktop", use: { ...devices["Desktop Chrome"] }, testIgnore: /responsivo\.spec\.ts/ },
     { name: "celular", use: { ...devices["Pixel 7"] }, testMatch: /responsivo\.spec\.ts/ },
   ],
   webServer: {

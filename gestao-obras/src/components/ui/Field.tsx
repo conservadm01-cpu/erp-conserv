@@ -29,7 +29,7 @@ export function TextField({ label, error, hint, className = "", ...rest }: Commo
     <div className={className}>
       <label htmlFor={id} className="label">
         {label}
-        {rest.required && <span className="text-red-600"> *</span>}
+        {rest.required && <span className="text-red-600" aria-hidden="true"> *</span>}
       </label>
       <input id={id} className="input" aria-invalid={has || undefined} aria-describedby={describedBy} {...rest} />
       {hint && <p id={`${id}-hint`} className="mt-1 text-xs text-slate-500">{hint}</p>}
@@ -44,7 +44,7 @@ export function SelectField({ label, error, hint, className = "", children, ...r
     <div className={className}>
       <label htmlFor={id} className="label">
         {label}
-        {rest.required && <span className="text-red-600"> *</span>}
+        {rest.required && <span className="text-red-600" aria-hidden="true"> *</span>}
       </label>
       <select id={id} className="input" aria-invalid={has || undefined} aria-describedby={describedBy} {...rest}>
         {children}
@@ -61,7 +61,7 @@ export function TextAreaField({ label, error, hint, className = "", ...rest }: C
     <div className={className}>
       <label htmlFor={id} className="label">
         {label}
-        {rest.required && <span className="text-red-600"> *</span>}
+        {rest.required && <span className="text-red-600" aria-hidden="true"> *</span>}
       </label>
       <textarea id={id} className="input" aria-invalid={has || undefined} aria-describedby={describedBy} {...rest} />
       {hint && <p id={`${id}-hint`} className="mt-1 text-xs text-slate-500">{hint}</p>}
