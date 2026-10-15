@@ -1,4 +1,4 @@
-# Segurança — controles implementados (Fase 1)
+# Segurança — controles implementados
 
 | Controle | Como foi implementado | Onde |
 | --- | --- | --- |
@@ -17,7 +17,10 @@
 | Redirecionamento aberto | `next` após login só aceita caminhos internos | `lib/api.ts` (`safeNext`) |
 | Erros | Mensagens padronizadas sem stack trace; `correlationId` em toda resposta e log | `http/handler.ts` |
 | Segredos | Somente por variáveis de ambiente; aplicação recusa iniciar em produção sem `APP_ENCRYPTION_KEY` | `server/env.ts` |
-| Auditoria | Append-only (trigger), cadeia de hash, higienização de metadados sensíveis, consulta à trilha também auditada | `server/audit` |
+| Auditoria | Append-only (trigger), cadeia de hash, higienização de metadados sensíveis, consulta à trilha também auditada; `npm run audit:anchor` gera o registro do último hash para ancoragem externa | `server/audit`, `scripts/audit-anchor.ts` |
+| Arquivos | Tipo verificado pelo conteúdo, nome higienizado, armazenamento privado, download por token HMAC temporário vinculado ao usuário | `server/storage` |
+| Segregação financeira | Orçamento, medição, despesa comprometida e mudança de escopo só valem após aprovação central; solicitante não decide; alçadas por valor sem limites pré-definidos | `services/approval*.ts`, `services/budget.service.ts` |
+| Varredura automatizada | Teste de integração percorre as rotas reais: escrita sem `Origin` válido é recusada, rotas protegidas exigem sessão e recursos de outra região respondem 404 | `tests/integration/security-sweep.test.ts` |
 
 ## Limitações conhecidas / próximos passos
 
@@ -26,5 +29,5 @@
 - `TRUST_PROXY=true` só atrás de proxy confiável, senão o IP pode ser forjado.
 - Criptografia em repouso do banco e dos backups depende da infraestrutura
   (disco/volume cifrado, backups cifrados) — ver `implantacao.md`.
-- Ancoragem externa periódica do último hash de auditoria (Fase 4).
-- Testes de segurança automatizados adicionais (DAST) previstos para a Fase 4.
+- A publicação externa do registro de ancoragem é um passo operacional (ver `implantacao.md`).
+- Recomenda-se um teste de intrusão/DAST independente antes do uso com dados reais.

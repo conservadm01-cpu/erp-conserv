@@ -4,7 +4,7 @@ import { MemoryStorage, setStorage } from "@/server/storage/storage";
 import { createStage, createWork, transitionWork } from "@/server/services/work.service";
 import { decideApproval, replaceTiers } from "@/server/services/approval.service";
 import { addDiaryEntry, createBaseline, hasCycle, requestScopeChange, saveMilestone, updateStageSchedule } from "@/server/services/schedule.service";
-import { addCost, budgetSummary, createBudget, saveBudgetLine, saveMeasurement, submitBudget, submitMeasurement } from "@/server/services/budget.service";
+import { addCost, budgetOverview, budgetSummary, getWorkBudget, createBudget, saveBudgetLine, saveMeasurement, submitBudget, submitMeasurement } from "@/server/services/budget.service";
 import { applyRetention, closePrivacyRequest, exportSubjectData, openPrivacyRequest } from "@/server/services/privacy.service";
 import { createPerson } from "@/server/services/people.service";
 import { updateSetting } from "@/server/services/settings.service";
@@ -143,6 +143,17 @@ describe("orçamento, despesas e medições", () => {
     const w = await approvedWork();
     await expect(saveMeasurement(await actorOf(gestorA), w.id, null, { periodStart: new Date(), periodEnd: new Date(), items: [] } as never, meta())).rejects.toMatchObject({ status: 409 });
     await expect(createBudget(await actorOf(gestorB), w.id, { reason: "x", copyFromApproved: true }, meta())).rejects.toMatchObject({ status: 404 });
+  });
+
+  it("visão de orçamentos e opções de formulário ficam no escopo do ator", async () => {
+    const w = await approvedWork();
+    expect((await budgetOverview(await actorOf(gestorA))).some((r) => r.id === w.id)).toBe(true);
+    expect((await budgetOverview(await actorOf(gestorB))).some((r) => r.id === w.id)).toBe(false);
+    const b = await getWorkBudget(await actorOf(gestorA), w.id);
+    expect(b.canManage).toBe(true);
+    const viewer = await getWorkBudget(await actorOf(analista), w.id);
+    expect(viewer.canManage).toBe(false);
+    expect(viewer.options).toEqual({ companies: [], contracts: [] });
   });
 });
 

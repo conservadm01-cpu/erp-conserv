@@ -1,6 +1,6 @@
 # Situação do projeto — implementado × pendente
 
-Atualizado ao final da **Fase 3 (segurança e pessoas)**.
+Atualizado ao final da **Fase 4 (gestão e implantação)**. As quatro fases do plano foram implementadas; o que segue pendente está listado ao final.
 
 ## Implementado e testado
 
@@ -60,25 +60,45 @@ Atualizado ao final da **Fase 3 (segurança e pessoas)**.
 - Ações corretivas com responsável, prazo, evidência e validação por outra pessoa; não conformidades geram ações automaticamente; ações de nível bloqueante impedem iniciar, retomar ou enviar a obra para vistoria.
 - Central de notificações com contador no cabeçalho; alertas por e-mail via adaptador.
 
+### Fase 4 — Gestão e implantação (telas 3, 9, 17, 18, 19 e 21)
+- Cronograma: gráfico de Gantt (previsto × realizado), dependências entre etapas com detecção de ciclo, motivo de atraso, marcos, linhas de base versionadas e desvio em dias por etapa.
+- Diário de obra somente inclusão (sem edição ou exclusão).
+- Mudança de escopo após a aprovação: sempre pela aprovação central, com escopo anterior preservado.
+- Orçamento por versões (rascunho → em aprovação → aprovado/substituído), linhas por categoria com identificador estável entre versões, cálculo exato em decimal, vínculo com contrato/aditivo.
+- Lançamentos contratados, comprometidos (passam por aprovação de despesa) e pagos (apenas registro — sem pagamento automático); cancelamento com trilha.
+- Medições sobre os itens do orçamento aprovado, com aviso quando a quantidade acumulada supera a orçada, aprovação central.
+- Resumo por categoria (orçado, contratado, comprometido, medido, pago, saldo) e alerta de desvio com percentual configurável.
+- Alçadas por valor opcionais por tipo (faixas → quantidade de decisões), sem nenhum limite pré-definido; segregação de funções preservada.
+- Aprovação central genérica para orçamento, medição, despesa e mudança de escopo, com cópia dos dados submetidos.
+- Tela de orçamentos (visão por obra) e indicadores financeiros e de segurança no painel.
+- Catálogo de relatórios em PDF (13 tipos, incluindo dossiê, resumo executivo, documentos pendentes, plano de ações, EPIs, cronograma, orçamento e medições, fotográfico, termo de vistoria, encerramento, visão consolidada por região e auditoria), sempre restritos ao escopo e auditados.
+- Parâmetros do sistema (desvio orçamentário, retenção, prazo interno de resposta a titulares), com limites e auditoria.
+- Atendimento a titulares (LGPD): registro, prazo interno, exportação dos dados em JSON, encerramento com resposta e anonimização do cadastro de pessoa.
+- Rotina diária com retenção de tentativas de login e sessões; ancoragem do hash da auditoria (`npm run audit:anchor`).
+- Varredura automatizada de segurança nas rotas reais: CSRF (Origin), autenticação obrigatória e IDOR entre regiões.
+
 ### Testes
 - Unidade: autorização, criptografia, senha, TOTP, higienização, CSRF, redirecionamento seguro, OpenAPI.
 - Integração (PostgreSQL real): isolamento entre regiões, autenticação, MFA, recuperação de senha, auditoria, papéis.
-- E2E (Playwright, build de produção): fluxos de login, CSP, isolamento na interface e na API, cadastro de MFA, criação de unidade, auditoria, anti-escalonamento, layout em celular.
+- E2E (Playwright, build de produção): fluxos de login, CSP, isolamento na interface e na API, cadastro de MFA, criação de unidade, auditoria, anti-escalonamento, ciclo da obra com aprovação e dossiê, inspeção de segurança, orçamento → aprovação → medição, diário, cronograma, relatórios, parâmetros, alçadas, privacidade e layout em celular.
+- Última execução: 109 testes de unidade/integração e 11 E2E aprovados.
 
-## Pendente (próximas fases)
+## Pendente
 
-| Fase | Itens |
+| Item | Observação |
 | --- | --- |
-| 4 — Gestão e implantação | Cronograma com linha de base e dependências; orçamento, medições e aditivos; painel consolidado com filtros; relatórios PDF completos; alçadas e fluxos configuráveis; atendimento a titulares; ancoragem externa do hash de auditoria; testes de segurança adicionais; service worker (uso offline). |
+| Uso offline (service worker) | O app é instalável (manifesto), mas não funciona sem conexão. |
+| Validação institucional | Papéis, fluxos, alçadas, criticidades e regras de NR são exemplos técnicos e seguem **pendentes de validação formal**. |
+| Ancoragem externa automática | `npm run audit:anchor` gera o registro; publicá-lo em local externo (e-mail, cartório digital, repositório) é passo operacional. |
+| Assinatura digital | Os PDFs são gerenciais; integração com assinatura qualificada não foi feita. |
+| Rate limit distribuído | O limite geral é por instância (ver `seguranca.md`). |
+| Execução do `docker-compose.yml` | Não executado no ambiente de desenvolvimento usado. |
 
-Telas da lista original ainda não implementadas: 17 (orçamentos) e 18 (medições); a tela 21 (relatórios) tem o dossiê da obra e o relatório de inspeção.
-
-## Limitações conhecidas da Fase 1
+## Limitações conhecidas
 
 - Rate limit geral em memória (por instância) — ver `seguranca.md`.
 - Instalação no celular via manifesto (PWA); sem modo offline ainda.
 - O registro de entrega de EPI e a confirmação de recebimento não substituem termo assinado; o sistema só registra como a confirmação foi feita.
 - Navegação: o indicador de carregamento aparece no link clicado (menu e abas); um `loading.tsx` por rota foi removido porque fazia o roteador descartar navegações feitas logo após outra.
-- Alçadas por valor financeiro dependem do módulo de orçamento (Fase 4).
 - O `docker-compose.yml` (incluindo o MinIO opcional) não pôde ser executado no ambiente de desenvolvimento usado; os testes rodaram com PostgreSQL local e armazenamento em memória/disco.
 - Nenhuma regra institucional ou normativa foi cadastrada: papéis de exemplo são apenas ponto de partida técnico.

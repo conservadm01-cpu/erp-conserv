@@ -24,8 +24,10 @@
 5. **Aplicação**: `docker build -t gestao-obras .` e execute com as variáveis acima,
    ou `npm ci && npx next build && npx next start`.
 6. **Proxy/HTTPS**: TLS 1.2+, HSTS (`Strict-Transport-Security: max-age=31536000; includeSubDomains`), limite de tamanho de corpo e rate limit.
-7. **Rotina diária**: agende `npm run jobs:daily` (vencimento de documentos).
-8. **Monitoramento**: `GET /api/health` para verificação de disponibilidade; coletar logs (contêm `correlationId`, sem dados sensíveis).
+7. **Rotina diária**: agende `npm run jobs:daily` (vencimentos, alertas, desvio orçamentário e retenção de tentativas de login/sessões conforme **Configurações → Parâmetros**).
+8. **Ancoragem da auditoria**: agende `npm run audit:anchor` (por exemplo, diariamente) e publique o resultado (hash do último evento) em local externo e independente — e-mail para a gestão central, repositório separado ou serviço de carimbo de tempo. Assim, uma reescrita completa da cadeia no banco é detectável.
+9. **Parâmetros e alçadas**: revise com os responsáveis autorizados os fluxos, as alçadas por valor (nenhuma vem pré-definida) e os parâmetros antes de liberar o uso.
+10. **Monitoramento**: `GET /api/health` para verificação de disponibilidade; coletar logs (contêm `correlationId`, sem dados sensíveis).
 
 ## Checklist antes de colocar dados reais
 
@@ -35,3 +37,5 @@
 - [ ] Usuário de banco da aplicação sem privilégios de DDL nem de alteração da auditoria.
 - [ ] HTTPS ativo; cookies com prefixo `__Host-` confirmados.
 - [ ] Rotina de revisão periódica de acessos definida.
+- [ ] Fluxos, alçadas por valor e prazos de resposta a titulares definidos formalmente.
+- [ ] Ancoragem externa da auditoria agendada e com destinatário definido.

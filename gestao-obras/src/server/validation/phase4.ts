@@ -74,7 +74,7 @@ export const measurementSchema = z.object({
 export const submitSchema = z.object({ note: optionalText(2000) });
 
 export const tiersSchema = z.object({
-  tiers: z.array(z.object({ upToAmount: z.union([money, z.null()]), stepsRequired: z.coerce.number().int().min(1).max(5) })).max(10),
+  tiers: z.array(z.object({ upToAmount: z.union([z.null(), money]), stepsRequired: z.coerce.number().int().min(1).max(5) })).max(10),
 });
 
 export const settingSchema = z.object({ value: z.union([z.number(), z.string().max(500), z.boolean()]) });

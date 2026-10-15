@@ -8,13 +8,15 @@ abrangência nacional, múltiplas regiões e unidades locais.
 > regra institucional é configurável e deve ser validada pelos responsáveis
 > autorizados antes do uso com dados reais.
 
-**Situação atual: Fases 1, 2 e 3 concluídas** — fundação (autenticação com MFA,
-hierarquia organizacional, permissões por escopo, auditoria imutável) e gestão
-de obras e documentos (obras com máquina de estados, etapas, repositório
-documental privado e versionado, matriz de requisitos/NRs, aprovação central e
-dossiê em PDF), além de segurança e pessoas (profissionais, voluntários,
-empresas e contratos, EPIs, equipamentos, inspeções, riscos, incidentes, ações
-corretivas e alertas). Veja o que está pronto e o que falta em
+**Situação atual: Fases 1 a 4 concluídas** — fundação (autenticação com MFA,
+hierarquia organizacional, permissões por escopo, auditoria imutável), obras e
+documentos (máquina de estados, repositório documental privado e versionado,
+matriz de requisitos/NRs, aprovação central, dossiê em PDF), segurança e pessoas
+(profissionais, voluntários, empresas, contratos, EPIs, equipamentos, inspeções,
+ações corretivas, alertas) e gestão (cronograma com linha de base, diário de
+obra, orçamento por versões, despesas, medições, alçadas por valor
+configuráveis, painel consolidado, catálogo de relatórios em PDF, atendimento a
+titulares e parâmetros). Veja o que está pronto e o que falta em
 [`docs/situacao.md`](docs/situacao.md).
 
 ## Tecnologias e versões
@@ -136,6 +138,11 @@ PostgreSQL 16 local e ajuste `DATABASE_URL`.
 2. Use os botões de situação: *Enviar solicitação → Iniciar triagem → Enviar para aprovação*.
 3. Entre como `analista@exemplo.test`, abra **Aprovações**, registre o parecer e decida.
 4. Na obra, baixe o **dossiê em PDF**.
+5. Ainda como gestor, na aba **Orçamento**, elabore o orçamento, inclua linhas e
+   submeta; o analista aprova em **Aprovações**. Depois registre uma medição e
+   lançamentos. Acompanhe em **Orçamentos** e no **Painel**.
+6. Use as abas **Cronograma** (dependências, marcos, linha de base) e **Diário**.
+7. Em **Relatórios**, gere qualquer relatório do catálogo em PDF.
 
 Por segregação de funções, quem solicita não aprova a própria solicitação, e
 quem envia um arquivo não o analisa.
@@ -153,7 +160,9 @@ Downloads usam sempre links temporários vinculados ao usuário.
 gera os alertas (documentos, qualificações, integração de segurança, inspeções e
 ações atrasadas, etapas atrasadas, obras paradas, aprovações pendentes, estoque
 de EPI e equipamentos com inspeção/manutenção vencida). Alertas e itens críticos
-também são enviados por e-mail pelo adaptador configurado.
+também são enviados por e-mail pelo adaptador configurado. A mesma rotina
+aplica a retenção configurada em **Configurações → Parâmetros** (tentativas de
+login e sessões encerradas) e o alerta de desvio orçamentário.
 Agende-a uma vez por dia (no Windows, pelo Agendador de Tarefas).
 
 ## Banco de dados e migrações

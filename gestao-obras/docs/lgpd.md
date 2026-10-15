@@ -53,8 +53,22 @@ justificativa documentada — e somente após validação jurídica.
    obrigatória e deve ser avaliada caso a caso.
 5. Registro do atendimento e resposta no prazo legal.
 
-Um módulo de atendimento a titulares com exportação dos dados está previsto
-para a Fase 4.
+O módulo **Administração → Privacidade (titulares)**, restrito à gestão central
+(permissão `privacy.manage`), implementa esse fluxo:
+
+- localização do titular (usuário ou pessoa cadastrada) por nome ou e-mail;
+- registro do pedido (tipo, canal, descrição) com prazo interno calculado a
+  partir do parâmetro `privacy.responseDays` — o prazo legal deve ser
+  confirmado pelo encarregado;
+- exportação dos dados mantidos pelo sistema em JSON (cadastro, vínculos,
+  qualificações, entregas de EPI, sessões e atividades registradas), auditada;
+- encerramento como atendida ou recusada, com resposta registrada e, para
+  pessoas cadastradas, anonimização dos dados identificadores (os registros de
+  obra e segurança permanecem sem identificar o titular);
+- a trilha de auditoria é imutável e não é alterada pela anonimização.
+
+Retenção: a rotina diária descarta tentativas de login e sessões encerradas
+mais antigas que os prazos configurados em **Configurações → Parâmetros**.
 
 ## Resposta a incidentes (procedimento proposto)
 
