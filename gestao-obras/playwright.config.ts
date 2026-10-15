@@ -11,14 +11,13 @@ export default defineConfig({
   workers: 1,
   retries: 0,
   reporter: [["list"]],
-  globalSetup: "./tests/e2e/global-setup.ts",
   use: { baseURL: `http://localhost:${PORT}`, trace: "retain-on-failure", locale: "pt-BR" },
   projects: [
     { name: "desktop", use: { ...devices["Desktop Chrome"] } },
     { name: "celular", use: { ...devices["Pixel 7"] }, testMatch: /responsivo\.spec\.ts/ },
   ],
   webServer: {
-    command: `npx next build && npx next start -p ${PORT}`,
+    command: `npx tsx tests/e2e/prepare-db.ts && npx next build && npx next start -p ${PORT}`,
     url: `http://localhost:${PORT}/api/health`,
     timeout: 240_000,
     reuseExistingServer: false,
