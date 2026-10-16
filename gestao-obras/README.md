@@ -71,6 +71,32 @@ gestao-obras/
 ├─ docker-compose.yml, Dockerfile, .env.example
 ```
 
+## Versão de teste (um comando)
+
+Para apenas experimentar o sistema, sem instalar Node.js nem configurar nada,
+basta o [Docker Desktop](https://www.docker.com/products/docker-desktop/) e o
+[Git](https://git-scm.com/download/win):
+
+```powershell
+git clone https://github.com/conservadm01-cpu/erp-conserv.git
+cd erp-conserv\gestao-obras
+powershell -ExecutionPolicy Bypass -File .\iniciar-teste.ps1
+```
+
+No Linux/macOS: `docker compose -f docker-compose.teste.yml up -d --build`.
+
+O script sobe o banco, a caixa de e-mail local e a aplicação já com os dados
+fictícios de demonstração, e abre <http://localhost:3000>. Uma faixa amarela
+indica que é a versão de teste. Os usuários estão na tabela abaixo
+(senha `Demo@Obras2026!`); os e-mails enviados pelo sistema (recuperação de
+senha, alertas) aparecem em <http://localhost:8025>. Os dados ficam guardados
+entre reinícios; para encerrar use `docker compose -f docker-compose.teste.yml down`
+e, para apagar tudo e recomeçar, acrescente `-v`.
+
+> A versão de teste gera a própria chave de criptografia e carrega dados de
+> demonstração. **Não a use com dados reais nem em produção** — para isso veja
+> [`docs/implantacao.md`](docs/implantacao.md).
+
 ## Instalação no Windows (passo a passo)
 
 1. **Instale os pré-requisitos**

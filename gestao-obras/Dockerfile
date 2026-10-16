@@ -18,6 +18,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends openssl && rm -
   && useradd --system --uid 1001 app
 ENV NODE_ENV=production NEXT_TELEMETRY_DISABLED=1 PORT=3000
 COPY --from=build --chown=app /app ./
+# Pasta de arquivos enviados (monte um volume aqui para persistir).
+RUN mkdir -p /app/.data/storage && chown -R app /app/.data
 USER app
 EXPOSE 3000
 # Aplica migrações pendentes e inicia o servidor.

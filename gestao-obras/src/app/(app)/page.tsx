@@ -56,7 +56,7 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
 
       {w && (
         <>
-          <form className="grid grid-cols-1 gap-2 sm:grid-cols-6" aria-label="Filtros do painel">
+          <form className="grid grid-cols-1 gap-2 sm:grid-cols-3 xl:grid-cols-7" aria-label="Filtros do painel">
             <div className="sm:col-span-2">
               <label className="label" htmlFor="unitId">Região / unidade</label>
               <select id="unitId" name="unitId" defaultValue={f.unitId ?? ""} className="input">
@@ -79,9 +79,9 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
               </select>
             </div>
             <div><label className="label" htmlFor="from">Cadastro de</label><input id="from" name="from" type="date" defaultValue={sp.from} className="input" /></div>
-            <div className="flex items-end gap-2">
-              <div className="flex-1"><label className="label" htmlFor="to">até</label><input id="to" name="to" type="date" defaultValue={sp.to} className="input" /></div>
-              <button className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm hover:bg-slate-50">Filtrar</button>
+            <div><label className="label" htmlFor="to">até</label><input id="to" name="to" type="date" defaultValue={sp.to} className="input" /></div>
+            <div className="flex items-end">
+              <button className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm hover:bg-slate-50">Filtrar</button>
             </div>
           </form>
 
