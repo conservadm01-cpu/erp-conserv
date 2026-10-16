@@ -1,0 +1,1662 @@
+// Esquema do banco — Fase 1 (fundação).
+// Convenções: ids UUID gerados pela aplicação, datas em UTC (timestamptz),
+// nomes de tabelas em snake_case. Registros históricos não são excluídos
+// fisicamente: usam status/inativação.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Estrutura organizacional
+// ---------------------------------------------------------------------------
+
+/// Tipos de unidade e regras de hierarquia (configuráveis).
+model OrgUnitType {
+  code               String             @id @db.VarChar(40)
+  name               String             @db.VarChar(120)
+  isRoot             Boolean            @default(false) @map("is_root")
+  allowedParentCodes String[]           @map("allowed_parent_codes")
+  sortOrder          Int                @default(0) @map("sort_order")
+  createdAt          DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt          DateTime           @updatedAt @map("updated_at") @db.Timestamptz(3)
+  units              OrganizationUnit[]
+
+  @@map("org_unit_type")
+}
+
+enum OrgUnitStatus {
+  ATIVA
+  INATIVA
+}
+
+model OrganizationUnit {
+  id                String             @id @default(uuid()) @db.Uuid
+  code              String             @unique @db.VarChar(40)
+  name              String             @db.VarChar(200)
+  typeCode          String             @map("type_code") @db.VarChar(40)
+  type              OrgUnitType        @relation(fields: [typeCode], references: [code], onDelete: Restrict)
+  parentId          String?            @map("parent_id") @db.Uuid
+  parent            OrganizationUnit?  @relation("OrgTree", fields: [parentId], references: [id], onDelete: Restrict)
+  children          OrganizationUnit[] @relation("OrgTree")
+  /// Caminho materializado: "/<id raiz>/<id filho>/.../<id>/"
+  path              String             @unique @db.VarChar(1000)
+  depth             Int                @default(0)
+  status            OrgUnitStatus      @default(ATIVA)
+  street            String?            @db.VarChar(200)
+  number            String?            @db.VarChar(20)
+  complement        String?            @db.VarChar(100)
+  district          String?            @db.VarChar(120)
+  city              String?            @db.VarChar(120)
+  state             String?            @db.Char(2)
+  postalCode        String?            @map("postal_code") @db.VarChar(9)
+  createdAt         DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt         DateTime           @updatedAt @map("updated_at") @db.Timestamptz(3)
+  createdById       String?            @map("created_by_id") @db.Uuid
+  updatedById       String?            @map("updated_by_id") @db.Uuid
+  contacts          OrgUnitContact[]
+  users             User[]
+  scopes            UserScope[]
+  works             Work[]
+  people            Person[]
+  companies         Company[]
+  epiStockMovements EpiStockMovement[]
+  equipment         Equipment[]
+  agendaEvents      AgendaEvent[]
+
+  @@index([parentId])
+  @@index([typeCode])
+  @@map("organization_unit")
+}
+
+/// Contatos autorizados da unidade (mínimo necessário).
+model OrgUnitContact {
+  id        String           @id @default(uuid()) @db.Uuid
+  unitId    String           @map("unit_id") @db.Uuid
+  unit      OrganizationUnit @relation(fields: [unitId], references: [id], onDelete: Cascade)
+  name      String           @db.VarChar(200)
+  role      String?          @db.VarChar(120)
+  email     String?          @db.VarChar(254)
+  phone     String?          @db.VarChar(30)
+  createdAt DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime         @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@index([unitId])
+  @@map("org_unit_contact")
+}
+
+// ---------------------------------------------------------------------------
+// Usuários, papéis, permissões e escopos
+// ---------------------------------------------------------------------------
+
+enum UserStatus {
+  ATIVO
+  BLOQUEADO
+  INATIVO
+}
+
+model User {
+  id                  String               @id @default(uuid()) @db.Uuid
+  email               String               @unique @db.VarChar(254)
+  name                String               @db.VarChar(200)
+  passwordHash        String               @map("password_hash") @db.VarChar(100)
+  passwordChangedAt   DateTime             @default(now()) @map("password_changed_at") @db.Timestamptz(3)
+  mustChangePassword  Boolean              @default(false) @map("must_change_password")
+  status              UserStatus           @default(ATIVO)
+  /// Unidade de lotação (define quem pode administrar o usuário).
+  homeUnitId          String               @map("home_unit_id") @db.Uuid
+  homeUnit            OrganizationUnit     @relation(fields: [homeUnitId], references: [id], onDelete: Restrict)
+  /// Segredo TOTP cifrado (AES-256-GCM) — nunca em texto puro.
+  mfaSecretEnc        String?              @map("mfa_secret_enc") @db.VarChar(500)
+  mfaEnabledAt        DateTime?            @map("mfa_enabled_at") @db.Timestamptz(3)
+  mfaLastUsedStep     BigInt?              @map("mfa_last_used_step")
+  lastLoginAt         DateTime?            @map("last_login_at") @db.Timestamptz(3)
+  createdAt           DateTime             @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt           DateTime             @updatedAt @map("updated_at") @db.Timestamptz(3)
+  createdById         String?              @map("created_by_id") @db.Uuid
+  updatedById         String?              @map("updated_by_id") @db.Uuid
+  scopes              UserScope[]          @relation("ScopeUser")
+  grantedScopes       UserScope[]          @relation("ScopeGrantedBy")
+  sessions            Session[]
+  recoveryCodes       MfaRecoveryCode[]
+  passwordResetTokens PasswordResetToken[]
+
+  @@index([homeUnitId])
+  @@map("app_user")
+}
+
+model Permission {
+  code        String           @id @db.VarChar(80)
+  module      String           @db.VarChar(40)
+  description String           @db.VarChar(300)
+  createdAt   DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+  roles       RolePermission[]
+
+  @@map("permission")
+}
+
+model Role {
+  id          String           @id @default(uuid()) @db.Uuid
+  code        String           @unique @db.VarChar(60)
+  name        String           @db.VarChar(120)
+  description String?          @db.VarChar(500)
+  /// Exige MFA para quem possuir este papel.
+  requiresMfa Boolean          @default(false) @map("requires_mfa")
+  /// Papéis de sistema não podem ser excluídos nem ter permissões reduzidas.
+  isSystem    Boolean          @default(false) @map("is_system")
+  createdAt   DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime         @updatedAt @map("updated_at") @db.Timestamptz(3)
+  permissions RolePermission[]
+  scopes      UserScope[]
+
+  @@map("role")
+}
+
+model RolePermission {
+  roleId         String     @map("role_id") @db.Uuid
+  role           Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permissionCode String     @map("permission_code") @db.VarChar(80)
+  permission     Permission @relation(fields: [permissionCode], references: [code], onDelete: Cascade)
+  createdAt      DateTime   @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@id([roleId, permissionCode])
+  @@map("role_permission")
+}
+
+/// Atribuição de um papel a um usuário em uma unidade organizacional.
+model UserScope {
+  id                 String           @id @default(uuid()) @db.Uuid
+  userId             String           @map("user_id") @db.Uuid
+  user               User             @relation("ScopeUser", fields: [userId], references: [id], onDelete: Cascade)
+  roleId             String           @map("role_id") @db.Uuid
+  role               Role             @relation(fields: [roleId], references: [id], onDelete: Restrict)
+  unitId             String           @map("unit_id") @db.Uuid
+  unit               OrganizationUnit @relation(fields: [unitId], references: [id], onDelete: Restrict)
+  /// Se verdadeiro, vale para a unidade e todas as descendentes.
+  includeDescendants Boolean          @default(true) @map("include_descendants")
+  /// Quando definido, o papel vale somente para esta obra (unitId = unidade da obra).
+  workId             String?          @map("work_id") @db.Uuid
+  work               Work?            @relation(fields: [workId], references: [id], onDelete: Restrict)
+  grantedById        String?          @map("granted_by_id") @db.Uuid
+  grantedBy          User?            @relation("ScopeGrantedBy", fields: [grantedById], references: [id], onDelete: SetNull)
+  createdAt          DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@unique([userId, roleId, unitId, workId])
+  @@index([unitId])
+  @@index([workId])
+  @@map("user_scope")
+}
+
+// ---------------------------------------------------------------------------
+// Autenticação
+// ---------------------------------------------------------------------------
+
+model Session {
+  id            String    @id @default(uuid()) @db.Uuid
+  /// SHA-256 do token do cookie; o token em si nunca é armazenado.
+  tokenHash     String    @unique @map("token_hash") @db.Char(64)
+  userId        String    @map("user_id") @db.Uuid
+  user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  lastSeenAt    DateTime  @default(now()) @map("last_seen_at") @db.Timestamptz(3)
+  idleExpiresAt DateTime  @map("idle_expires_at") @db.Timestamptz(3)
+  expiresAt     DateTime  @map("expires_at") @db.Timestamptz(3)
+  mfaVerifiedAt DateTime? @map("mfa_verified_at") @db.Timestamptz(3)
+  revokedAt     DateTime? @map("revoked_at") @db.Timestamptz(3)
+  ip            String?   @db.VarChar(64)
+  userAgent     String?   @map("user_agent") @db.VarChar(400)
+
+  @@index([userId])
+  @@map("session")
+}
+
+/// Tentativas de autenticação. identifier = e-mail normalizado ou "mfa:<userId>".
+model LoginAttempt {
+  id         String   @id @default(uuid()) @db.Uuid
+  identifier String   @db.VarChar(254)
+  ip         String?  @db.VarChar(64)
+  success    Boolean
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@index([identifier, createdAt])
+  @@index([ip, createdAt])
+  @@map("login_attempt")
+}
+
+model MfaRecoveryCode {
+  id        String    @id @default(uuid()) @db.Uuid
+  userId    String    @map("user_id") @db.Uuid
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  codeHash  String    @map("code_hash") @db.Char(64)
+  usedAt    DateTime? @map("used_at") @db.Timestamptz(3)
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@index([userId])
+  @@map("mfa_recovery_code")
+}
+
+model PasswordResetToken {
+  id        String    @id @default(uuid()) @db.Uuid
+  userId    String    @map("user_id") @db.Uuid
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String    @unique @map("token_hash") @db.Char(64)
+  expiresAt DateTime  @map("expires_at") @db.Timestamptz(3)
+  usedAt    DateTime? @map("used_at") @db.Timestamptz(3)
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@index([userId])
+  @@map("password_reset_token")
+}
+
+// ---------------------------------------------------------------------------
+// Auditoria (append-only; UPDATE/DELETE bloqueados por trigger)
+// ---------------------------------------------------------------------------
+
+enum AuditResult {
+  SUCESSO
+  FALHA
+  NEGADO
+}
+
+model AuditEvent {
+  id            String      @id @default(uuid()) @db.Uuid
+  seq           BigInt      @unique @default(autoincrement())
+  occurredAt    DateTime    @default(now()) @map("occurred_at") @db.Timestamptz(3)
+  actorUserId   String?     @map("actor_user_id") @db.Uuid
+  actorLabel    String?     @map("actor_label") @db.VarChar(254)
+  action        String      @db.VarChar(80)
+  objectType    String?     @map("object_type") @db.VarChar(60)
+  objectId      String?     @map("object_id") @db.VarChar(80)
+  /// Unidade a que o evento pertence (usada para restringir a leitura).
+  unitPath      String?     @map("unit_path") @db.VarChar(1000)
+  result        AuditResult
+  correlationId String      @map("correlation_id") @db.VarChar(64)
+  ip            String?     @db.VarChar(64)
+  userAgent     String?     @map("user_agent") @db.VarChar(400)
+  metadata      Json?
+  prevHash      String      @map("prev_hash") @db.Char(64)
+  hash          String      @db.Char(64)
+
+  @@index([occurredAt])
+  @@index([actorUserId])
+  @@index([action])
+  @@index([objectType, objectId])
+  @@map("audit_event")
+}
+
+// ---------------------------------------------------------------------------
+// Fase 2 — Obras, etapas, documentos, requisitos e aprovações
+// ---------------------------------------------------------------------------
+
+/// Tipos de obra configuráveis (ex.: reforma, construção nova).
+model WorkType {
+  code      String   @id @db.VarChar(40)
+  name      String   @db.VarChar(120)
+  active    Boolean  @default(true)
+  sortOrder Int      @default(0) @map("sort_order")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  works     Work[]
+
+  @@map("work_type")
+}
+
+/// Atividades configuráveis usadas na aplicabilidade de requisitos (ex.: trabalho em altura).
+model ActivityType {
+  code        String   @id @db.VarChar(40)
+  name        String   @db.VarChar(120)
+  description String?  @db.VarChar(500)
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@map("activity_type")
+}
+
+enum WorkStatus {
+  RASCUNHO
+  SOLICITADA
+  EM_TRIAGEM
+  EM_APROVACAO
+  APROVADA
+  EM_EXECUCAO
+  SUSPENSA
+  EM_VISTORIA
+  CONCLUIDA
+  REJEITADA
+  ARQUIVADA
+}
+
+enum WorkPriority {
+  BAIXA
+  MEDIA
+  ALTA
+  URGENTE
+}
+
+enum ExecutionMode {
+  VOLUNTARIOS
+  EMPRESA_CONTRATADA
+  MISTA
+}
+
+/// Sequência anual para o código das obras (OB-AAAA-NNNNN).
+model WorkCodeSequence {
+  year  Int @id
+  value Int @default(0)
+
+  @@map("work_code_sequence")
+}
+
+model Work {
+  id                   String                  @id @default(uuid()) @db.Uuid
+  code                 String                  @unique @db.VarChar(20)
+  title                String                  @db.VarChar(200)
+  unitId               String                  @map("unit_id") @db.Uuid
+  unit                 OrganizationUnit        @relation(fields: [unitId], references: [id], onDelete: Restrict)
+  /// Cópia do caminho da unidade, para filtros de escopo eficientes.
+  unitPath             String                  @map("unit_path") @db.VarChar(1000)
+  typeCode             String                  @map("type_code") @db.VarChar(40)
+  type                 WorkType                @relation(fields: [typeCode], references: [code], onDelete: Restrict)
+  activities           String[]                @default([])
+  status               WorkStatus              @default(RASCUNHO)
+  priority             WorkPriority            @default(MEDIA)
+  executionMode        ExecutionMode           @default(VOLUNTARIOS) @map("execution_mode")
+  scope                String                  @db.VarChar(4000)
+  justification        String                  @db.VarChar(4000)
+  street               String?                 @db.VarChar(200)
+  number               String?                 @db.VarChar(20)
+  district             String?                 @db.VarChar(120)
+  city                 String?                 @db.VarChar(120)
+  state                String?                 @db.Char(2)
+  postalCode           String?                 @map("postal_code") @db.VarChar(9)
+  plannedStart         DateTime?               @map("planned_start") @db.Date
+  plannedEnd           DateTime?               @map("planned_end") @db.Date
+  responsibleName      String?                 @map("responsible_name") @db.VarChar(200)
+  /// Incrementada a cada alteração de dados; usada no controle de concorrência e nas aprovações.
+  version              Int                     @default(1)
+  createdAt            DateTime                @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt            DateTime                @updatedAt @map("updated_at") @db.Timestamptz(3)
+  createdById          String                  @map("created_by_id") @db.Uuid
+  updatedById          String?                 @map("updated_by_id") @db.Uuid
+  stages               WorkStage[]
+  statusHistory        WorkStatusChange[]
+  documents            Document[]
+  evaluations          RequirementEvaluation[]
+  approvals            Approval[]
+  scopes               UserScope[]
+  volunteerAssignments VolunteerAssignment[]
+  contracts            Contract[]
+  epiDeliveries        EpiDelivery[]
+  inspections          Inspection[]
+  risks                Risk[]
+  incidents            Incident[]
+  correctiveActions    CorrectiveAction[]
+  workMilestones       WorkMilestone[]
+  scheduleBaselines    ScheduleBaseline[]
+  workDiaryEntries     WorkDiaryEntry[]
+  scopeChanges         ScopeChange[]
+  budgets              Budget[]
+  costEntries          CostEntry[]
+  measurements         Measurement[]
+  agendaEvents         AgendaEvent[]
+
+  @@index([unitPath])
+  @@index([status])
+  @@map("work")
+}
+
+model WorkStatusChange {
+  id         String      @id @default(uuid()) @db.Uuid
+  workId     String      @map("work_id") @db.Uuid
+  work       Work        @relation(fields: [workId], references: [id], onDelete: Restrict)
+  fromStatus WorkStatus? @map("from_status")
+  toStatus   WorkStatus  @map("to_status")
+  reason     String?     @db.VarChar(2000)
+  actorId    String      @map("actor_id") @db.Uuid
+  approvalId String?     @map("approval_id") @db.Uuid
+  createdAt  DateTime    @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@index([workId, createdAt])
+  @@map("work_status_change")
+}
+
+enum StageStatus {
+  NAO_INICIADA
+  EM_ANDAMENTO
+  CONCLUIDA
+  CANCELADA
+}
+
+model WorkStage {
+  id              String      @id @default(uuid()) @db.Uuid
+  workId          String      @map("work_id") @db.Uuid
+  work            Work        @relation(fields: [workId], references: [id], onDelete: Restrict)
+  name            String      @db.VarChar(200)
+  sortOrder       Int         @default(0) @map("sort_order")
+  status          StageStatus @default(NAO_INICIADA)
+  plannedStart    DateTime?   @map("planned_start") @db.Date
+  plannedEnd      DateTime?   @map("planned_end") @db.Date
+  actualStart     DateTime?   @map("actual_start") @db.Date
+  actualEnd       DateTime?   @map("actual_end") @db.Date
+  progress        Int         @default(0)
+  responsibleName String?     @map("responsible_name") @db.VarChar(200)
+  notes           String?     @db.VarChar(2000)
+  /// Etapas que precisam terminar antes desta começar.
+  dependsOnIds    String[]    @default([]) @map("depends_on_ids")
+  /// Justificativa registrada quando a etapa atrasa.
+  delayReason     String?     @map("delay_reason") @db.VarChar(1000)
+  createdAt       DateTime    @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt       DateTime    @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@index([workId, sortOrder])
+  @@map("work_stage")
+}
+
+enum DocumentStatus {
+  ENVIADO
+  EM_REVISAO
+  APROVADO
+  REJEITADO
+  VENCIDO
+  SUBSTITUIDO
+}
+
+/// Categorias documentais configuráveis.
+model DocumentCategory {
+  code           String     @id @db.VarChar(40)
+  name           String     @db.VarChar(120)
+  requiresExpiry Boolean    @default(false) @map("requires_expiry")
+  active         Boolean    @default(true)
+  createdAt      DateTime   @default(now()) @map("created_at") @db.Timestamptz(3)
+  documents      Document[]
+
+  @@map("document_category")
+}
+
+model Document {
+  id                 String                   @id @default(uuid()) @db.Uuid
+  /// Dono do documento: exatamente um entre obra, pessoa, empresa e equipamento.
+  workId             String?                  @map("work_id") @db.Uuid
+  work               Work?                    @relation(fields: [workId], references: [id], onDelete: Restrict)
+  personId           String?                  @map("person_id") @db.Uuid
+  person             Person?                  @relation(fields: [personId], references: [id], onDelete: Restrict)
+  companyId          String?                  @map("company_id") @db.Uuid
+  company            Company?                 @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  equipmentId        String?                  @map("equipment_id") @db.Uuid
+  equipment          Equipment?               @relation(fields: [equipmentId], references: [id], onDelete: Restrict)
+  unitPath           String                   @map("unit_path") @db.VarChar(1000)
+  categoryCode       String                   @map("category_code") @db.VarChar(40)
+  category           DocumentCategory         @relation(fields: [categoryCode], references: [code], onDelete: Restrict)
+  title              String                   @db.VarChar(200)
+  issuer             String?                  @db.VarChar(200)
+  documentNumber     String?                  @map("document_number") @db.VarChar(100)
+  issueDate          DateTime?                @map("issue_date") @db.Date
+  expiryDate         DateTime?                @map("expiry_date") @db.Date
+  status             DocumentStatus           @default(ENVIADO)
+  reviewerNote       String?                  @map("reviewer_note") @db.VarChar(2000)
+  reviewedById       String?                  @map("reviewed_by_id") @db.Uuid
+  reviewedAt         DateTime?                @map("reviewed_at") @db.Timestamptz(3)
+  createdById        String                   @map("created_by_id") @db.Uuid
+  createdAt          DateTime                 @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt          DateTime                 @updatedAt @map("updated_at") @db.Timestamptz(3)
+  versions           DocumentVersion[]
+  evaluations        RequirementEvaluation[]
+  credentials        ProfessionalCredential[]
+  healthCertificates HealthCertificate[]
+  /// Documento com dado sensível (ex.: ASO): acesso só com permissão de saúde ou pelo próprio titular.
+  sensitive          Boolean                  @default(false)
+
+  @@index([workId])
+  @@index([personId])
+  @@index([companyId])
+  @@index([equipmentId])
+  @@index([unitPath])
+  @@index([status, expiryDate])
+  @@map("document")
+}
+
+model DocumentVersion {
+  id           String    @id @default(uuid()) @db.Uuid
+  documentId   String    @map("document_id") @db.Uuid
+  document     Document  @relation(fields: [documentId], references: [id], onDelete: Restrict)
+  versionNo    Int       @map("version_no")
+  storageKey   String    @unique @map("storage_key") @db.VarChar(300)
+  fileName     String    @map("file_name") @db.VarChar(255)
+  mimeType     String    @map("mime_type") @db.VarChar(100)
+  sizeBytes    Int       @map("size_bytes")
+  sha256       String    @db.Char(64)
+  uploadedById String    @map("uploaded_by_id") @db.Uuid
+  uploadedAt   DateTime  @default(now()) @map("uploaded_at") @db.Timestamptz(3)
+  /// Preenchido quando uma versão mais nova a substitui.
+  supersededAt DateTime? @map("superseded_at") @db.Timestamptz(3)
+  changeNote   String?   @map("change_note") @db.VarChar(500)
+
+  @@unique([documentId, versionNo])
+  @@map("document_version")
+}
+
+enum RequirementClassification {
+  LEGAL_OBRIGATORIO
+  LEGAL_CONDICIONAL
+  CONTRATUAL
+  INSTITUCIONAL_APROVADO
+  BOA_PRATICA
+  INFORMATIVO
+}
+
+enum RequirementRuleStatus {
+  /// Regra cadastrada, ainda não confirmada por responsável: aparece como "pendente de confirmação".
+  PENDENTE_VALIDACAO
+  VALIDADA
+  INATIVA
+}
+
+enum WorkCheckpoint {
+  TRIAGEM
+  APROVACAO
+  INICIO_EXECUCAO
+  VISTORIA
+  ENCERRAMENTO
+}
+
+model RequirementRule {
+  id                   String                    @id @default(uuid()) @db.Uuid
+  code                 String                    @unique @db.VarChar(40)
+  name                 String                    @db.VarChar(200)
+  description          String?                   @db.VarChar(2000)
+  workTypes            String[]                  @default([]) @map("work_types")
+  activities           String[]                  @default([])
+  /// Formas de execução às quais a regra se aplica (vazio = qualquer).
+  executionModes       ExecutionMode[]           @default([]) @map("execution_modes")
+  applicabilityNote    String?                   @map("applicability_note") @db.VarChar(2000)
+  evidence             String                    @db.VarChar(500)
+  documentCategoryCode String?                   @map("document_category_code") @db.VarChar(40)
+  classification       RequirementClassification
+  legalBasis           String?                   @map("legal_basis") @db.VarChar(500)
+  sourceUrl            String?                   @map("source_url") @db.VarChar(500)
+  normVersion          String?                   @map("norm_version") @db.VarChar(100)
+  lastReviewedAt       DateTime?                 @map("last_reviewed_at") @db.Date
+  validatedById        String?                   @map("validated_by_id") @db.Uuid
+  validatedAt          DateTime?                 @map("validated_at") @db.Timestamptz(3)
+  nextReviewAt         DateTime?                 @map("next_review_at") @db.Date
+  checkpoint           WorkCheckpoint
+  /// Bloqueia o avanço no ponto de verificação (só produz efeito em regras validadas).
+  blocking             Boolean                   @default(false)
+  status               RequirementRuleStatus     @default(PENDENTE_VALIDACAO)
+  createdAt            DateTime                  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt            DateTime                  @updatedAt @map("updated_at") @db.Timestamptz(3)
+  evaluations          RequirementEvaluation[]
+
+  @@map("requirement_rule")
+}
+
+enum EvaluationStatus {
+  PENDENTE
+  ATENDIDO
+  NAO_ATENDIDO
+  DISPENSADO_JUSTIFICADO
+  NAO_APLICAVEL
+}
+
+model RequirementEvaluation {
+  id            String           @id @default(uuid()) @db.Uuid
+  workId        String           @map("work_id") @db.Uuid
+  work          Work             @relation(fields: [workId], references: [id], onDelete: Restrict)
+  ruleId        String           @map("rule_id") @db.Uuid
+  rule          RequirementRule  @relation(fields: [ruleId], references: [id], onDelete: Restrict)
+  status        EvaluationStatus @default(PENDENTE)
+  documentId    String?          @map("document_id") @db.Uuid
+  document      Document?        @relation(fields: [documentId], references: [id], onDelete: SetNull)
+  justification String?          @db.VarChar(2000)
+  evaluatedById String?          @map("evaluated_by_id") @db.Uuid
+  evaluatedAt   DateTime?        @map("evaluated_at") @db.Timestamptz(3)
+  createdAt     DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt     DateTime         @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@unique([workId, ruleId])
+  @@map("requirement_evaluation")
+}
+
+enum ApprovalKind {
+  SOLICITACAO_OBRA
+  ENCERRAMENTO_OBRA
+  MUDANCA_ESCOPO
+  ORCAMENTO
+  MEDICAO
+  DESPESA
+}
+
+enum ApprovalStatus {
+  PENDENTE
+  APROVADA
+  REJEITADA
+  DEVOLVIDA
+  CANCELADA
+}
+
+/// Configuração de cada tipo de aprovação (alçadas configuráveis).
+model ApprovalPolicy {
+  kind               ApprovalKind @id
+  name               String       @db.VarChar(120)
+  /// Número de decisões favoráveis necessárias.
+  stepsRequired      Int          @default(1) @map("steps_required")
+  /// Impede que o solicitante decida a própria solicitação.
+  requireSegregation Boolean      @default(true) @map("require_segregation")
+  updatedAt          DateTime     @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@map("approval_policy")
+}
+
+model Approval {
+  id                 String         @id @default(uuid()) @db.Uuid
+  kind               ApprovalKind
+  workId             String         @map("work_id") @db.Uuid
+  work               Work           @relation(fields: [workId], references: [id], onDelete: Restrict)
+  unitPath           String         @map("unit_path") @db.VarChar(1000)
+  /// Versão da obra submetida e cópia dos dados no momento da submissão.
+  /// Objeto aprovado quando não é a própria obra (orçamento, medição, despesa, mudança de escopo).
+  subjectId          String?        @map("subject_id") @db.Uuid
+  /// Valor envolvido, usado na seleção da alçada.
+  amount             Decimal?       @db.Decimal(14, 2)
+  subjectVersion     Int            @map("subject_version")
+  snapshot           Json
+  status             ApprovalStatus @default(PENDENTE)
+  stepsRequired      Int            @map("steps_required")
+  requireSegregation Boolean        @map("require_segregation")
+  requesterId        String         @map("requester_id") @db.Uuid
+  requestNote        String?        @map("request_note") @db.VarChar(2000)
+  decidedAt          DateTime?      @map("decided_at") @db.Timestamptz(3)
+  createdAt          DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
+  steps              ApprovalStep[]
+
+  @@index([status, unitPath])
+  @@index([workId])
+  @@index([subjectId])
+  @@map("approval")
+}
+
+enum ApprovalDecision {
+  APROVAR
+  REJEITAR
+  DEVOLVER
+}
+
+model ApprovalStep {
+  id                   String           @id @default(uuid()) @db.Uuid
+  approvalId           String           @map("approval_id") @db.Uuid
+  approval             Approval         @relation(fields: [approvalId], references: [id], onDelete: Restrict)
+  stepNo               Int              @map("step_no")
+  approverId           String           @map("approver_id") @db.Uuid
+  decision             ApprovalDecision
+  opinion              String           @db.VarChar(4000)
+  consultedDocumentIds String[]         @default([]) @map("consulted_document_ids")
+  decidedAt            DateTime         @default(now()) @map("decided_at") @db.Timestamptz(3)
+
+  @@unique([approvalId, stepNo])
+  @@unique([approvalId, approverId])
+  @@map("approval_step")
+}
+
+// ---------------------------------------------------------------------------
+// Fase 3 — Pessoas, empresas, EPIs, equipamentos e segurança
+// ---------------------------------------------------------------------------
+
+enum PersonCategory {
+  PROFISSIONAL
+  EMPREGADO
+  VOLUNTARIO
+  OUTRO
+}
+
+enum RecordStatus {
+  ATIVO
+  INATIVO
+}
+
+/// Pessoa que atua em obras. Somente dados de identificação e contato necessários;
+/// nenhum dado de saúde é armazenado neste cadastro.
+model Person {
+  id                   String                   @id @default(uuid()) @db.Uuid
+  name                 String                   @db.VarChar(200)
+  category             PersonCategory
+  /// Descrição do vínculo quando a categoria é OUTRO, para avaliação jurídica.
+  bondDescription      String?                  @map("bond_description") @db.VarChar(300)
+  /// Observação da avaliação jurídica do vínculo (não presume dispensa de obrigações).
+  legalReviewNote      String?                  @map("legal_review_note") @db.VarChar(1000)
+  internalId           String?                  @map("internal_id") @db.VarChar(60)
+  email                String?                  @db.VarChar(254)
+  phone                String?                  @db.VarChar(30)
+  jobFunction          String?                  @map("job_function") @db.VarChar(120)
+  authorizedActivities String[]                 @default([]) @map("authorized_activities")
+  companyId            String?                  @map("company_id") @db.Uuid
+  company              Company?                 @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  unitId               String                   @map("unit_id") @db.Uuid
+  unit                 OrganizationUnit         @relation(fields: [unitId], references: [id], onDelete: Restrict)
+  unitPath             String                   @map("unit_path") @db.VarChar(1000)
+  status               RecordStatus             @default(ATIVO)
+  createdById          String                   @map("created_by_id") @db.Uuid
+  createdAt            DateTime                 @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt            DateTime                 @updatedAt @map("updated_at") @db.Timestamptz(3)
+  /// Conta de acesso do próprio titular (portal do voluntário), quando houver.
+  userId               String?                  @unique @map("user_id") @db.Uuid
+  credentials          ProfessionalCredential[]
+  assignments          VolunteerAssignment[]
+  documents            Document[]
+  epiDeliveries        EpiDelivery[]
+  healthCertificates   HealthCertificate[]
+
+  @@index([unitPath])
+  @@index([category])
+  @@map("person")
+}
+
+enum CredentialKind {
+  REGISTRO_CONSELHO
+  QUALIFICACAO
+  HABILITACAO
+  CERTIFICADO
+  TREINAMENTO
+  INTEGRACAO_SEGURANCA
+  /// Comprovação de experiência (declarações, atestados de capacidade técnica, registros de trabalho).
+  EXPERIENCIA
+}
+
+model ProfessionalCredential {
+  id                 String         @id @default(uuid()) @db.Uuid
+  personId           String         @map("person_id") @db.Uuid
+  person             Person         @relation(fields: [personId], references: [id], onDelete: Restrict)
+  kind               CredentialKind
+  name               String         @db.VarChar(200)
+  issuer             String?        @db.VarChar(200)
+  number             String?        @db.VarChar(100)
+  issueDate          DateTime?      @map("issue_date") @db.Date
+  expiryDate         DateTime?      @map("expiry_date") @db.Date
+  documentId         String?        @map("document_id") @db.Uuid
+  document           Document?      @relation(fields: [documentId], references: [id], onDelete: SetNull)
+  /// Conferência em fonte oficial: só é marcada quando efetivamente realizada.
+  verifiedAt         DateTime?      @map("verified_at") @db.Timestamptz(3)
+  verifiedById       String?        @map("verified_by_id") @db.Uuid
+  verificationSource String?        @map("verification_source") @db.VarChar(300)
+  status             RecordStatus   @default(ATIVO)
+  createdAt          DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt          DateTime       @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@index([personId])
+  @@index([expiryDate])
+  @@map("professional_credential")
+}
+
+enum HealthExamType {
+  ADMISSIONAL
+  PERIODICO
+  RETORNO_TRABALHO
+  MUDANCA_RISCO
+  DEMISSIONAL
+  OUTRO
+}
+
+enum HealthFitness {
+  APTO
+  INAPTO
+}
+
+enum HealthCertificateStatus {
+  PENDENTE_CONFERENCIA
+  CONFERIDO
+  INATIVO
+}
+
+/// Atestado de saúde ocupacional (ASO) ou equivalente. Dado sensível: guarda apenas a
+/// conclusão (apto/inapto), as atividades liberadas e a validade — nunca diagnósticos ou exames.
+model HealthCertificate {
+  id          String                  @id @default(uuid()) @db.Uuid
+  personId    String                  @map("person_id") @db.Uuid
+  person      Person                  @relation(fields: [personId], references: [id], onDelete: Restrict)
+  examType    HealthExamType          @map("exam_type")
+  result      HealthFitness
+  /// Códigos de atividade para as quais a aptidão foi declarada (ex.: TRABALHO_ALTURA).
+  fitFor      String[]                @default([]) @map("fit_for")
+  examDate    DateTime                @map("exam_date") @db.Date
+  expiryDate  DateTime?               @map("expiry_date") @db.Date
+  documentId  String?                 @map("document_id") @db.Uuid
+  document    Document?               @relation(fields: [documentId], references: [id], onDelete: SetNull)
+  status      HealthCertificateStatus @default(PENDENTE_CONFERENCIA)
+  checkedById String?                 @map("checked_by_id") @db.Uuid
+  checkedAt   DateTime?               @map("checked_at") @db.Timestamptz(3)
+  createdById String                  @map("created_by_id") @db.Uuid
+  createdAt   DateTime                @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@index([personId])
+  @@index([expiryDate])
+  @@map("health_certificate")
+}
+
+enum PersonRuleKind {
+  /// Exige qualificação/treinamento/registro ativo e dentro da validade.
+  CREDENCIAL
+  /// Exige ASO conferido, apto e válido para a atividade.
+  SAUDE
+}
+
+/// Exigência por atividade para as pessoas que a executam. Começa pendente de validação
+/// e só bloqueia vínculos quando validada e marcada como bloqueante.
+model PersonRequirementRule {
+  id                     String                    @id @default(uuid()) @db.Uuid
+  code                   String                    @unique @db.VarChar(40)
+  name                   String                    @db.VarChar(200)
+  activityCode           String                    @map("activity_code") @db.VarChar(40)
+  kind                   PersonRuleKind
+  credentialKind         CredentialKind?           @map("credential_kind")
+  /// Trecho que deve constar no nome da qualificação (ex.: "NR-35").
+  credentialNameContains String?                   @map("credential_name_contains") @db.VarChar(100)
+  classification         RequirementClassification
+  legalBasis             String?                   @map("legal_basis") @db.VarChar(500)
+  sourceUrl              String?                   @map("source_url") @db.VarChar(500)
+  lastReviewedAt         DateTime?                 @map("last_reviewed_at") @db.Date
+  validatedById          String?                   @map("validated_by_id") @db.Uuid
+  validatedAt            DateTime?                 @map("validated_at") @db.Timestamptz(3)
+  blocking               Boolean                   @default(false)
+  status                 RequirementRuleStatus     @default(PENDENTE_VALIDACAO)
+  createdAt              DateTime                  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt              DateTime                  @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@map("person_requirement_rule")
+}
+
+/// Vínculo de uma pessoa (de qualquer categoria) com uma obra.
+model VolunteerAssignment {
+  id                 String       @id @default(uuid()) @db.Uuid
+  personId           String       @map("person_id") @db.Uuid
+  person             Person       @relation(fields: [personId], references: [id], onDelete: Restrict)
+  workId             String       @map("work_id") @db.Uuid
+  work               Work         @relation(fields: [workId], references: [id], onDelete: Restrict)
+  role               String       @db.VarChar(120)
+  activities         String[]     @default([])
+  startDate          DateTime     @map("start_date") @db.Date
+  endDate            DateTime?    @map("end_date") @db.Date
+  /// Registro da orientação de segurança / integração antes do início.
+  safetyBriefingAt   DateTime?    @map("safety_briefing_at") @db.Date
+  safetyBriefingNote String?      @map("safety_briefing_note") @db.VarChar(1000)
+  status             RecordStatus @default(ATIVO)
+  createdById        String       @map("created_by_id") @db.Uuid
+  createdAt          DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt          DateTime     @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@index([workId])
+  @@index([personId])
+  @@map("work_assignment")
+}
+
+enum CompanyVerification {
+  NAO_VERIFICADA
+  VERIFICADA_MANUALMENTE
+}
+
+model Company {
+  id                   String              @id @default(uuid()) @db.Uuid
+  legalName            String              @map("legal_name") @db.VarChar(200)
+  tradeName            String?             @map("trade_name") @db.VarChar(200)
+  cnpj                 String              @unique @db.Char(14)
+  email                String?             @db.VarChar(254)
+  phone                String?             @db.VarChar(30)
+  street               String?             @db.VarChar(200)
+  number               String?             @db.VarChar(20)
+  district             String?             @db.VarChar(120)
+  city                 String?             @db.VarChar(120)
+  state                String?             @db.Char(2)
+  postalCode           String?             @map("postal_code") @db.VarChar(9)
+  services             String?             @db.VarChar(1000)
+  contractManagerName  String?             @map("contract_manager_name") @db.VarChar(200)
+  technicalManagerName String?             @map("technical_manager_name") @db.VarChar(200)
+  /// Situação da conferência cadastral. Nunca é marcada automaticamente.
+  verification         CompanyVerification @default(NAO_VERIFICADA)
+  verificationSource   String?             @map("verification_source") @db.VarChar(300)
+  verifiedAt           DateTime?           @map("verified_at") @db.Timestamptz(3)
+  verifiedById         String?             @map("verified_by_id") @db.Uuid
+  unitId               String              @map("unit_id") @db.Uuid
+  unit                 OrganizationUnit    @relation(fields: [unitId], references: [id], onDelete: Restrict)
+  unitPath             String              @map("unit_path") @db.VarChar(1000)
+  status               RecordStatus        @default(ATIVO)
+  createdById          String              @map("created_by_id") @db.Uuid
+  createdAt            DateTime            @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt            DateTime            @updatedAt @map("updated_at") @db.Timestamptz(3)
+  people               Person[]
+  contracts            Contract[]
+  documents            Document[]
+
+  @@index([unitPath])
+  @@map("company")
+}
+
+enum ContractKind {
+  CONTRATO
+  ADITIVO
+  ORDEM_SERVICO
+}
+
+enum ContractStatus {
+  RASCUNHO
+  VIGENTE
+  ENCERRADO
+  CANCELADO
+}
+
+model Contract {
+  id          String         @id @default(uuid()) @db.Uuid
+  companyId   String         @map("company_id") @db.Uuid
+  company     Company        @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  workId      String?        @map("work_id") @db.Uuid
+  work        Work?          @relation(fields: [workId], references: [id], onDelete: Restrict)
+  parentId    String?        @map("parent_id") @db.Uuid
+  parent      Contract?      @relation("Amendments", fields: [parentId], references: [id], onDelete: Restrict)
+  amendments  Contract[]     @relation("Amendments")
+  kind        ContractKind
+  number      String         @db.VarChar(60)
+  object      String         @db.VarChar(2000)
+  value       Decimal?       @db.Decimal(14, 2)
+  startDate   DateTime?      @map("start_date") @db.Date
+  endDate     DateTime?      @map("end_date") @db.Date
+  status      ContractStatus @default(RASCUNHO)
+  unitPath    String         @map("unit_path") @db.VarChar(1000)
+  createdById String         @map("created_by_id") @db.Uuid
+  createdAt   DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime       @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@unique([companyId, number])
+  @@index([workId])
+  @@map("contract")
+}
+
+// --- EPIs -------------------------------------------------------------------
+
+model EpiCatalog {
+  id              String             @id @default(uuid()) @db.Uuid
+  name            String             @db.VarChar(200)
+  epiType         String             @map("epi_type") @db.VarChar(120)
+  manufacturer    String?            @db.VarChar(200)
+  model           String?            @db.VarChar(120)
+  size            String?            @db.VarChar(30)
+  /// Número do Certificado de Aprovação, quando aplicável.
+  caNumber        String?            @map("ca_number") @db.VarChar(30)
+  caExpiry        DateTime?          @map("ca_expiry") @db.Date
+  shelfLifeMonths Int?               @map("shelf_life_months")
+  minStock        Int                @default(0) @map("min_stock")
+  /// Riscos/atividades para os quais o EPI é indicado (orientação, não substitui análise de risco).
+  indicatedFor    String[]           @default([]) @map("indicated_for")
+  status          RecordStatus       @default(ATIVO)
+  createdAt       DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt       DateTime           @updatedAt @map("updated_at") @db.Timestamptz(3)
+  movements       EpiStockMovement[]
+  deliveries      EpiDelivery[]
+
+  @@map("epi_catalog")
+}
+
+enum EpiMovementType {
+  ENTRADA
+  ENTREGA
+  DEVOLUCAO
+  BAIXA
+  AJUSTE
+}
+
+model EpiStockMovement {
+  id         String           @id @default(uuid()) @db.Uuid
+  catalogId  String           @map("catalog_id") @db.Uuid
+  catalog    EpiCatalog       @relation(fields: [catalogId], references: [id], onDelete: Restrict)
+  unitId     String           @map("unit_id") @db.Uuid
+  unit       OrganizationUnit @relation(fields: [unitId], references: [id], onDelete: Restrict)
+  unitPath   String           @map("unit_path") @db.VarChar(1000)
+  type       EpiMovementType
+  /// Positivo para entradas e devoluções; negativo para entregas e baixas.
+  quantity   Int
+  lot        String?          @db.VarChar(60)
+  expiryDate DateTime?        @map("expiry_date") @db.Date
+  deliveryId String?          @map("delivery_id") @db.Uuid
+  note       String?          @db.VarChar(500)
+  actorId    String           @map("actor_id") @db.Uuid
+  createdAt  DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@index([catalogId, unitId])
+  @@index([unitPath])
+  @@map("epi_stock_movement")
+}
+
+enum ReceiptConfirmation {
+  /// Termo assinado em papel e arquivado (o sistema não simula assinatura).
+  TERMO_FISICO_ARQUIVADO
+  CONFIRMACAO_PRESENCIAL_REGISTRADA
+  PENDENTE
+}
+
+model EpiDelivery {
+  id                String              @id @default(uuid()) @db.Uuid
+  catalogId         String              @map("catalog_id") @db.Uuid
+  catalog           EpiCatalog          @relation(fields: [catalogId], references: [id], onDelete: Restrict)
+  personId          String              @map("person_id") @db.Uuid
+  person            Person              @relation(fields: [personId], references: [id], onDelete: Restrict)
+  workId            String?             @map("work_id") @db.Uuid
+  work              Work?               @relation(fields: [workId], references: [id], onDelete: Restrict)
+  unitId            String              @map("unit_id") @db.Uuid
+  unitPath          String              @map("unit_path") @db.VarChar(1000)
+  quantity          Int
+  lot               String?             @db.VarChar(60)
+  deliveredAt       DateTime            @map("delivered_at") @db.Date
+  receipt           ReceiptConfirmation @default(PENDENTE)
+  receiptNote       String?             @map("receipt_note") @db.VarChar(500)
+  returnedAt        DateTime?           @map("returned_at") @db.Date
+  returnedQuantity  Int?                @map("returned_quantity")
+  returnCondition   String?             @map("return_condition") @db.VarChar(300)
+  /// Entrega que esta substitui, com o motivo.
+  replacesId        String?             @map("replaces_id") @db.Uuid
+  replacementReason String?             @map("replacement_reason") @db.VarChar(300)
+  deliveredById     String              @map("delivered_by_id") @db.Uuid
+  createdAt         DateTime            @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@index([personId])
+  @@index([workId])
+  @@index([unitPath])
+  @@map("epi_delivery")
+}
+
+// --- Equipamentos -------------------------------------------------------------
+
+enum EquipmentKind {
+  FERRAMENTA
+  EQUIPAMENTO_COLETIVO
+  MAQUINA
+  EPI_DURAVEL
+}
+
+enum EquipmentStatus {
+  DISPONIVEL
+  EM_USO
+  EM_MANUTENCAO
+  INTERDITADO
+  BAIXADO
+}
+
+model Equipment {
+  id                      String           @id @default(uuid()) @db.Uuid
+  kind                    EquipmentKind
+  name                    String           @db.VarChar(200)
+  identifier              String?          @db.VarChar(80)
+  manufacturer            String?          @db.VarChar(200)
+  model                   String?          @db.VarChar(120)
+  status                  EquipmentStatus  @default(DISPONIVEL)
+  unitId                  String           @map("unit_id") @db.Uuid
+  unit                    OrganizationUnit @relation(fields: [unitId], references: [id], onDelete: Restrict)
+  unitPath                String           @map("unit_path") @db.VarChar(1000)
+  inspectionIntervalDays  Int?             @map("inspection_interval_days")
+  maintenanceIntervalDays Int?             @map("maintenance_interval_days")
+  nextInspectionAt        DateTime?        @map("next_inspection_at") @db.Date
+  nextMaintenanceAt       DateTime?        @map("next_maintenance_at") @db.Date
+  createdAt               DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt               DateTime         @updatedAt @map("updated_at") @db.Timestamptz(3)
+  logs                    EquipmentLog[]
+  documents               Document[]
+
+  @@index([unitPath])
+  @@map("equipment")
+}
+
+enum EquipmentLogType {
+  INSPECAO
+  MANUTENCAO
+  DEFEITO
+}
+
+model EquipmentLog {
+  id          String           @id @default(uuid()) @db.Uuid
+  equipmentId String           @map("equipment_id") @db.Uuid
+  equipment   Equipment        @relation(fields: [equipmentId], references: [id], onDelete: Restrict)
+  type        EquipmentLogType
+  date        DateTime         @db.Date
+  approved    Boolean?
+  notes       String           @db.VarChar(2000)
+  actorId     String           @map("actor_id") @db.Uuid
+  createdAt   DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@index([equipmentId, date])
+  @@map("equipment_log")
+}
+
+// --- Segurança: criticidade, checklists, inspeções, riscos, incidentes, ações ----
+
+/// Critérios de criticidade configuráveis.
+model CriticalityLevel {
+  code           String   @id @db.VarChar(20)
+  name           String   @db.VarChar(60)
+  rank           Int      @unique
+  /// Prazo padrão (dias) para a ação corretiva.
+  responseDays   Int      @map("response_days")
+  /// Gera alerta prioritário.
+  priorityAlert  Boolean  @default(false) @map("priority_alert")
+  /// Ações abertas deste nível impedem o avanço da obra (iniciar, retomar, vistoria).
+  blocksProgress Boolean  @default(false) @map("blocks_progress")
+  updatedAt      DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@map("criticality_level")
+}
+
+model ChecklistTemplate {
+  id          String                  @id @default(uuid()) @db.Uuid
+  name        String                  @db.VarChar(200)
+  workTypes   String[]                @default([]) @map("work_types")
+  active      Boolean                 @default(true)
+  createdAt   DateTime                @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime                @updatedAt @map("updated_at") @db.Timestamptz(3)
+  items       ChecklistTemplateItem[]
+  inspections Inspection[]
+
+  @@map("checklist_template")
+}
+
+model ChecklistTemplateItem {
+  id                 String            @id @default(uuid()) @db.Uuid
+  templateId         String            @map("template_id") @db.Uuid
+  template           ChecklistTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  sortOrder          Int               @default(0) @map("sort_order")
+  text               String            @db.VarChar(500)
+  defaultCriticality String            @map("default_criticality") @db.VarChar(20)
+
+  @@index([templateId])
+  @@map("checklist_template_item")
+}
+
+enum InspectionStatus {
+  PLANEJADA
+  EM_ANDAMENTO
+  CONCLUIDA
+  CANCELADA
+}
+
+model Inspection {
+  id          String             @id @default(uuid()) @db.Uuid
+  workId      String             @map("work_id") @db.Uuid
+  work        Work               @relation(fields: [workId], references: [id], onDelete: Restrict)
+  unitPath    String             @map("unit_path") @db.VarChar(1000)
+  templateId  String?            @map("template_id") @db.Uuid
+  template    ChecklistTemplate? @relation(fields: [templateId], references: [id], onDelete: SetNull)
+  title       String             @db.VarChar(200)
+  plannedDate DateTime           @map("planned_date") @db.Date
+  performedAt DateTime?          @map("performed_at") @db.Timestamptz(3)
+  location    String?            @db.VarChar(200)
+  inspectorId String             @map("inspector_id") @db.Uuid
+  status      InspectionStatus   @default(PLANEJADA)
+  summary     String?            @db.VarChar(4000)
+  createdAt   DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime           @updatedAt @map("updated_at") @db.Timestamptz(3)
+  items       InspectionItem[]
+
+  @@index([workId])
+  @@index([status, plannedDate])
+  @@map("inspection")
+}
+
+enum InspectionResult {
+  PENDENTE
+  CONFORME
+  NAO_CONFORME
+  NAO_APLICAVEL
+}
+
+model InspectionItem {
+  id                String             @id @default(uuid()) @db.Uuid
+  inspectionId      String             @map("inspection_id") @db.Uuid
+  inspection        Inspection         @relation(fields: [inspectionId], references: [id], onDelete: Restrict)
+  sortOrder         Int                @default(0) @map("sort_order")
+  text              String             @db.VarChar(500)
+  result            InspectionResult   @default(PENDENTE)
+  criticality       String             @db.VarChar(20)
+  observation       String?            @db.VarChar(2000)
+  /// Fotos/evidências (documentos da obra).
+  documentIds       String[]           @default([]) @map("document_ids")
+  correctiveActions CorrectiveAction[]
+
+  @@index([inspectionId])
+  @@map("inspection_item")
+}
+
+enum RiskStatus {
+  ABERTO
+  CONTROLADO
+  ENCERRADO
+}
+
+model Risk {
+  id                String             @id @default(uuid()) @db.Uuid
+  workId            String             @map("work_id") @db.Uuid
+  work              Work               @relation(fields: [workId], references: [id], onDelete: Restrict)
+  unitPath          String             @map("unit_path") @db.VarChar(1000)
+  title             String             @db.VarChar(200)
+  description       String?            @db.VarChar(2000)
+  activity          String?            @db.VarChar(40)
+  criticality       String             @db.VarChar(20)
+  controls          String?            @db.VarChar(2000)
+  status            RiskStatus         @default(ABERTO)
+  createdById       String             @map("created_by_id") @db.Uuid
+  createdAt         DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt         DateTime           @updatedAt @map("updated_at") @db.Timestamptz(3)
+  correctiveActions CorrectiveAction[]
+
+  @@index([workId])
+  @@map("risk")
+}
+
+enum IncidentType {
+  INCIDENTE
+  QUASE_ACIDENTE
+  ACIDENTE
+}
+
+model Incident {
+  id                String             @id @default(uuid()) @db.Uuid
+  workId            String             @map("work_id") @db.Uuid
+  work              Work               @relation(fields: [workId], references: [id], onDelete: Restrict)
+  unitPath          String             @map("unit_path") @db.VarChar(1000)
+  type              IncidentType
+  occurredAt        DateTime           @map("occurred_at") @db.Timestamptz(3)
+  location          String?            @db.VarChar(200)
+  /// Descrição do fato, sem dados de saúde ou diagnósticos.
+  description       String             @db.VarChar(4000)
+  immediateActions  String?            @map("immediate_actions") @db.VarChar(2000)
+  criticality       String             @db.VarChar(20)
+  reportedById      String             @map("reported_by_id") @db.Uuid
+  createdAt         DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
+  correctiveActions CorrectiveAction[]
+
+  @@index([workId])
+  @@map("incident")
+}
+
+enum CorrectiveActionStatus {
+  ABERTA
+  EM_ANDAMENTO
+  AGUARDANDO_VALIDACAO
+  ENCERRADA
+  CANCELADA
+}
+
+model CorrectiveAction {
+  id                  String                 @id @default(uuid()) @db.Uuid
+  workId              String                 @map("work_id") @db.Uuid
+  work                Work                   @relation(fields: [workId], references: [id], onDelete: Restrict)
+  unitPath            String                 @map("unit_path") @db.VarChar(1000)
+  inspectionItemId    String?                @map("inspection_item_id") @db.Uuid
+  inspectionItem      InspectionItem?        @relation(fields: [inspectionItemId], references: [id], onDelete: Restrict)
+  riskId              String?                @map("risk_id") @db.Uuid
+  risk                Risk?                  @relation(fields: [riskId], references: [id], onDelete: Restrict)
+  incidentId          String?                @map("incident_id") @db.Uuid
+  incident            Incident?              @relation(fields: [incidentId], references: [id], onDelete: Restrict)
+  title               String                 @db.VarChar(200)
+  description         String?                @db.VarChar(2000)
+  criticality         String                 @db.VarChar(20)
+  responsibleName     String                 @map("responsible_name") @db.VarChar(200)
+  responsibleUserId   String?                @map("responsible_user_id") @db.Uuid
+  dueDate             DateTime               @map("due_date") @db.Date
+  status              CorrectiveActionStatus @default(ABERTA)
+  evidence            String?                @db.VarChar(4000)
+  evidenceDocumentIds String[]               @default([]) @map("evidence_document_ids")
+  submittedById       String?                @map("submitted_by_id") @db.Uuid
+  submittedAt         DateTime?              @map("submitted_at") @db.Timestamptz(3)
+  validatedById       String?                @map("validated_by_id") @db.Uuid
+  validatedAt         DateTime?              @map("validated_at") @db.Timestamptz(3)
+  validationNote      String?                @map("validation_note") @db.VarChar(2000)
+  createdById         String                 @map("created_by_id") @db.Uuid
+  createdAt           DateTime               @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt           DateTime               @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@index([workId, status])
+  @@index([status, dueDate])
+  @@map("corrective_action")
+}
+
+// --- Notificações ------------------------------------------------------------
+
+enum NotificationSeverity {
+  INFO
+  ALERTA
+  CRITICO
+}
+
+model Notification {
+  id        String               @id @default(uuid()) @db.Uuid
+  userId    String               @map("user_id") @db.Uuid
+  kind      String               @db.VarChar(60)
+  severity  NotificationSeverity @default(INFO)
+  title     String               @db.VarChar(200)
+  body      String               @db.VarChar(1000)
+  link      String?              @db.VarChar(300)
+  /// Evita alertas repetidos para o mesmo fato.
+  dedupKey  String               @map("dedup_key") @db.VarChar(200)
+  readAt    DateTime?            @map("read_at") @db.Timestamptz(3)
+  emailedAt DateTime?            @map("emailed_at") @db.Timestamptz(3)
+  createdAt DateTime             @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@unique([userId, dedupKey])
+  @@index([userId, readAt])
+  @@map("notification")
+}
+
+// ---------------------------------------------------------------------------
+// Fase 4 — Cronograma, diário, escopo, orçamento, medições, alçadas e privacidade
+// ---------------------------------------------------------------------------
+
+enum MilestoneKind {
+  APROVACAO
+  ENTREGA
+  MARCO
+}
+
+model WorkMilestone {
+  id          String        @id @default(uuid()) @db.Uuid
+  workId      String        @map("work_id") @db.Uuid
+  work        Work          @relation(fields: [workId], references: [id], onDelete: Restrict)
+  name        String        @db.VarChar(200)
+  kind        MilestoneKind @default(MARCO)
+  plannedDate DateTime      @map("planned_date") @db.Date
+  actualDate  DateTime?     @map("actual_date") @db.Date
+  notes       String?       @db.VarChar(1000)
+  createdAt   DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime      @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@index([workId, plannedDate])
+  @@map("work_milestone")
+}
+
+/// Linha de base do cronograma: cópia imutável de etapas e marcos.
+model ScheduleBaseline {
+  id          String   @id @default(uuid()) @db.Uuid
+  workId      String   @map("work_id") @db.Uuid
+  work        Work     @relation(fields: [workId], references: [id], onDelete: Restrict)
+  version     Int
+  reason      String   @db.VarChar(1000)
+  snapshot    Json
+  createdById String   @map("created_by_id") @db.Uuid
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@unique([workId, version])
+  @@map("schedule_baseline")
+}
+
+model WorkDiaryEntry {
+  id          String   @id @default(uuid()) @db.Uuid
+  workId      String   @map("work_id") @db.Uuid
+  work        Work     @relation(fields: [workId], references: [id], onDelete: Restrict)
+  date        DateTime @db.Date
+  weather     String?  @db.VarChar(120)
+  workforce   Int?
+  activities  String   @db.VarChar(4000)
+  occurrences String?  @db.VarChar(4000)
+  authorId    String   @map("author_id") @db.Uuid
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@index([workId, date])
+  @@map("work_diary_entry")
+}
+
+enum RequestStatus {
+  RASCUNHO
+  EM_APROVACAO
+  APROVADA
+  REJEITADA
+  DEVOLVIDA
+  CANCELADA
+}
+
+/// Pedido de mudança de escopo depois da aprovação da obra.
+model ScopeChange {
+  id                    String        @id @default(uuid()) @db.Uuid
+  workId                String        @map("work_id") @db.Uuid
+  work                  Work          @relation(fields: [workId], references: [id], onDelete: Restrict)
+  proposedScope         String        @map("proposed_scope") @db.VarChar(4000)
+  proposedJustification String        @map("proposed_justification") @db.VarChar(4000)
+  reason                String        @db.VarChar(2000)
+  previousScope         String        @map("previous_scope") @db.VarChar(4000)
+  status                RequestStatus @default(EM_APROVACAO)
+  requesterId           String        @map("requester_id") @db.Uuid
+  createdAt             DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
+  decidedAt             DateTime?     @map("decided_at") @db.Timestamptz(3)
+
+  @@index([workId])
+  @@map("scope_change")
+}
+
+enum BudgetStatus {
+  RASCUNHO
+  EM_APROVACAO
+  APROVADO
+  REJEITADO
+  SUBSTITUIDO
+}
+
+enum BudgetCategory {
+  MATERIAIS
+  SERVICOS
+  MAO_DE_OBRA
+  LOCACOES
+  OUTRAS
+}
+
+model Budget {
+  id            String       @id @default(uuid()) @db.Uuid
+  workId        String       @map("work_id") @db.Uuid
+  work          Work         @relation(fields: [workId], references: [id], onDelete: Restrict)
+  version       Int
+  status        BudgetStatus @default(RASCUNHO)
+  /// Motivo desta versão (orçamento inicial, revisão, aditivo).
+  reason        String       @db.VarChar(1000)
+  contractId    String?      @map("contract_id") @db.Uuid
+  total         Decimal      @default(0) @db.Decimal(14, 2)
+  createdById   String       @map("created_by_id") @db.Uuid
+  submittedById String?      @map("submitted_by_id") @db.Uuid
+  submittedAt   DateTime?    @map("submitted_at") @db.Timestamptz(3)
+  approvedAt    DateTime?    @map("approved_at") @db.Timestamptz(3)
+  createdAt     DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt     DateTime     @updatedAt @map("updated_at") @db.Timestamptz(3)
+  lines         BudgetLine[]
+
+  @@unique([workId, version])
+  @@map("budget")
+}
+
+model BudgetLine {
+  id          String         @id @default(uuid()) @db.Uuid
+  budgetId    String         @map("budget_id") @db.Uuid
+  budget      Budget         @relation(fields: [budgetId], references: [id], onDelete: Cascade)
+  /// Identificador estável da linha entre versões (para comparar e medir).
+  lineKey     String         @map("line_key") @db.Uuid
+  sortOrder   Int            @default(0) @map("sort_order")
+  category    BudgetCategory
+  description String         @db.VarChar(300)
+  unit        String         @db.VarChar(20)
+  quantity    Decimal        @db.Decimal(14, 3)
+  unitPrice   Decimal        @map("unit_price") @db.Decimal(14, 2)
+  companyId   String?        @map("company_id") @db.Uuid
+
+  @@index([budgetId])
+  @@index([lineKey])
+  @@map("budget_line")
+}
+
+enum CostKind {
+  CONTRATADO
+  COMPROMETIDO
+  PAGO
+}
+
+enum CostStatus {
+  REGISTRADO
+  AGUARDANDO_APROVACAO
+  APROVADO
+  REJEITADO
+  CANCELADO
+}
+
+/// Lançamentos financeiros (registro; o sistema não executa pagamentos).
+model CostEntry {
+  id          String         @id @default(uuid()) @db.Uuid
+  workId      String         @map("work_id") @db.Uuid
+  work        Work           @relation(fields: [workId], references: [id], onDelete: Restrict)
+  unitPath    String         @map("unit_path") @db.VarChar(1000)
+  lineKey     String?        @map("line_key") @db.Uuid
+  category    BudgetCategory
+  kind        CostKind
+  status      CostStatus
+  amount      Decimal        @db.Decimal(14, 2)
+  date        DateTime       @db.Date
+  description String         @db.VarChar(500)
+  companyId   String?        @map("company_id") @db.Uuid
+  contractId  String?        @map("contract_id") @db.Uuid
+  /// Cotação, nota fiscal ou comprovante (documento da obra).
+  documentId  String?        @map("document_id") @db.Uuid
+  createdById String         @map("created_by_id") @db.Uuid
+  createdAt   DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@index([workId, kind])
+  @@map("cost_entry")
+}
+
+model Measurement {
+  id          String            @id @default(uuid()) @db.Uuid
+  workId      String            @map("work_id") @db.Uuid
+  work        Work              @relation(fields: [workId], references: [id], onDelete: Restrict)
+  number      Int
+  contractId  String?           @map("contract_id") @db.Uuid
+  periodStart DateTime          @map("period_start") @db.Date
+  periodEnd   DateTime          @map("period_end") @db.Date
+  status      RequestStatus     @default(RASCUNHO)
+  notes       String?           @db.VarChar(2000)
+  total       Decimal           @default(0) @db.Decimal(14, 2)
+  createdById String            @map("created_by_id") @db.Uuid
+  createdAt   DateTime          @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime          @updatedAt @map("updated_at") @db.Timestamptz(3)
+  items       MeasurementItem[]
+
+  @@unique([workId, number])
+  @@map("measurement")
+}
+
+model MeasurementItem {
+  id            String      @id @default(uuid()) @db.Uuid
+  measurementId String      @map("measurement_id") @db.Uuid
+  measurement   Measurement @relation(fields: [measurementId], references: [id], onDelete: Cascade)
+  lineKey       String      @map("line_key") @db.Uuid
+  quantity      Decimal     @db.Decimal(14, 3)
+  amount        Decimal     @db.Decimal(14, 2)
+  notes         String?     @db.VarChar(500)
+
+  @@unique([measurementId, lineKey])
+  @@map("measurement_item")
+}
+
+/// Alçadas por valor (opcionais). Sem faixas, vale a política do tipo.
+model ApprovalTier {
+  id            String       @id @default(uuid()) @db.Uuid
+  kind          ApprovalKind
+  /// Limite superior da faixa; nulo = acima de todas as anteriores.
+  upToAmount    Decimal?     @map("up_to_amount") @db.Decimal(14, 2)
+  stepsRequired Int          @map("steps_required")
+  createdAt     DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@index([kind])
+  @@map("approval_tier")
+}
+
+/// Parâmetros configuráveis do sistema.
+model SystemSetting {
+  key         String   @id @db.VarChar(80)
+  value       Json
+  updatedById String?  @map("updated_by_id") @db.Uuid
+  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@map("system_setting")
+}
+
+enum PrivacySubject {
+  USUARIO
+  PESSOA
+}
+
+enum PrivacyRequestKind {
+  ACESSO
+  CORRECAO
+  ANONIMIZACAO
+  ELIMINACAO
+  OPOSICAO
+  INFORMACAO
+}
+
+enum PrivacyRequestStatus {
+  ABERTA
+  ATENDIDA
+  RECUSADA
+}
+
+/// Registro de atendimento aos titulares de dados (LGPD).
+model PrivacyRequest {
+  id          String               @id @default(uuid()) @db.Uuid
+  subjectType PrivacySubject       @map("subject_type")
+  subjectId   String               @map("subject_id") @db.Uuid
+  kind        PrivacyRequestKind
+  status      PrivacyRequestStatus @default(ABERTA)
+  channel     String               @db.VarChar(120)
+  details     String               @db.VarChar(2000)
+  resolution  String?              @db.VarChar(2000)
+  dueDate     DateTime             @map("due_date") @db.Date
+  createdById String               @map("created_by_id") @db.Uuid
+  handledById String?              @map("handled_by_id") @db.Uuid
+  createdAt   DateTime             @default(now()) @map("created_at") @db.Timestamptz(3)
+  closedAt    DateTime?            @map("closed_at") @db.Timestamptz(3)
+
+  @@index([status])
+  @@map("privacy_request")
+}
+
+enum AgendaEventKind {
+  MUTIRAO
+  VISITA_TECNICA
+  ENTREGA_MATERIAL
+  REUNIAO
+  INSPECAO
+  INTEGRACAO_SEGURANCA
+  OUTRO
+}
+
+enum AgendaEventStatus {
+  AGENDADO
+  REALIZADO
+  CANCELADO
+}
+
+/// Compromisso da agenda de obras de uma unidade local (opcionalmente ligado a uma obra).
+model AgendaEvent {
+  id           String            @id @default(uuid()) @db.Uuid
+  unitId       String            @map("unit_id") @db.Uuid
+  unit         OrganizationUnit  @relation(fields: [unitId], references: [id], onDelete: Restrict)
+  unitPath     String            @map("unit_path") @db.VarChar(1000)
+  workId       String?           @map("work_id") @db.Uuid
+  work         Work?             @relation(fields: [workId], references: [id], onDelete: Restrict)
+  kind         AgendaEventKind
+  title        String            @db.VarChar(200)
+  startsAt     DateTime          @map("starts_at") @db.Timestamptz(3)
+  endsAt       DateTime?         @map("ends_at") @db.Timestamptz(3)
+  location     String?           @db.VarChar(200)
+  notes        String?           @db.VarChar(2000)
+  /// Vagas para voluntários (mutirões), quando aplicável.
+  slots        Int?
+  status       AgendaEventStatus @default(AGENDADO)
+  statusReason String?           @map("status_reason") @db.VarChar(1000)
+  createdById  String            @map("created_by_id") @db.Uuid
+  createdAt    DateTime          @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt    DateTime          @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@index([unitPath, startsAt])
+  @@index([workId])
+  @@map("agenda_event")
+}

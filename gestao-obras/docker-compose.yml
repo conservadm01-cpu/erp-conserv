@@ -1,0 +1,63 @@
+# Ambiente local de desenvolvimento.
+#   docker compose up -d          -> PostgreSQL + Mailpit
+#   docker compose --profile app up -d --build  -> também a aplicação (modo produção)
+services:
+  db:
+    image: postgres:16.4-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: obras
+      POSTGRES_PASSWORD: obras_dev
+      POSTGRES_DB: obras
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U obras -d obras"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  # Caixa de e-mail local para testar a recuperação de senha: http://localhost:8025
+  mail:
+    image: axllent/mailpit:v1.20
+    restart: unless-stopped
+    ports:
+      - "1025:1025"
+      - "8025:8025"
+
+  # Armazenamento de objetos compatível com S3 (opcional). Console: http://localhost:9001
+  #   docker compose --profile s3 up -d   e depois crie o bucket "obras" no console.
+  minio:
+    profiles: ["s3"]
+    image: minio/minio:RELEASE.2025-04-22T22-12-26Z
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: obras
+      MINIO_ROOT_PASSWORD: obras_dev_minio
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - miniodata:/data
+
+  app:
+    profiles: ["app"]
+    build: .
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://obras:obras_dev@db:5432/obras?schema=public
+      APP_URL: http://localhost:3000
+      APP_ENCRYPTION_KEY: ${APP_ENCRYPTION_KEY:?Defina APP_ENCRYPTION_KEY no .env}
+      MAIL_DRIVER: smtp
+      SMTP_HOST: mail
+      SMTP_PORT: 1025
+    ports:
+      - "3000:3000"
+
+volumes:
+  pgdata:
+  miniodata:
