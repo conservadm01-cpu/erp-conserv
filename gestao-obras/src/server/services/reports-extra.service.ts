@@ -255,7 +255,8 @@ async function generalReport(actor: Actor, type: ReportType, r: Report, q: { uni
       const today = startOfToday();
       const in30 = new Date(today.getTime() + 30 * 86_400_000);
       const docs = await prisma.document.findMany({
-        where: { AND: [scope, { OR: [{ status: { in: ["VENCIDO", "ENVIADO", "EM_REVISAO", "REJEITADO"] } }, { status: "APROVADO", expiryDate: { gte: today, lte: in30 } }] }] },
+        // Documentos sensíveis (ASO) ficam fora deste relatório geral.
+        where: { AND: [scope, { sensitive: false }, { OR: [{ status: { in: ["VENCIDO", "ENVIADO", "EM_REVISAO", "REJEITADO"] } }, { status: "APROVADO", expiryDate: { gte: today, lte: in30 } }] }] },
         include: { work: { select: { code: true } }, person: { select: { name: true } }, company: { select: { legalName: true } }, equipment: { select: { name: true } }, category: true },
         orderBy: [{ status: "asc" }, { expiryDate: "asc" }],
         take: 2000,

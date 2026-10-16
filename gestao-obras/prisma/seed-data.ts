@@ -14,7 +14,7 @@ export const ORG_UNIT_TYPES = [
 export const ROLES: { code: string; name: string; description: string; requiresMfa: boolean; isSystem: boolean; permissions: PermissionCode[] }[] = [
   {
     code: "ADMIN_SISTEMA",
-    name: "Administrador do sistema",
+    name: "Master (administração geral)",
     description: "Acesso técnico integral. Deve ser concedido somente na unidade raiz e a poucas pessoas.",
     requiresMfa: true,
     isSystem: true,
@@ -22,8 +22,8 @@ export const ROLES: { code: string; name: string; description: string; requiresM
   },
   {
     code: "GESTOR_REGIONAL",
-    name: "Gestor regional",
-    description: "Administra unidades e usuários dentro da sua região.",
+    name: "Admin regional",
+    description: "Administra unidades, usuários, obras e pessoas somente dentro da sua região.",
     requiresMfa: true,
     isSystem: false,
     permissions: [
@@ -32,7 +32,7 @@ export const ROLES: { code: string; name: string; description: string; requiresM
       "requirement.read", "requirement.evaluate", "report.generate",
       "person.read", "person.manage", "company.read", "company.manage", "contract.manage", "epi.read", "epi.stock",
       "equipment.read", "equipment.manage", "safety.read", "safety.inspect", "safety.action",
-      "budget.read", "budget.manage",
+      "budget.read", "budget.manage", "agenda.read", "agenda.manage",
     ],
   },
   {
@@ -45,6 +45,7 @@ export const ROLES: { code: string; name: string; description: string; requiresM
       "dashboard.view", "org.read", "work.read", "document.read", "document.upload", "requirement.read",
       "person.read", "epi.read", "epi.stock", "equipment.read", "equipment.manage",
       "safety.read", "safety.inspect", "safety.action", "safety.validate", "report.generate",
+      "health.read", "health.manage", "agenda.read", "agenda.manage",
     ],
   },
   {
@@ -56,16 +57,16 @@ export const ROLES: { code: string; name: string; description: string; requiresM
     permissions: [
       "dashboard.view", "org.read", "work.read", "document.read", "document.review", "requirement.read",
       "requirement.evaluate", "requirement.waive", "approval.decide", "report.generate",
-      "person.read", "company.read", "epi.read", "equipment.read", "safety.read", "safety.validate", "budget.read",
+      "person.read", "company.read", "epi.read", "equipment.read", "safety.read", "safety.validate", "budget.read", "agenda.read",
     ],
   },
   {
     code: "RESPONSAVEL_OBRA",
-    name: "Responsável pela obra",
-    description: "Acompanha uma obra específica: etapas, documentos e requisitos. Atribuído por obra.",
+    name: "Encarregado de obra",
+    description: "Conduz a obra no dia a dia: etapas, diário, documentos, equipe e ações de segurança. Atribuído por obra ou unidade.",
     requiresMfa: false,
     isSystem: false,
-    permissions: ["work.read", "work.manage", "document.read", "document.upload", "requirement.read", "report.generate", "safety.read", "safety.action", "budget.read"],
+    permissions: ["work.read", "work.manage", "document.read", "document.upload", "requirement.read", "report.generate", "safety.read", "safety.action", "budget.read", "person.read", "agenda.read", "agenda.manage"],
   },
   {
     code: "AUDITOR",
@@ -75,7 +76,7 @@ export const ROLES: { code: string; name: string; description: string; requiresM
     isSystem: false,
     permissions: [
       "dashboard.view", "org.read", "user.read", "role.read", "audit.read", "work.read", "document.read", "requirement.read", "report.generate",
-      "person.read", "company.read", "epi.read", "equipment.read", "safety.read", "budget.read",
+      "person.read", "company.read", "epi.read", "equipment.read", "safety.read", "budget.read", "agenda.read",
     ],
   },
   {
@@ -84,7 +85,15 @@ export const ROLES: { code: string; name: string; description: string; requiresM
     description: "Visualiza o painel, a estrutura e as obras da sua unidade.",
     requiresMfa: false,
     isSystem: false,
-    permissions: ["dashboard.view", "org.read", "work.read", "document.read", "requirement.read", "safety.read"],
+    permissions: ["dashboard.view", "org.read", "work.read", "document.read", "requirement.read", "safety.read", "agenda.read"],
+  },
+  {
+    code: "VOLUNTARIO",
+    name: "Voluntário",
+    description: "Acessa somente o próprio cadastro: qualificações, ASO, obras em que atua, e envia comprovantes para conferência.",
+    requiresMfa: false,
+    isSystem: false,
+    permissions: ["self.portal"],
   },
 ];
 
@@ -116,6 +125,9 @@ export const DOCUMENT_CATEGORIES = [
   { code: "TREINAMENTO", name: "Certificado de treinamento", requiresExpiry: true },
   { code: "LAUDO", name: "Laudo técnico", requiresExpiry: false },
   { code: "FOTO", name: "Registro fotográfico", requiresExpiry: false },
+  { code: "ASO", name: "Atestado de saúde ocupacional (ASO) — restrito", requiresExpiry: false },
+  { code: "EXPERIENCIA", name: "Comprovação de experiência", requiresExpiry: false },
+  { code: "REGISTRO_PROFISSIONAL", name: "Registro profissional / conselho", requiresExpiry: false },
   { code: "OUTRO", name: "Outro", requiresExpiry: false },
 ];
 
@@ -203,4 +215,18 @@ export const DEMO_EPIS = [
   { name: "Capacete de segurança (exemplo)", epiType: "Proteção da cabeça", manufacturer: "Fabricante Exemplo", caNumber: "00000", minStock: 10, indicatedFor: ["CONSTRUCAO_CIVIL"] },
   { name: "Cinto tipo paraquedista (exemplo)", epiType: "Proteção contra quedas", manufacturer: "Fabricante Exemplo", caNumber: "00001", minStock: 4, indicatedFor: ["TRABALHO_ALTURA"] },
   { name: "Luva de raspa (exemplo)", epiType: "Proteção das mãos", manufacturer: "Fabricante Exemplo", caNumber: "00002", minStock: 20, indicatedFor: ["CONSTRUCAO_CIVIL", "DEMOLICAO"] },
+];
+
+/**
+ * Exigências por atividade para as PESSOAS que a executam (exemplos técnicos).
+ * Todas começam PENDENTES DE VALIDAÇÃO e sem bloqueio: só passam a impedir vínculos
+ * depois de validadas por responsável, com fonte e data de revisão registradas.
+ */
+export const PERSON_REQUIREMENT_RULES = [
+  { code: "PESSOA-ALTURA-TREINAMENTO", name: "Treinamento para trabalho em altura (NR-35) dentro da validade", activityCode: "TRABALHO_ALTURA", kind: "CREDENCIAL" as const, credentialKind: "TREINAMENTO" as const, credentialNameContains: "NR-35", classification: "LEGAL_CONDICIONAL" as const },
+  { code: "PESSOA-ALTURA-ASO", name: "ASO conferido declarando aptidão para trabalho em altura", activityCode: "TRABALHO_ALTURA", kind: "SAUDE" as const, credentialKind: null, credentialNameContains: null, classification: "LEGAL_CONDICIONAL" as const },
+  { code: "PESSOA-ELETRICIDADE-TREINAMENTO", name: "Treinamento de segurança em eletricidade (NR-10) dentro da validade", activityCode: "ELETRICIDADE", kind: "CREDENCIAL" as const, credentialKind: "TREINAMENTO" as const, credentialNameContains: "NR-10", classification: "LEGAL_CONDICIONAL" as const },
+  { code: "PESSOA-ELETRICIDADE-ASO", name: "ASO conferido declarando aptidão para serviços em eletricidade", activityCode: "ELETRICIDADE", kind: "SAUDE" as const, credentialKind: null, credentialNameContains: null, classification: "LEGAL_CONDICIONAL" as const },
+  { code: "PESSOA-CONFINADO-TREINAMENTO", name: "Treinamento para espaço confinado (NR-33) dentro da validade", activityCode: "ESPACO_CONFINADO", kind: "CREDENCIAL" as const, credentialKind: "TREINAMENTO" as const, credentialNameContains: "NR-33", classification: "LEGAL_CONDICIONAL" as const },
+  { code: "PESSOA-CONFINADO-ASO", name: "ASO conferido declarando aptidão para espaço confinado", activityCode: "ESPACO_CONFINADO", kind: "SAUDE" as const, credentialKind: null, credentialNameContains: null, classification: "LEGAL_CONDICIONAL" as const },
 ];

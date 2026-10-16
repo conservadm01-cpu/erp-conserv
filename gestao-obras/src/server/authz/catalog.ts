@@ -44,6 +44,11 @@ export const PERMISSIONS = {
   "privacy.manage": { module: "Privacidade", description: "Atender solicitações de titulares de dados (somente na raiz)" },
   "settings.manage": { module: "Configurações", description: "Alterar parâmetros do sistema (somente na raiz)" },
   "safety.config": { module: "Segurança", description: "Configurar checklists e critérios de criticidade (somente na raiz)" },
+  "agenda.read": { module: "Agenda", description: "Consultar a agenda de obras das unidades" },
+  "agenda.manage": { module: "Agenda", description: "Agendar, concluir e cancelar compromissos da agenda de obras" },
+  "health.read": { module: "Saúde ocupacional", description: "Consultar ASO e aptidões (dado sensível de saúde)" },
+  "health.manage": { module: "Saúde ocupacional", description: "Registrar e conferir ASO" },
+  "self.portal": { module: "Portal do titular", description: "Acessar o próprio cadastro, qualificações e ASO e enviar comprovantes" },
 } as const;
 
 export type PermissionCode = keyof typeof PERMISSIONS;

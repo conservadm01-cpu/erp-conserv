@@ -12,7 +12,7 @@ import { hashPassword, passwordPolicyIssues } from "../src/server/auth/password"
 import { PERMISSIONS } from "../src/server/authz/catalog";
 import { recordAudit } from "../src/server/audit/audit";
 import { systemMeta } from "../src/server/http/request-meta";
-import { ACTIVITY_TYPES, APPROVAL_POLICIES, CHECKLIST_TEMPLATES, CRITICALITY_LEVELS, DEMO_EPIS, DOCUMENT_CATEGORIES, ORG_UNIT_TYPES, REQUIREMENT_RULES, ROLES, SYSTEM_SETTINGS, WORK_TYPES } from "./seed-data";
+import { ACTIVITY_TYPES, APPROVAL_POLICIES, CHECKLIST_TEMPLATES, CRITICALITY_LEVELS, DEMO_EPIS, DOCUMENT_CATEGORIES, ORG_UNIT_TYPES, PERSON_REQUIREMENT_RULES, REQUIREMENT_RULES, ROLES, SYSTEM_SETTINGS, WORK_TYPES } from "./seed-data";
 
 const prisma = new PrismaClient();
 export const DEMO_PASSWORD = "Demo@Obras2026!";
@@ -27,7 +27,8 @@ async function seedBase(mode: string) {
   for (const r of ROLES) {
     const role = await prisma.role.upsert({
       where: { code: r.code },
-      update: r.isSystem ? { isSystem: true, requiresMfa: true } : {},
+      // Nomes só são atualizados no modo demonstração (em produção podem ter sido personalizados).
+      update: { ...(r.isSystem ? { isSystem: true, requiresMfa: true } : {}), ...(mode === "demo" ? { name: r.name, description: r.description } : {}) },
       create: { code: r.code, name: r.name, description: r.description, requiresMfa: r.requiresMfa, isSystem: r.isSystem },
     });
     // Papéis de sistema recebem sempre todas as permissões do catálogo; os demais só na criação
@@ -43,6 +44,7 @@ async function seedBase(mode: string) {
   for (const p of APPROVAL_POLICIES) await prisma.approvalPolicy.upsert({ where: { kind: p.kind }, update: {}, create: p });
   // Regras de requisito: criadas uma única vez; alterações posteriores são feitas pela tela de configuração.
   for (const r of REQUIREMENT_RULES) await prisma.requirementRule.upsert({ where: { code: r.code }, update: {}, create: r });
+  for (const r of PERSON_REQUIREMENT_RULES) await prisma.personRequirementRule.upsert({ where: { code: r.code }, update: {}, create: r });
   for (const st of SYSTEM_SETTINGS) await prisma.systemSetting.upsert({ where: { key: st.key }, update: {}, create: st });
   for (const c of CRITICALITY_LEVELS) await prisma.criticalityLevel.upsert({ where: { code: c.code }, update: {}, create: c });
   for (const t of CHECKLIST_TEMPLATES) {
@@ -105,15 +107,40 @@ async function seedDemo(root: { id: string; path: string; depth: number }) {
     { email: "analista@exemplo.test", name: "Analista Central Demonstração", unit: root, role: "ANALISTA_CENTRAL" },
     { email: "seguranca.norte@exemplo.test", name: "Técnico de Segurança Norte Demonstração", unit: norte, role: "TECNICO_SEGURANCA" },
     { email: "consulta.alfa@exemplo.test", name: "Consulta Alfa Demonstração", unit: alfa, role: "CONSULTA" },
+    { email: "encarregado.alfa@exemplo.test", name: "Encarregado Alfa Demonstração", unit: alfa, role: "RESPONSAVEL_OBRA" },
+    { email: "voluntario.alfa@exemplo.test", name: "Voluntário Alfa Demonstração", unit: alfa, role: "VOLUNTARIO" },
   ];
+  const ids: Record<string, string> = {};
   for (const u of users) {
     const user = await ensureUser({ email: u.email, name: u.name, password: DEMO_PASSWORD, homeUnitId: u.unit.id, mustChangePassword: false });
     await grant(user.id, u.role, u.unit.id);
+    ids[u.email] = user.id;
   }
+  await seedDemoPeople(alfa, ids);
   for (const e of DEMO_EPIS) {
     if (!(await prisma.epiCatalog.findFirst({ where: { name: e.name } }))) await prisma.epiCatalog.create({ data: e });
   }
   return users.map((u) => `${u.email} (${u.role})`);
+}
+
+/** Pessoas fictícias: um voluntário com acesso ao portal e um técnico com comprovação de experiência. */
+async function seedDemoPeople(alfa: { id: string; path: string }, ids: Record<string, string>) {
+  const by = ids["gestor.norte@exemplo.test"]!;
+  const yearAhead = new Date(Date.now() + 300 * 86_400_000);
+  if (!(await prisma.person.findFirst({ where: { userId: ids["voluntario.alfa@exemplo.test"] } }))) {
+    const v = await prisma.person.create({
+      data: { name: "Voluntário Alfa Demonstração", category: "VOLUNTARIO", email: "voluntario.alfa@exemplo.test", jobFunction: "Ajudante de obra", authorizedActivities: ["TRABALHO_ALTURA"], unitId: alfa.id, unitPath: alfa.path, createdById: by, userId: ids["voluntario.alfa@exemplo.test"] },
+    });
+    await prisma.professionalCredential.create({ data: { personId: v.id, kind: "TREINAMENTO", name: "NR-35 — Trabalho em altura (exemplo fictício)", issuer: "Entidade de treinamento fictícia", issueDate: new Date(), expiryDate: yearAhead } });
+    await prisma.healthCertificate.create({ data: { personId: v.id, examType: "PERIODICO", result: "APTO", fitFor: ["TRABALHO_ALTURA"], examDate: new Date(), expiryDate: yearAhead, createdById: by } });
+  }
+  if (!(await prisma.person.findFirst({ where: { name: "Técnico Demonstração Norte" } }))) {
+    const t = await prisma.person.create({
+      data: { name: "Técnico Demonstração Norte", category: "PROFISSIONAL", jobFunction: "Técnico de segurança do trabalho", unitId: alfa.id, unitPath: alfa.path, createdById: by },
+    });
+    await prisma.professionalCredential.create({ data: { personId: t.id, kind: "REGISTRO_CONSELHO", name: "Registro profissional (número fictício)", number: "000000-EX" } });
+    await prisma.professionalCredential.create({ data: { personId: t.id, kind: "EXPERIENCIA", name: "Declaração de experiência em obras (exemplo fictício)", issuer: "Empresa fictícia" } });
+  }
 }
 
 async function main() {

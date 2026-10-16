@@ -77,6 +77,17 @@ export async function readJson<T>(req: NextRequest, schema: ZodType<T, ZodTypeDe
 
 /** Lê um formulário multipart com um arquivo no campo "file" e campos de texto. */
 export async function readMultipart(req: NextRequest, maxBytes: number) {
+  const r = await readMultipartForm(req, maxBytes, false);
+  if (!r.file) throw Errors.invalid("Selecione um arquivo.", { file: ["Selecione um arquivo."] });
+  return { fields: r.fields, file: r.file };
+}
+
+/** Igual a readMultipart, mas o arquivo é opcional. */
+export async function readMultipartOptional(req: NextRequest, maxBytes: number) {
+  return readMultipartForm(req, maxBytes, true);
+}
+
+async function readMultipartForm(req: NextRequest, maxBytes: number, fileOptional: boolean): Promise<{ fields: Record<string, string>; file: { name: string; bytes: Uint8Array } | null }> {
   const length = Number(req.headers.get("content-length") ?? "0");
   if (length > maxBytes + 64_000) throw Errors.invalid("Arquivo muito grande.", { file: ["Arquivo muito grande."] });
   if (!req.headers.get("content-type")?.startsWith("multipart/form-data")) throw Errors.invalid("Envie o arquivo como formulário multipart.");
@@ -87,10 +98,11 @@ export async function readMultipart(req: NextRequest, maxBytes: number) {
     throw Errors.invalid("Formulário inválido.");
   }
   const file = form.get("file");
-  if (!(file instanceof File)) throw Errors.invalid("Selecione um arquivo.", { file: ["Selecione um arquivo."] });
-  if (file.size > maxBytes) throw Errors.invalid("Arquivo muito grande.", { file: ["Arquivo muito grande."] });
   const fields: Record<string, string> = {};
   for (const [k, v] of form.entries()) if (typeof v === "string") fields[k] = v;
+  if (fileOptional && (!(file instanceof File) || file.size === 0)) return { fields, file: null };
+  if (!(file instanceof File)) throw Errors.invalid("Selecione um arquivo.", { file: ["Selecione um arquivo."] });
+  if (file.size > maxBytes) throw Errors.invalid("Arquivo muito grande.", { file: ["Arquivo muito grande."] });
   return { fields, file: { name: file.name, bytes: new Uint8Array(await file.arrayBuffer()) } };
 }
 

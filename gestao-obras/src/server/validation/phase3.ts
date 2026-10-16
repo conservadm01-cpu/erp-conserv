@@ -37,7 +37,7 @@ export const updatePersonSchema = z.object({
 });
 
 export const credentialSchema = z.object({
-  kind: z.enum(["REGISTRO_CONSELHO", "QUALIFICACAO", "HABILITACAO", "CERTIFICADO", "TREINAMENTO", "INTEGRACAO_SEGURANCA"]),
+  kind: z.enum(["REGISTRO_CONSELHO", "QUALIFICACAO", "HABILITACAO", "CERTIFICADO", "TREINAMENTO", "INTEGRACAO_SEGURANCA", "EXPERIENCIA"]),
   name: requiredText(200, "Nome"),
   issuer: optionalText(200),
   number: optionalText(100),

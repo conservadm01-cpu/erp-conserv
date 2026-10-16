@@ -4,7 +4,7 @@ import type { Prisma } from "@prisma/client";
 import { prisma, type Db } from "../db";
 import { env } from "../env";
 import { recordAudit } from "../audit/audit";
-import { assertCanOnWork, can, canOnWork, workScopedWhere, type Actor } from "../authz/authorize";
+import { assertCanOnWork, can, canOnWork, pathWhere, workScopedWhere, type Actor } from "../authz/authorize";
 import type { PermissionCode } from "../authz/catalog";
 import { Errors } from "../http/errors";
 import type { RequestMeta } from "../http/request-meta";
@@ -32,8 +32,20 @@ function storageKey(prefix: string) {
   return `${prefix}/${randomUUID()}`;
 }
 
-/** Permissão sobre um documento: pela obra (inclui escopo de obra) ou pela unidade do dono. */
-export function canOnDocument(actor: Actor, permission: PermissionCode, doc: { unitPath: string; work: { id: string; unitPath: string } | null }) {
+/** Categorias cujo conteúdo é dado sensível de saúde (acesso restrito). */
+export const SENSITIVE_CATEGORIES = ["ASO"];
+
+type DocAccess = { unitPath: string; work: { id: string; unitPath: string } | null; sensitive?: boolean; person?: { userId: string | null } | null };
+
+/**
+ * Permissão sobre um documento: pela obra (inclui escopo de obra) ou pela unidade do dono.
+ * Documento sensível (ASO) exige a permissão de saúde correspondente; o próprio titular
+ * sempre pode consultar e baixar os seus documentos.
+ */
+export function canOnDocument(actor: Actor, permission: PermissionCode, doc: DocAccess) {
+  const isOwner = Boolean(doc.person?.userId && doc.person.userId === actor.userId);
+  if (permission === "document.read" && isOwner) return true;
+  if (doc.sensitive) return can(actor, permission === "document.read" ? "health.read" : "health.manage", doc.unitPath);
   return doc.work ? canOnWork(actor, permission, doc.work) : can(actor, permission, doc.unitPath);
 }
 
@@ -79,7 +91,8 @@ async function resolveOwner(actor: Actor, owner: DocumentOwner) {
 
 export async function listOwnerDocuments(actor: Actor, owner: Exclude<DocumentOwner["kind"], "work">, id: string, unitPath: string) {
   if (!can(actor, "document.read", unitPath)) return [];
-  const where = owner === "person" ? { personId: id } : owner === "company" ? { companyId: id } : { equipmentId: id };
+  const base = owner === "person" ? { personId: id } : owner === "company" ? { companyId: id } : { equipmentId: id };
+  const where = can(actor, "health.read", unitPath) ? base : { ...base, sensitive: false };
   await markExpiredDocuments(prisma, where);
   return prisma.document.findMany({ where, include: { category: true, versions: { orderBy: { versionNo: "desc" } } }, orderBy: { createdAt: "asc" } });
 }
@@ -91,7 +104,7 @@ export async function markExpiredDocuments(db: Db = prisma, filter: Prisma.Docum
 }
 
 async function loadDocument(actor: Actor, id: string) {
-  const doc = await prisma.document.findUnique({ where: { id }, include: { work: true } });
+  const doc = await prisma.document.findUnique({ where: { id }, include: { work: true, person: { select: { userId: true } } } });
   if (!doc || !canOnDocument(actor, "document.read", doc)) throw Errors.notFound("Documento");
   return doc;
 }
@@ -115,12 +128,16 @@ export async function listWorkDocuments(actor: Actor, workId: string) {
 export async function searchDocuments(actor: Actor, q: { q?: string; status?: Prisma.DocumentWhereInput["status"]; categoryCode?: string; expiring?: "30" }) {
   const scope = workScopedWhere(actor, "document.read", "workId");
   if (!scope) return [];
+  // Documentos sensíveis só aparecem na busca para quem tem a permissão de saúde naquela unidade.
+  const health = pathWhere(actor, "health.read", "unitPath");
+  const sensitiveFilter: Prisma.DocumentWhereInput = health ? { OR: [{ sensitive: false }, health] } : { sensitive: false };
   await markExpiredDocuments(prisma);
   const in30 = new Date(startOfToday().getTime() + 30 * 86_400_000);
   return prisma.document.findMany({
     where: {
       AND: [
         scope,
+        sensitiveFilter,
         q.status ? { status: q.status } : {},
         q.categoryCode ? { categoryCode: q.categoryCode } : {},
         q.expiring ? { status: "APROVADO", expiryDate: { gte: startOfToday(), lte: in30 } } : {},
@@ -141,22 +158,39 @@ export async function uploadDocument(actor: Actor, workId: string, metaIn: Docum
 
 export async function uploadOwnedDocument(actor: Actor, owner: DocumentOwner, metaIn: DocumentMeta, file: UploadedFile, meta: RequestMeta) {
   const target = await resolveOwner(actor, owner);
+  if (SENSITIVE_CATEGORIES.includes(metaIn.categoryCode)) {
+    if (owner.kind !== "person") throw Errors.invalid("Esta categoria só pode ser usada no cadastro de pessoas.", { categoryCode: ["Categoria inválida."] });
+    if (!can(actor, "health.manage", target.unitPath)) throw Errors.forbidden("Você não pode registrar documentos de saúde ocupacional.");
+  }
+  return storeOwnedDocument(actor, owner, target, metaIn, file, meta);
+}
+
+/** Grava arquivo e registro do documento. A autorização é responsabilidade de quem chama. */
+export async function storeOwnedDocument(
+  actor: Actor,
+  owner: DocumentOwner,
+  target: { unitPath: string; link: Record<string, string | undefined>; label: string },
+  metaIn: DocumentMeta,
+  file: UploadedFile,
+  meta: RequestMeta,
+) {
   const category = await prisma.documentCategory.findUnique({ where: { code: metaIn.categoryCode } });
   if (!category || !category.active) throw Errors.invalid("Categoria inválida.", { categoryCode: ["Selecione uma categoria."] });
   if (category.requiresExpiry && !metaIn.expiryDate) throw Errors.invalid("Esta categoria exige data de validade.", { expiryDate: ["Informe a validade."] });
+  const sensitive = SENSITIVE_CATEGORIES.includes(category.code);
   const info = checkFile(file);
   const key = storageKey(`${owner.kind}/${owner.id}`);
   await getStorage().put(key, file.bytes, info.mime);
   try {
     return await prisma.$transaction(async (tx) => {
       const doc = await tx.document.create({
-        data: { ...metaIn, ...target.link, unitPath: target.unitPath, createdById: actor.userId, status: "ENVIADO" },
+        data: { ...metaIn, ...target.link, unitPath: target.unitPath, createdById: actor.userId, status: "ENVIADO", sensitive },
       });
       await tx.documentVersion.create({
         data: { documentId: doc.id, versionNo: 1, storageKey: key, fileName: info.fileName, mimeType: info.mime, sizeBytes: file.bytes.length, sha256: info.sha256, uploadedById: actor.userId },
       });
       await recordAudit(
-        { action: "documento.enviado", actor: auditActor(actor), objectType: "Document", objectId: doc.id, unitPath: target.unitPath, metadata: { dono: owner.kind, referencia: target.label, titulo: doc.title, categoria: doc.categoryCode, sha256: info.sha256, bytes: file.bytes.length } },
+        { action: "documento.enviado", actor: auditActor(actor), objectType: "Document", objectId: doc.id, unitPath: target.unitPath, metadata: { dono: owner.kind, referencia: target.label, titulo: sensitive ? "(documento restrito)" : doc.title, categoria: doc.categoryCode, sha256: info.sha256, bytes: file.bytes.length } },
         meta,
         tx,
       );

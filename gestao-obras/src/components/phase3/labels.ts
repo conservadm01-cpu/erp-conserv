@@ -2,7 +2,12 @@ export const PERSON_CATEGORY: Record<string, string> = { PROFISSIONAL: "Profissi
 export const CREDENTIAL_KIND: Record<string, string> = {
   REGISTRO_CONSELHO: "Registro em conselho profissional", QUALIFICACAO: "Qualificação", HABILITACAO: "Habilitação",
   CERTIFICADO: "Certificado", TREINAMENTO: "Treinamento", INTEGRACAO_SEGURANCA: "Integração de segurança",
+  EXPERIENCIA: "Comprovação de experiência",
 };
+export const HEALTH_EXAM: Record<string, string> = {
+  ADMISSIONAL: "Admissional", PERIODICO: "Periódico", RETORNO_TRABALHO: "Retorno ao trabalho", MUDANCA_RISCO: "Mudança de risco ocupacional", DEMISSIONAL: "Demissional", OUTRO: "Outro",
+};
+export const HEALTH_STATUS: Record<string, string> = { PENDENTE_CONFERENCIA: "Aguardando conferência", CONFERIDO: "Conferido", INATIVO: "Inativo" };
 export const CONTRACT_KIND: Record<string, string> = { CONTRATO: "Contrato", ADITIVO: "Aditivo", ORDEM_SERVICO: "Ordem de serviço" };
 export const CONTRACT_STATUS: Record<string, string> = { RASCUNHO: "Rascunho", VIGENTE: "Vigente", ENCERRADO: "Encerrado", CANCELADO: "Cancelado" };
 export const EQUIPMENT_KIND: Record<string, string> = { FERRAMENTA: "Ferramenta", EQUIPAMENTO_COLETIVO: "Equipamento de proteção coletiva", MAQUINA: "Máquina", EPI_DURAVEL: "EPI durável (controle individual)" };

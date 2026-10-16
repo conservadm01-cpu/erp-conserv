@@ -8,13 +8,16 @@ import { Forbidden } from "@/components/Forbidden";
 import { Alert } from "@/components/ui/Alert";
 import { RuleEditor } from "@/components/config/RuleEditor";
 import { serialize } from "@/lib/format";
+import { listPersonRules } from "@/server/services/health.service";
+import { PersonRulesPanel } from "@/components/config/PersonRulesPanel";
 
 export const metadata: Metadata = { title: "Regras documentais" };
 
 export default async function RulesPage() {
   const actor = await requirePageActor();
   if (!canAnywhere(actor, "requirement.read")) return <Forbidden />;
-  const [rules, catalogs, root] = await Promise.all([listRules(actor), listRequirementCatalogs(), getRootUnit()]);
+  const [rules, catalogs, root, personRules] = await Promise.all([listRules(actor), listRequirementCatalogs(), getRootUnit(), listPersonRules(actor)]);
+  const canManage = Boolean(root && can(actor, "requirement.manage", root.path));
   return (
     <div className="max-w-6xl space-y-4">
       <PageHeader title="Regras documentais" description="Matriz configurável de requisitos por tipo de obra, atividade e forma de execução." />
@@ -23,11 +26,16 @@ export default async function RulesPage() {
       </Alert>
       <RuleEditor
         rules={serialize(rules)}
-        canManage={Boolean(root && can(actor, "requirement.manage", root.path))}
+        canManage={canManage}
         workTypes={catalogs.workTypes}
         activities={catalogs.activities}
         categories={catalogs.categories}
       />
+      <section className="space-y-3 pt-4" aria-labelledby="pessoas">
+        <h2 id="pessoas" className="text-lg font-semibold">Exigências para as pessoas, por atividade</h2>
+        <p className="text-sm text-slate-600">Treinamentos e ASO que quem executa cada atividade deve ter. Enquanto pendentes de validação, apenas geram avisos; validadas e marcadas para impedir, bloqueiam o vínculo de quem não atende.</p>
+        <PersonRulesPanel rules={personRules} canManage={canManage} />
+      </section>
     </div>
   );
 }

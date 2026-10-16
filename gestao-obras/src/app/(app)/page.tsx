@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { redirect } from "next/navigation";
 import { z } from "zod";
 import { requirePageActor } from "@/server/auth/page-context";
 import { canAnywhere } from "@/server/authz/authorize";
@@ -42,7 +43,11 @@ function Money({ label, value }: { label: string; value: number }) {
 
 export default async function DashboardPage({ searchParams }: { searchParams: Promise<Record<string, string | undefined>> }) {
   const actor = await requirePageActor();
-  if (!canAnywhere(actor, "dashboard.view")) return <Forbidden />;
+  if (!canAnywhere(actor, "dashboard.view")) {
+    // Perfis sem painel (ex.: voluntário) vão direto para o próprio cadastro.
+    if (canAnywhere(actor, "self.portal")) redirect("/meu-cadastro");
+    return <Forbidden />;
+  }
   const sp = await searchParams;
   const parsed = filterSchema.safeParse(Object.fromEntries(Object.entries(sp).filter(([, v]) => v)));
   const f = parsed.success ? parsed.data : {};

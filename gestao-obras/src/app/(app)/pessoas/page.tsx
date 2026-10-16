@@ -1,5 +1,8 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { listOrgUnits } from "@/server/services/org-unit.service";
+import { RegionSelect } from "@/components/filters/RegionSelect";
+import { uuid } from "@/server/validation/common";
 import { requirePageActor } from "@/server/auth/page-context";
 import { canAnywhere } from "@/server/authz/authorize";
 import { listPeople } from "@/server/services/people.service";
@@ -13,13 +16,14 @@ export const metadata: Metadata = { title: "Pessoas" };
 
 const CATEGORIES = ["PROFISSIONAL", "EMPREGADO", "VOLUNTARIO", "OUTRO"] as const;
 
-export default async function PeoplePage({ searchParams }: { searchParams: Promise<{ categoria?: string; q?: string }> }) {
+export default async function PeoplePage({ searchParams }: { searchParams: Promise<{ categoria?: string; q?: string; unitId?: string }> }) {
   const actor = await requirePageActor();
   if (!canAnywhere(actor, "person.read")) return <Forbidden />;
   const sp = await searchParams;
   const category = CATEGORIES.find((c) => c === sp.categoria);
   const q = sp.q?.slice(0, 100) || undefined;
-  const people = await listPeople(actor, { category, q });
+  const regionId = sp.unitId && uuid.safeParse(sp.unitId).success ? sp.unitId : undefined;
+  const [people, units] = await Promise.all([listPeople(actor, { category, q, regionId }), listOrgUnits(actor, { status: "ATIVA" })]);
   const title = category === "VOLUNTARIO" ? "Voluntários" : category === "PROFISSIONAL" ? "Profissionais" : "Pessoas";
   return (
     <div>
@@ -33,11 +37,11 @@ export default async function PeoplePage({ searchParams }: { searchParams: Promi
           <Link key={c.k} href={c.k ? `/pessoas?categoria=${c.k}` : "/pessoas"} aria-current={(category ?? "") === c.k ? "page" : undefined} className={`rounded-full border px-3 py-1 ${(category ?? "") === c.k ? "border-brand-700 bg-brand-700 text-white" : "border-slate-300 bg-white hover:bg-slate-50"}`}>{c.l}</Link>
         ))}
       </nav>
-      <form className="mb-4 flex gap-2" role="search">
+      <form className="mb-4 grid grid-cols-1 items-end gap-2 sm:grid-cols-3" role="search">
         {category && <input type="hidden" name="categoria" value={category} />}
-        <label htmlFor="q" className="sr-only">Buscar</label>
-        <input id="q" name="q" defaultValue={q} placeholder="Nome, função ou identificação interna" className="input max-w-sm" />
-        <button className="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm hover:bg-slate-50">Buscar</button>
+        <div><label htmlFor="q" className="label">Buscar</label><input id="q" name="q" defaultValue={q} placeholder="Nome, função ou identificação interna" className="input" /></div>
+        <RegionSelect units={units} value={regionId} />
+        <div><button className="w-full rounded-md border border-slate-300 bg-white px-4 py-2 text-sm hover:bg-slate-50">Buscar</button></div>
       </form>
       {people.length === 0 ? <EmptyState title="Nenhuma pessoa encontrada" /> : (
         <div className="card overflow-x-auto">

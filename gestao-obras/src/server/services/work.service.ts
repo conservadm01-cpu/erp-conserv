@@ -43,12 +43,14 @@ export async function listWorkCatalogs() {
 export async function listWorks(actor: Actor, q: WorkListQuery = {}) {
   const scope = workScopedWhere(actor, "work.read", "id");
   if (!scope) return [];
+  // Filtro por região/unidade inclui as unidades subordinadas e soma-se ao escopo (nunca o amplia).
+  const unit = q.unitId ? await prisma.organizationUnit.findUnique({ where: { id: q.unitId }, select: { path: true } }) : null;
   const where: Prisma.WorkWhereInput = {
     AND: [
       scope,
       q.status ? { status: q.status } : {},
       q.typeCode ? { typeCode: q.typeCode } : {},
-      q.unitId ? { unitId: q.unitId } : {},
+      q.unitId ? { unitPath: { startsWith: unit?.path ?? "#inexistente" } } : {},
       q.q ? { OR: [{ title: { contains: q.q, mode: "insensitive" } }, { code: { contains: q.q, mode: "insensitive" } }] } : {},
     ],
   };

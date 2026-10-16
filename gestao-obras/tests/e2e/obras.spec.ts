@@ -23,7 +23,8 @@ test("ciclo da obra: cadastro, documentos, requisitos, tramitação, aprovação
   await loginWithFreshMfa(page, "gestor.norte@exemplo.test");
   await page.getByRole("navigation", { name: "Menu principal" }).getByRole("link", { name: "Obras" }).click();
   await page.getByRole("link", { name: "Nova obra" }).click();
-  await page.getByLabel("Unidade").selectOption({ label: "— — Unidade Local Alfa" });
+  await expect(page.getByRole("heading", { name: "Nova obra" })).toBeVisible();
+  await page.getByRole("combobox", { name: "Unidade", exact: true }).selectOption({ label: "— — Unidade Local Alfa" });
   await page.getByLabel("Título").fill("Reforma da cobertura");
   await page.getByLabel("Tipo de obra").selectOption({ label: "Reforma" });
   await page.getByLabel("Trabalho em altura").check();

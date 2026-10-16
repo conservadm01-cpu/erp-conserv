@@ -11,6 +11,7 @@ const NAV: (NavItem & { permission?: PermissionCode; alt?: PermissionCode })[] =
   { group: "Obras", href: "/obras", label: "Obras", permission: "work.read" },
   { group: "Obras", href: "/documentos", label: "Documentos", permission: "document.read" },
   { group: "Obras", href: "/aprovacoes", label: "Aprovações", permission: "approval.decide", alt: "document.review" },
+  { group: "Obras", href: "/agenda", label: "Agenda", permission: "agenda.read" },
   { group: "Obras", href: "/orcamentos", label: "Orçamentos", permission: "budget.read" },
   { group: "Obras", href: "/relatorios", label: "Relatórios", permission: "report.generate" },
   { group: "Pessoas e empresas", href: "/pessoas", label: "Pessoas", permission: "person.read" },
@@ -30,6 +31,7 @@ const NAV: (NavItem & { permission?: PermissionCode; alt?: PermissionCode })[] =
   { group: "Configurações", href: "/configuracoes/fluxos", label: "Fluxos e alçadas", permission: "approval.decide" },
   { group: "Configurações", href: "/configuracoes/seguranca", label: "Segurança", permission: "safety.read" },
   { group: "Configurações", href: "/configuracoes/parametros", label: "Parâmetros", permission: "settings.manage" },
+  { group: "Conta", href: "/meu-cadastro", label: "Meu cadastro", permission: "self.portal" },
   { group: "Conta", href: "/notificacoes", label: "Notificações" },
   { group: "Conta", href: "/conta", label: "Minha conta" },
 ];

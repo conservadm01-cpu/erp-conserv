@@ -5,17 +5,21 @@ import { assertCan, assertCanOnWork, can, canOnWork, pathWhere, type Actor } fro
 import { Errors } from "../http/errors";
 import type { RequestMeta } from "../http/request-meta";
 import type { z } from "zod";
+import { experienceSummary, personCompliance } from "./health.service";
 import type { assignmentSchema, credentialSchema, personSchema, updateAssignmentSchema, updatePersonSchema } from "../validation/phase3";
 
 const auditActor = (a: Actor) => ({ userId: a.userId, email: a.email });
 
-export async function listPeople(actor: Actor, q: { category?: PersonCategory; q?: string; status?: "ATIVO" | "INATIVO" } = {}) {
+export async function listPeople(actor: Actor, q: { category?: PersonCategory; q?: string; status?: "ATIVO" | "INATIVO"; regionId?: string } = {}) {
   const scope = pathWhere(actor, "person.read", "unitPath");
   if (!scope) return [];
+  // Filtro por região/unidade: soma-se ao escopo (nunca o amplia).
+  const region = q.regionId ? await prisma.organizationUnit.findUnique({ where: { id: q.regionId }, select: { path: true } }) : null;
   return prisma.person.findMany({
     where: {
       AND: [
         scope,
+        q.regionId ? { unitPath: { startsWith: region?.path ?? "#inexistente" } } : {},
         q.category ? { category: q.category } : {},
         q.status ? { status: q.status } : {},
         q.q ? { OR: [{ name: { contains: q.q, mode: "insensitive" } }, { jobFunction: { contains: q.q, mode: "insensitive" } }, { internalId: { contains: q.q, mode: "insensitive" } }] } : {},
@@ -45,7 +49,16 @@ export async function getPerson(actor: Actor, id: string) {
       epiDeliveries: { orderBy: { deliveredAt: "desc" }, include: { catalog: { select: { name: true, caNumber: true } } }, take: 100 },
     },
   });
-  return { ...person, canManage: can(actor, "person.manage", person.unitPath), assignments: person.assignments.filter((a) => canOnWork(actor, "work.read", a.work)) };
+  const activities = [...new Set([...person.authorizedActivities, ...person.assignments.filter((a) => a.status === "ATIVO").flatMap((a) => a.activities)])];
+  const linkedUser = person.userId ? await prisma.user.findUnique({ where: { id: person.userId }, select: { email: true } }) : null;
+  return {
+    ...person,
+    canManage: can(actor, "person.manage", person.unitPath),
+    assignments: person.assignments.filter((a) => canOnWork(actor, "work.read", a.work)),
+    compliance: await personCompliance(prisma, id, activities),
+    experience: experienceSummary(person.credentials),
+    linkedEmail: linkedUser?.email ?? null,
+  };
 }
 
 async function checkRefs(actor: Actor, input: { companyId?: string | null; authorizedActivities?: string[] }) {
@@ -132,6 +145,13 @@ export async function addAssignment(actor: Actor, personId: string, input: z.inf
   if (["CONCLUIDA", "ARQUIVADA", "REJEITADA"].includes(work.status)) throw Errors.conflict("A obra não aceita novos vínculos.");
   if (input.endDate && input.endDate < input.startDate) throw Errors.invalid("O término deve ser posterior ao início.", { endDate: ["Data inválida."] });
   const notAuthorized = input.activities.filter((a) => !p.authorizedActivities.includes(a));
+  // Exigências por atividade: só bloqueiam quando validadas e marcadas como bloqueantes.
+  const compliance = await personCompliance(prisma, personId, input.activities);
+  const blocked = compliance.filter((c) => c.blocking && !c.met);
+  if (blocked.length) {
+    throw Errors.conflict(`Vínculo não permitido. Pendências: ${blocked.map((c) => `${c.activityName}: ${c.name}`).join("; ")}.`);
+  }
+  const pending = compliance.filter((c) => !c.met);
   return prisma.$transaction(async (tx) => {
     const a = await tx.volunteerAssignment.create({ data: { ...input, endDate: input.endDate ?? null, safetyBriefingAt: input.safetyBriefingAt ?? null, personId, createdById: actor.userId } });
     await recordAudit(
@@ -139,7 +159,14 @@ export async function addAssignment(actor: Actor, personId: string, input: z.inf
       meta,
       tx,
     );
-    return { assignment: a, warnings: [...(notAuthorized.length ? ["Há atividades não autorizadas no cadastro da pessoa."] : []), ...(!a.safetyBriefingAt ? ["Orientação de segurança/integração ainda não registrada."] : [])] };
+    return {
+      assignment: a,
+      warnings: [
+        ...(notAuthorized.length ? ["Há atividades não autorizadas no cadastro da pessoa."] : []),
+        ...(!a.safetyBriefingAt ? ["Orientação de segurança/integração ainda não registrada."] : []),
+        ...pending.map((c) => `${c.activityName}: ${c.name} — ${c.detail}${c.validated ? "" : " (exigência pendente de validação)"}`),
+      ],
+    };
   });
 }
 

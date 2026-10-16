@@ -87,7 +87,17 @@ export async function generateAlerts(now = new Date()) {
   });
   for (const d of docs) {
     const expired = d.status === "VENCIDO";
-    const users = await recipientsFor("document.upload", d.unitPath, d.workId ?? undefined);
+    // Documento sensível: avisa só quem tem permissão de saúde, sem expor o título.
+    const users = await recipientsFor(d.sensitive ? "health.manage" : "document.upload", d.unitPath, d.workId ?? undefined);
+    if (d.sensitive) {
+      created += await notify(users, {
+        kind: expired ? "documento.vencido" : "documento.vencendo", severity: expired ? "ALERTA" : "INFO",
+        title: expired ? "Documento restrito de saúde vencido" : "Documento restrito de saúde vence em breve",
+        body: `Validade: ${d.expiryDate ? fmt(d.expiryDate) : "—"}.`, link: d.personId ? `/pessoas/${d.personId}` : "/pessoas",
+        dedupKey: `${expired ? "doc-vencido" : "doc-vencendo"}:${d.id}:${d.expiryDate ? day(d.expiryDate) : ""}`,
+      });
+      continue;
+    }
     created += await notify(users, {
       kind: expired ? "documento.vencido" : "documento.vencendo",
       severity: expired ? "ALERTA" : "INFO",

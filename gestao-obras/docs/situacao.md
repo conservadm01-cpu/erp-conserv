@@ -77,11 +77,20 @@ Atualizado ao final da **Fase 4 (gestão e implantação)**. As quatro fases do 
 - Rotina diária com retenção de tentativas de login e sessões; ancoragem do hash da auditoria (`npm run audit:anchor`).
 - Varredura automatizada de segurança nas rotas reais: CSRF (Origin), autenticação obrigatória e IDOR entre regiões.
 
+### Perfis, pessoas e agenda (após a Fase 4)
+- Perfis de exemplo: Master (administração geral), Admin regional, Analista central, Encarregado de obra, Técnico de segurança, Auditor, Consulta e Voluntário — todos configuráveis na tela de permissões.
+- Comprovação de experiência para profissionais e técnicos, com conferência manual em fonte oficial.
+- ASO como dado sensível restrito (conclusão, atividades liberadas e validade; arquivo acessível só à saúde ocupacional e ao titular).
+- Exigências por atividade (ex.: treinamento NR-35 e ASO apto para trabalho em altura), pendentes de validação por padrão; avisam no vínculo e só bloqueiam quando validadas e marcadas como bloqueantes.
+- Portal do voluntário ("Meu cadastro"): pendências, comprovantes, ASO, obras e próximos compromissos.
+- Filtro por região/unidade nas listas de obras e pessoas, sempre limitado ao escopo (o servidor nunca devolve dados de outra região).
+- Agenda de obras por unidade local: mutirões, visitas técnicas, entregas, reuniões, inspeções e integrações, com etapas, marcos e inspeções previstas das obras; conclusão e cancelamento com motivo, sem exclusão.
+
 ### Testes
 - Unidade: autorização, criptografia, senha, TOTP, higienização, CSRF, redirecionamento seguro, OpenAPI.
 - Integração (PostgreSQL real): isolamento entre regiões, autenticação, MFA, recuperação de senha, auditoria, papéis.
 - E2E (Playwright, build de produção): fluxos de login, CSP, isolamento na interface e na API, cadastro de MFA, criação de unidade, auditoria, anti-escalonamento, ciclo da obra com aprovação e dossiê, inspeção de segurança, orçamento → aprovação → medição, diário, cronograma, relatórios, parâmetros, alçadas, privacidade e layout em celular.
-- Última execução: 109 testes de unidade/integração e 11 E2E aprovados.
+- Última execução: 114 testes de unidade/integração e 12 E2E aprovados.
 
 ## Pendente
 

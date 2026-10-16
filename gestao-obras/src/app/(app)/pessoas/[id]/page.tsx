@@ -15,6 +15,9 @@ import { ActionButton, EntityForm, Reveal } from "@/components/ui/EntityForm";
 import { DocumentsPanel } from "@/components/works/DocumentsPanel";
 import { CREDENTIAL_KIND, opts, PERSON_CATEGORY, RECEIPT } from "@/components/phase3/labels";
 import { formatDateTime, formatDay, serialize, toInputDate } from "@/lib/format";
+import { listHealthCertificates } from "@/server/services/health.service";
+import { ComplianceList, HealthList } from "@/components/people/PeoplePanels";
+import { HealthForm } from "@/components/people/HealthForm";
 
 export const metadata: Metadata = { title: "Pessoa" };
 
@@ -23,9 +26,10 @@ export default async function PersonPage({ params }: { params: Promise<{ id: str
   const { id } = await params;
   if (!uuid.safeParse(id).success) notFound();
   const p = await orNotFound(() => getPerson(actor, id));
-  const [docs, categories, works, { activities }] = await Promise.all([
-    listOwnerDocuments(actor, "person", p.id, p.unitPath), listCategories(), listWorks(actor), listWorkCatalogs(),
+  const [docs, categories, works, { activities }, health] = await Promise.all([
+    listOwnerDocuments(actor, "person", p.id, p.unitPath), listCategories(), listWorks(actor), listWorkCatalogs(), listHealthCertificates(actor, id),
   ]);
+  const canHealth = can(actor, "health.manage", p.unitPath);
   const today = new Date().toISOString().slice(0, 10);
   const openWorks = works.filter((w) => !["CONCLUIDA", "ARQUIVADA", "REJEITADA"].includes(w.status));
   return (
@@ -59,6 +63,46 @@ export default async function PersonPage({ params }: { params: Promise<{ id: str
           <p className="text-sm text-slate-600">{p.email ?? "sem e-mail"} · {p.phone ?? "sem telefone"}</p>
         )}
       </section>
+
+      <section className="card space-y-3 p-6" aria-labelledby="exig">
+        <h2 id="exig" className="text-sm font-semibold text-slate-700">Exigências das atividades</h2>
+        <p className="text-xs text-slate-500">Conforme as atividades autorizadas e as obras em que atua. Exigências pendentes de validação apenas avisam; só as validadas e bloqueantes impedem novos vínculos.</p>
+        <ComplianceList items={p.compliance} empty="Nenhuma exigência cadastrada para as atividades desta pessoa." />
+      </section>
+
+      {(p.category === "PROFISSIONAL" || p.experience.total > 0) && (
+        <section className="card space-y-2 p-6" aria-labelledby="exp">
+          <h2 id="exp" className="text-sm font-semibold text-slate-700">Comprovação de experiência</h2>
+          {p.experience.total === 0 ? (
+            <p className="text-sm text-amber-800">Nenhum comprovante de experiência registrado. Inclua declarações, atestados de capacidade técnica ou registros de trabalho em “Adicionar registro”, tipo “Comprovação de experiência”.</p>
+          ) : (
+            <p className="text-sm">{p.experience.total} comprovante(s) · {p.experience.verified} conferido(s) em fonte oficial {p.experience.verified === 0 && <Badge tone="amber">nenhum conferido</Badge>}</p>
+          )}
+        </section>
+      )}
+
+      {health !== null && (
+        <section className="card space-y-3 p-6" aria-labelledby="aso">
+          <h2 id="aso" className="text-sm font-semibold text-slate-700">Saúde ocupacional (ASO) — acesso restrito</h2>
+          <p className="text-xs text-slate-500">Visível apenas para quem tem permissão de saúde e para o próprio titular. Registra só a conclusão, as atividades liberadas e a validade; nunca diagnósticos ou resultados de exames.</p>
+          <HealthList certs={health} activities={activities} personId={p.id} canManage={canHealth} />
+          {canHealth && p.status === "ATIVO" && (
+            <Reveal label="Registrar ASO">
+              <HealthForm action={`/api/people/${p.id}/health`} activities={activities} allowChecked fileRequired={false} />
+            </Reveal>
+          )}
+        </section>
+      )}
+
+      {p.canManage && (
+        <section className="card space-y-3 p-6" aria-labelledby="conta">
+          <h2 id="conta" className="text-sm font-semibold text-slate-700">Acesso do titular ao portal</h2>
+          <p className="text-sm text-slate-600">{p.linkedEmail ? <>Vinculado à conta <strong>{p.linkedEmail}</strong>. A pessoa consulta o próprio cadastro em “Meu cadastro” e envia comprovantes.</> : "Sem conta vinculada. Crie o usuário em Usuários (papel Voluntário) e informe o e-mail aqui."}</p>
+          <Reveal label={p.linkedEmail ? "Alterar vínculo" : "Vincular conta"} variant="secondary">
+            <EntityForm action={`/api/people/${p.id}/account`} method="PUT" submitLabel="Salvar vínculo" initial={{ email: p.linkedEmail ?? "" }} fields={[{ name: "email", label: "E-mail da conta (vazio para desvincular)", type: "email", span: 2 }]} />
+          </Reveal>
+        </section>
+      )}
 
       <section className="card space-y-3 p-6">
         <h2 className="text-sm font-semibold text-slate-700">Qualificações, habilitações, certificados e treinamentos</h2>
@@ -175,8 +219,8 @@ export default async function PersonPage({ params }: { params: Promise<{ id: str
 
       <section className="space-y-3">
         <h2 className="text-sm font-semibold text-slate-700">Documentos da pessoa</h2>
-        <Alert tone="warning">Não envie exames médicos, atestados ou prontuários: dados de saúde exigem tratamento segregado e validação jurídica, ainda não disponíveis neste módulo.</Alert>
-        <DocumentsPanel uploadPath={`/api/people/${p.id}/documents`} documents={serialize(docs)} categories={categories} canUpload={can(actor, "document.upload", p.unitPath)} canReview={can(actor, "document.review", p.unitPath)} userId={actor.userId} />
+        <Alert tone="warning">Não envie exames, laudos, atestados médicos ou prontuários aqui. O ASO tem registro próprio e restrito na seção “Saúde ocupacional”.</Alert>
+        <DocumentsPanel uploadPath={`/api/people/${p.id}/documents`} documents={serialize(docs.filter((d) => !d.sensitive))} categories={categories.filter((c) => c.code !== "ASO")} canUpload={can(actor, "document.upload", p.unitPath)} canReview={can(actor, "document.review", p.unitPath)} userId={actor.userId} />
       </section>
     </div>
   );

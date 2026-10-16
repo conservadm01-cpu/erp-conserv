@@ -11,7 +11,7 @@ import { useSubmit } from "./useForm";
 export type FieldDef = {
   name: string;
   label: string;
-  type?: "text" | "email" | "number" | "date" | "datetime-local" | "url" | "textarea" | "select" | "checkbox" | "multi";
+  type?: "text" | "email" | "number" | "date" | "time" | "datetime-local" | "url" | "textarea" | "select" | "checkbox" | "multi";
   options?: { value: string; label: string }[];
   required?: boolean;
   hint?: string;
@@ -110,7 +110,7 @@ export function EntityForm({
 }
 
 /** Mostra um formulário só depois de clicar no botão (evita poluir a tela). */
-export function Reveal({ label, children, variant = "primary" }: { label: string; children: React.ReactNode; variant?: "primary" | "secondary" }) {
+export function Reveal({ label, children, variant = "primary" }: { label: string; children: React.ReactNode; variant?: "primary" | "secondary" | "ghost" }) {
   const [open, setOpen] = useState(false);
   return open ? (
     <RevealContext.Provider value={() => setOpen(false)}>

@@ -67,6 +67,7 @@ model OrganizationUnit {
   companies         Company[]
   epiStockMovements EpiStockMovement[]
   equipment         Equipment[]
+  agendaEvents      AgendaEvent[]
 
   @@index([parentId])
   @@index([typeCode])
@@ -401,6 +402,7 @@ model Work {
   budgets              Budget[]
   costEntries          CostEntry[]
   measurements         Measurement[]
+  agendaEvents         AgendaEvent[]
 
   @@index([unitPath])
   @@index([status])
@@ -476,34 +478,37 @@ model DocumentCategory {
 }
 
 model Document {
-  id             String                   @id @default(uuid()) @db.Uuid
+  id                 String                   @id @default(uuid()) @db.Uuid
   /// Dono do documento: exatamente um entre obra, pessoa, empresa e equipamento.
-  workId         String?                  @map("work_id") @db.Uuid
-  work           Work?                    @relation(fields: [workId], references: [id], onDelete: Restrict)
-  personId       String?                  @map("person_id") @db.Uuid
-  person         Person?                  @relation(fields: [personId], references: [id], onDelete: Restrict)
-  companyId      String?                  @map("company_id") @db.Uuid
-  company        Company?                 @relation(fields: [companyId], references: [id], onDelete: Restrict)
-  equipmentId    String?                  @map("equipment_id") @db.Uuid
-  equipment      Equipment?               @relation(fields: [equipmentId], references: [id], onDelete: Restrict)
-  unitPath       String                   @map("unit_path") @db.VarChar(1000)
-  categoryCode   String                   @map("category_code") @db.VarChar(40)
-  category       DocumentCategory         @relation(fields: [categoryCode], references: [code], onDelete: Restrict)
-  title          String                   @db.VarChar(200)
-  issuer         String?                  @db.VarChar(200)
-  documentNumber String?                  @map("document_number") @db.VarChar(100)
-  issueDate      DateTime?                @map("issue_date") @db.Date
-  expiryDate     DateTime?                @map("expiry_date") @db.Date
-  status         DocumentStatus           @default(ENVIADO)
-  reviewerNote   String?                  @map("reviewer_note") @db.VarChar(2000)
-  reviewedById   String?                  @map("reviewed_by_id") @db.Uuid
-  reviewedAt     DateTime?                @map("reviewed_at") @db.Timestamptz(3)
-  createdById    String                   @map("created_by_id") @db.Uuid
-  createdAt      DateTime                 @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt      DateTime                 @updatedAt @map("updated_at") @db.Timestamptz(3)
-  versions       DocumentVersion[]
-  evaluations    RequirementEvaluation[]
-  credentials    ProfessionalCredential[]
+  workId             String?                  @map("work_id") @db.Uuid
+  work               Work?                    @relation(fields: [workId], references: [id], onDelete: Restrict)
+  personId           String?                  @map("person_id") @db.Uuid
+  person             Person?                  @relation(fields: [personId], references: [id], onDelete: Restrict)
+  companyId          String?                  @map("company_id") @db.Uuid
+  company            Company?                 @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  equipmentId        String?                  @map("equipment_id") @db.Uuid
+  equipment          Equipment?               @relation(fields: [equipmentId], references: [id], onDelete: Restrict)
+  unitPath           String                   @map("unit_path") @db.VarChar(1000)
+  categoryCode       String                   @map("category_code") @db.VarChar(40)
+  category           DocumentCategory         @relation(fields: [categoryCode], references: [code], onDelete: Restrict)
+  title              String                   @db.VarChar(200)
+  issuer             String?                  @db.VarChar(200)
+  documentNumber     String?                  @map("document_number") @db.VarChar(100)
+  issueDate          DateTime?                @map("issue_date") @db.Date
+  expiryDate         DateTime?                @map("expiry_date") @db.Date
+  status             DocumentStatus           @default(ENVIADO)
+  reviewerNote       String?                  @map("reviewer_note") @db.VarChar(2000)
+  reviewedById       String?                  @map("reviewed_by_id") @db.Uuid
+  reviewedAt         DateTime?                @map("reviewed_at") @db.Timestamptz(3)
+  createdById        String                   @map("created_by_id") @db.Uuid
+  createdAt          DateTime                 @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt          DateTime                 @updatedAt @map("updated_at") @db.Timestamptz(3)
+  versions           DocumentVersion[]
+  evaluations        RequirementEvaluation[]
+  credentials        ProfessionalCredential[]
+  healthCertificates HealthCertificate[]
+  /// Documento com dado sensível (ex.: ASO): acesso só com permissão de saúde ou pelo próprio titular.
+  sensitive          Boolean                  @default(false)
 
   @@index([workId])
   @@index([personId])
@@ -736,10 +741,13 @@ model Person {
   createdById          String                   @map("created_by_id") @db.Uuid
   createdAt            DateTime                 @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt            DateTime                 @updatedAt @map("updated_at") @db.Timestamptz(3)
+  /// Conta de acesso do próprio titular (portal do voluntário), quando houver.
+  userId               String?                  @unique @map("user_id") @db.Uuid
   credentials          ProfessionalCredential[]
   assignments          VolunteerAssignment[]
   documents            Document[]
   epiDeliveries        EpiDelivery[]
+  healthCertificates   HealthCertificate[]
 
   @@index([unitPath])
   @@index([category])
@@ -753,6 +761,8 @@ enum CredentialKind {
   CERTIFICADO
   TREINAMENTO
   INTEGRACAO_SEGURANCA
+  /// Comprovação de experiência (declarações, atestados de capacidade técnica, registros de trabalho).
+  EXPERIENCIA
 }
 
 model ProfessionalCredential {
@@ -778,6 +788,83 @@ model ProfessionalCredential {
   @@index([personId])
   @@index([expiryDate])
   @@map("professional_credential")
+}
+
+enum HealthExamType {
+  ADMISSIONAL
+  PERIODICO
+  RETORNO_TRABALHO
+  MUDANCA_RISCO
+  DEMISSIONAL
+  OUTRO
+}
+
+enum HealthFitness {
+  APTO
+  INAPTO
+}
+
+enum HealthCertificateStatus {
+  PENDENTE_CONFERENCIA
+  CONFERIDO
+  INATIVO
+}
+
+/// Atestado de saúde ocupacional (ASO) ou equivalente. Dado sensível: guarda apenas a
+/// conclusão (apto/inapto), as atividades liberadas e a validade — nunca diagnósticos ou exames.
+model HealthCertificate {
+  id          String                  @id @default(uuid()) @db.Uuid
+  personId    String                  @map("person_id") @db.Uuid
+  person      Person                  @relation(fields: [personId], references: [id], onDelete: Restrict)
+  examType    HealthExamType          @map("exam_type")
+  result      HealthFitness
+  /// Códigos de atividade para as quais a aptidão foi declarada (ex.: TRABALHO_ALTURA).
+  fitFor      String[]                @default([]) @map("fit_for")
+  examDate    DateTime                @map("exam_date") @db.Date
+  expiryDate  DateTime?               @map("expiry_date") @db.Date
+  documentId  String?                 @map("document_id") @db.Uuid
+  document    Document?               @relation(fields: [documentId], references: [id], onDelete: SetNull)
+  status      HealthCertificateStatus @default(PENDENTE_CONFERENCIA)
+  checkedById String?                 @map("checked_by_id") @db.Uuid
+  checkedAt   DateTime?               @map("checked_at") @db.Timestamptz(3)
+  createdById String                  @map("created_by_id") @db.Uuid
+  createdAt   DateTime                @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@index([personId])
+  @@index([expiryDate])
+  @@map("health_certificate")
+}
+
+enum PersonRuleKind {
+  /// Exige qualificação/treinamento/registro ativo e dentro da validade.
+  CREDENCIAL
+  /// Exige ASO conferido, apto e válido para a atividade.
+  SAUDE
+}
+
+/// Exigência por atividade para as pessoas que a executam. Começa pendente de validação
+/// e só bloqueia vínculos quando validada e marcada como bloqueante.
+model PersonRequirementRule {
+  id                     String                    @id @default(uuid()) @db.Uuid
+  code                   String                    @unique @db.VarChar(40)
+  name                   String                    @db.VarChar(200)
+  activityCode           String                    @map("activity_code") @db.VarChar(40)
+  kind                   PersonRuleKind
+  credentialKind         CredentialKind?           @map("credential_kind")
+  /// Trecho que deve constar no nome da qualificação (ex.: "NR-35").
+  credentialNameContains String?                   @map("credential_name_contains") @db.VarChar(100)
+  classification         RequirementClassification
+  legalBasis             String?                   @map("legal_basis") @db.VarChar(500)
+  sourceUrl              String?                   @map("source_url") @db.VarChar(500)
+  lastReviewedAt         DateTime?                 @map("last_reviewed_at") @db.Date
+  validatedById          String?                   @map("validated_by_id") @db.Uuid
+  validatedAt            DateTime?                 @map("validated_at") @db.Timestamptz(3)
+  blocking               Boolean                   @default(false)
+  status                 RequirementRuleStatus     @default(PENDENTE_VALIDACAO)
+  createdAt              DateTime                  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt              DateTime                  @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@map("person_requirement_rule")
 }
 
 /// Vínculo de uma pessoa (de qualquer categoria) com uma obra.
@@ -1529,4 +1616,47 @@ model PrivacyRequest {
 
   @@index([status])
   @@map("privacy_request")
+}
+
+enum AgendaEventKind {
+  MUTIRAO
+  VISITA_TECNICA
+  ENTREGA_MATERIAL
+  REUNIAO
+  INSPECAO
+  INTEGRACAO_SEGURANCA
+  OUTRO
+}
+
+enum AgendaEventStatus {
+  AGENDADO
+  REALIZADO
+  CANCELADO
+}
+
+/// Compromisso da agenda de obras de uma unidade local (opcionalmente ligado a uma obra).
+model AgendaEvent {
+  id           String            @id @default(uuid()) @db.Uuid
+  unitId       String            @map("unit_id") @db.Uuid
+  unit         OrganizationUnit  @relation(fields: [unitId], references: [id], onDelete: Restrict)
+  unitPath     String            @map("unit_path") @db.VarChar(1000)
+  workId       String?           @map("work_id") @db.Uuid
+  work         Work?             @relation(fields: [workId], references: [id], onDelete: Restrict)
+  kind         AgendaEventKind
+  title        String            @db.VarChar(200)
+  startsAt     DateTime          @map("starts_at") @db.Timestamptz(3)
+  endsAt       DateTime?         @map("ends_at") @db.Timestamptz(3)
+  location     String?           @db.VarChar(200)
+  notes        String?           @db.VarChar(2000)
+  /// Vagas para voluntários (mutirões), quando aplicável.
+  slots        Int?
+  status       AgendaEventStatus @default(AGENDADO)
+  statusReason String?           @map("status_reason") @db.VarChar(1000)
+  createdById  String            @map("created_by_id") @db.Uuid
+  createdAt    DateTime          @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt    DateTime          @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@index([unitPath, startsAt])
+  @@index([workId])
+  @@map("agenda_event")
 }

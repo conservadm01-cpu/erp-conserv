@@ -4,7 +4,7 @@ import { buildActor } from "@/server/auth/actor";
 import { hashPassword } from "@/server/auth/password";
 import { systemMeta } from "@/server/http/request-meta";
 import { PERMISSIONS } from "@/server/authz/catalog";
-import { ACTIVITY_TYPES, APPROVAL_POLICIES, CHECKLIST_TEMPLATES, CRITICALITY_LEVELS, DOCUMENT_CATEGORIES, ORG_UNIT_TYPES, REQUIREMENT_RULES, ROLES, SYSTEM_SETTINGS, WORK_TYPES } from "../../prisma/seed-data";
+import { ACTIVITY_TYPES, APPROVAL_POLICIES, CHECKLIST_TEMPLATES, CRITICALITY_LEVELS, DOCUMENT_CATEGORIES, ORG_UNIT_TYPES, PERSON_REQUIREMENT_RULES, REQUIREMENT_RULES, ROLES, SYSTEM_SETTINGS, WORK_TYPES } from "../../prisma/seed-data";
 
 export const PASSWORD = "Teste@Seguro2026!";
 export const meta = () => systemMeta("teste");
@@ -26,6 +26,7 @@ export async function ensureBase() {
   for (const c of DOCUMENT_CATEGORIES) await prisma.documentCategory.upsert({ where: { code: c.code }, update: {}, create: c });
   for (const p of APPROVAL_POLICIES) await prisma.approvalPolicy.upsert({ where: { kind: p.kind }, update: {}, create: p });
   for (const r of REQUIREMENT_RULES) await prisma.requirementRule.upsert({ where: { code: r.code }, update: {}, create: r });
+  for (const r of PERSON_REQUIREMENT_RULES) await prisma.personRequirementRule.upsert({ where: { code: r.code }, update: {}, create: r });
   for (const st of SYSTEM_SETTINGS) await prisma.systemSetting.upsert({ where: { key: st.key }, update: {}, create: st });
   for (const c of CRITICALITY_LEVELS) await prisma.criticalityLevel.upsert({ where: { code: c.code }, update: {}, create: c });
   for (const t of CHECKLIST_TEMPLATES) {

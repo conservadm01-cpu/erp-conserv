@@ -67,7 +67,9 @@ describe("pessoas e vínculos", () => {
     const w = await createWork(a, work(t.a1.id), meta());
     const p = await createPerson(a, { name: "Pessoa Fictícia", category: "PROFISSIONAL", unitId: t.a1.id, authorizedActivities: [] } as never, meta());
     const r = await addAssignment(a, p.id, { workId: w.id, role: "Pedreiro", activities: ["ELETRICIDADE"], startDate: new Date("2026-01-01") } as never, meta());
-    expect(r.warnings).toHaveLength(2);
+    expect(r.warnings.filter((w) => w.includes("não autorizadas") || w.includes("integração"))).toHaveLength(2);
+    // As exigências da atividade (pendentes de validação) também aparecem, sem bloquear.
+    expect(r.warnings.filter((w) => w.includes("pendente de validação")).length).toBeGreaterThan(0);
     await expect(addAssignment(await actorOf(gestorB), p.id, { workId: w.id, role: "x", activities: [], startDate: new Date() } as never, meta())).rejects.toMatchObject({ status: 404 });
   });
 });

@@ -1,5 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { listOrgUnits } from "@/server/services/org-unit.service";
+import { RegionSelect } from "@/components/filters/RegionSelect";
 import { requirePageActor } from "@/server/auth/page-context";
 import { canAnywhere } from "@/server/authz/authorize";
 import { listWorkCatalogs, listWorks } from "@/server/services/work.service";
@@ -19,7 +21,7 @@ export default async function WorksPage({ searchParams }: { searchParams: Promis
   const sp = await searchParams;
   const parsed = workListQuery.safeParse(Object.fromEntries(Object.entries(sp).filter(([, v]) => v)));
   const q = parsed.success ? parsed.data : {};
-  const [works, { types }] = await Promise.all([listWorks(actor, q), listWorkCatalogs()]);
+  const [works, { types }, units] = await Promise.all([listWorks(actor, q), listWorkCatalogs(), listOrgUnits(actor, { status: "ATIVA" })]);
 
   return (
     <div>
@@ -28,8 +30,9 @@ export default async function WorksPage({ searchParams }: { searchParams: Promis
         description="Obras das unidades do seu escopo."
         actions={canAnywhere(actor, "work.create") && <Link href="/obras/nova" className="rounded-md bg-brand-700 px-4 py-2 text-sm font-medium text-white hover:bg-brand-900">Nova obra</Link>}
       />
-      <form className="mb-4 grid grid-cols-1 gap-2 sm:grid-cols-4" role="search">
+      <form className="mb-4 grid grid-cols-1 gap-2 sm:grid-cols-3 lg:grid-cols-5" role="search">
         <div><label className="label" htmlFor="q">Buscar</label><input id="q" name="q" defaultValue={q.q} placeholder="Título ou código" className="input" /></div>
+        <RegionSelect units={units} value={q.unitId} />
         <div>
           <label className="label" htmlFor="status">Situação</label>
           <select id="status" name="status" defaultValue={q.status ?? ""} className="input">

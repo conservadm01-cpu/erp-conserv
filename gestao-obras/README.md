@@ -136,13 +136,15 @@ Senha de todos: `Demo@Obras2026!`
 
 | E-mail | Papel | Escopo |
 | --- | --- | --- |
-| admin@exemplo.test | Administrador do sistema | Gestão central (exige MFA) |
-| gestor.norte@exemplo.test | Gestor regional | Região Demonstração Norte (exige MFA) |
-| gestor.sul@exemplo.test | Gestor regional | Região Demonstração Sul (exige MFA) |
+| admin@exemplo.test | Master (administração geral) | Gestão central (exige MFA) |
+| gestor.norte@exemplo.test | Admin regional | Região Demonstração Norte (exige MFA) |
+| gestor.sul@exemplo.test | Admin regional | Região Demonstração Sul (exige MFA) |
 | auditor@exemplo.test | Auditor | Gestão central (exige MFA) |
 | analista@exemplo.test | Analista da gestão central | Gestão central (exige MFA) — analisa documentos e decide aprovações |
 | seguranca.norte@exemplo.test | Técnico de segurança | Região Demonstração Norte (exige MFA) |
 | consulta.alfa@exemplo.test | Consulta | Unidade Local Alfa |
+| encarregado.alfa@exemplo.test | Encarregado de obra | Unidade Local Alfa |
+| voluntario.alfa@exemplo.test | Voluntário | Somente o próprio cadastro (portal "Meu cadastro") |
 
 No primeiro acesso de perfis com MFA, o sistema pede o cadastro de um
 aplicativo autenticador TOTP (por exemplo, os autenticadores da Google, Microsoft
@@ -168,6 +170,8 @@ PostgreSQL 16 local e ajuste `DATABASE_URL`.
    submeta; o analista aprova em **Aprovações**. Depois registre uma medição e
    lançamentos. Acompanhe em **Orçamentos** e no **Painel**.
 6. Use as abas **Cronograma** (dependências, marcos, linha de base) e **Diário**.
+8. Em **Agenda**, agende mutirões, visitas e entregas por unidade local; etapas, marcos e inspeções previstas aparecem junto.
+9. Entre como `voluntario.alfa@exemplo.test` para ver o portal do voluntário (pendências, comprovantes, ASO e próximos compromissos) e como `seguranca.norte@exemplo.test` para conferir o ASO enviado.
 7. Em **Relatórios**, gere qualquer relatório do catálogo em PDF.
 
 Por segregação de funções, quem solicita não aprova a própria solicitação, e

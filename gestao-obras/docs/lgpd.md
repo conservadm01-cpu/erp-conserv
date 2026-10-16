@@ -43,6 +43,26 @@ justificativa documentada — e somente após validação jurídica.
 - Logs de auditoria sem senhas, tokens ou códigos (higienização automática).
 - Dados de demonstração 100% fictícios (domínio reservado `.test`).
 
+## Saúde ocupacional (ASO)
+
+O ASO é dado pessoal sensível. O sistema o trata assim:
+
+- registra **somente** o tipo do exame, a conclusão (apto/inapto), as atividades
+  para as quais houve aptidão e a validade — não há campos para diagnósticos,
+  resultados de exames ou observações clínicas;
+- o arquivo do ASO fica na categoria restrita "ASO": só quem tem as permissões
+  `health.read`/`health.manage` naquela unidade (no exemplo, o Técnico de
+  segurança) e o próprio titular conseguem ver, listar ou baixar;
+- a auditoria registra o acesso e a conferência, sem o título nem dados do exame;
+- avisos de vencimento vão apenas para quem tem a permissão de saúde, sem detalhes;
+- o titular pode enviar o próprio ASO pelo portal; ele fica "aguardando
+  conferência" até alguém com permissão de saúde conferir o documento original.
+
+A necessidade de exigir ASO de voluntários (e quais atividades o exigem) depende
+de avaliação jurídica: por isso as exigências por atividade começam **pendentes
+de validação** e só bloqueiam vínculos depois de validadas, com base e data de
+revisão registradas.
+
 ## Direitos dos titulares (fluxo proposto)
 
 1. Pedido recebido pelo canal do encarregado.
