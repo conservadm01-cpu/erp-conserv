@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { Prisma } from "@prisma/client";
 import { prisma } from "../db";
 import { recordAudit } from "../audit/audit";
 import { assertCan, can, pathWhere, type Actor } from "../authz/authorize";
@@ -190,4 +191,43 @@ export async function setOrgUnitStatus(actor: Actor, id: string, status: "ATIVA"
     );
     return updated;
   });
+}
+
+/**
+ * Remove uma unidade que nunca foi usada (sem subordinadas, usuários, acessos, obras,
+ * pessoas, empresas, equipamentos, estoque ou agenda). Unidades com histórico só podem
+ * ser inativadas, para preservar a trilha. A remoção fica registrada na auditoria.
+ */
+export async function deleteOrgUnit(actor: Actor, id: string, reason: string, meta: RequestMeta) {
+  const unit = await loadVisible(actor, id);
+  if (unit.depth === 0) throw Errors.invalid("A unidade raiz não pode ser removida.");
+  const parent = await prisma.organizationUnit.findUniqueOrThrow({ where: { id: unit.parent!.id } });
+  // Quem remove precisa administrar a unidade superior (não basta ter acesso só à própria unidade).
+  assertCan(actor, "org.manage", parent.path, "Você não pode remover esta unidade.");
+  const usage = await prisma.organizationUnit.findUniqueOrThrow({
+    where: { id },
+    select: { _count: { select: { children: true, users: true, scopes: true, works: true, people: true, companies: true, epiStockMovements: true, equipment: true, agendaEvents: true } } },
+  });
+  const c = usage._count;
+  const labels: [number, string][] = [
+    [c.children, "unidades subordinadas"], [c.users, "usuários lotados"], [c.scopes, "acessos concedidos"], [c.works, "obras"], [c.people, "pessoas"],
+    [c.companies, "empresas"], [c.equipment, "equipamentos"], [c.epiStockMovements, "movimentações de estoque"], [c.agendaEvents, "compromissos de agenda"],
+  ];
+  const used = labels.filter(([n]) => n > 0).map(([n, l]) => `${n} ${l}`);
+  if (used.length) throw Errors.conflict(`A unidade tem histórico (${used.join(", ")}) e não pode ser removida. Use a inativação.`);
+  try {
+    await prisma.$transaction(async (tx) => {
+      await tx.orgUnitContact.deleteMany({ where: { unitId: id } });
+      await tx.organizationUnit.delete({ where: { id } });
+      await recordAudit(
+        { action: "org.unidade.removida", actor: auditActor(actor), objectType: "OrganizationUnit", objectId: id, unitPath: parent.path, metadata: { codigo: unit.code, nome: unit.name, justificativa: reason } },
+        meta,
+        tx,
+      );
+    });
+  } catch (e) {
+    if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2003") throw Errors.conflict("A unidade tem registros vinculados e não pode ser removida. Use a inativação.");
+    throw e;
+  }
+  return { parentId: parent.id };
 }

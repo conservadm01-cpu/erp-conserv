@@ -85,6 +85,7 @@ export const openApiDocument = {
     "/api/org-units/{id}": {
       get: op({ summary: "Detalhar unidade", tag: "Organização", params: ["id"] }),
       patch: op({ summary: "Alterar ou mover unidade", tag: "Organização", params: ["id"], body: { name: s, parentId: u, ...address, contacts } }),
+      delete: op({ summary: "Remover unidade sem histórico (com histórico, use a inativação)", tag: "Organização", params: ["id"], body: { reason: s } }),
     },
     "/api/org-units/{id}/status": {
       post: op({ summary: "Inativar ou reativar unidade", tag: "Organização", params: ["id"], body: { status: s, reason: s } }),

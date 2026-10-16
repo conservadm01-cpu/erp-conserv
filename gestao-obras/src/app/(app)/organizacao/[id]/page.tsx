@@ -9,6 +9,7 @@ import { PageHeader } from "@/components/ui/PageHeader";
 import { StatusBadge } from "@/components/ui/Badge";
 import { OrgUnitForm } from "@/components/org/OrgUnitForm";
 import { OrgUnitStatusButton } from "@/components/org/OrgUnitStatusButton";
+import { OrgUnitRemoveButton } from "@/components/org/OrgUnitRemoveButton";
 import { notFound } from "next/navigation";
 
 export const metadata: Metadata = { title: "Unidade" };
@@ -39,6 +40,7 @@ export default async function OrgUnitPage({ params }: { params: Promise<{ id: st
           <>
             {canAddChild && <Link href={`/organizacao/nova?parentId=${unit.id}`} className="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm hover:bg-slate-50">Nova subordinada</Link>}
             {unit.canManage && unit.depth > 0 && <OrgUnitStatusButton unitId={unit.id} status={unit.status} />}
+            {unit.parent && can(actor, "org.manage", units.find((u) => u.id === unit.parent!.id)?.path ?? "#") && children.length === 0 && <OrgUnitRemoveButton unitId={unit.id} />}
           </>
         }
       />

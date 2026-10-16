@@ -80,6 +80,16 @@ test("administrador: cadastro obrigatório de MFA, criação de unidade e verifi
   await page.getByRole("button", { name: "Verificar integridade" }).click();
   await expect(page.getByText(/Cadeia íntegra/)).toBeVisible();
 
+  // Unidade criada por engano e sem histórico pode ser removida (com justificativa).
+  const eps = await db.organizationUnit.findUniqueOrThrow({ where: { code: "UL-EPSILON" } });
+  await page.goto(`/organizacao/${eps.id}`);
+  await page.getByRole("button", { name: "Remover unidade" }).click();
+  const dlg = page.getByRole("dialog");
+  await dlg.getByLabel("Justificativa").fill("Criada por engano no teste.");
+  await dlg.getByRole("button", { name: "Remover" }).click();
+  await expect(page.getByRole("heading", { name: "Região Demonstração Norte" })).toBeVisible();
+  expect(await db.organizationUnit.findUnique({ where: { code: "UL-EPSILON" } })).toBeNull();
+
   // Novo login exige o segundo fator.
   await page.getByRole("button", { name: "Sair" }).click();
   await expect(page).toHaveURL(/\/login/);
