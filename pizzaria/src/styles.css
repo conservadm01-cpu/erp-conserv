@@ -1,6 +1,7 @@
 @import url("https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,800&family=Inter:wght@400;500;600;700&display=swap");
 
 :root {
+  color-scheme: light;
   --vermelho: #b3261e;
   --vermelho-escuro: #7f1d17;
   --massa: #fff8ef;
@@ -124,3 +125,9 @@ table.tabela { width: 100%; border-collapse: collapse; font-size: 14px; }
 @keyframes pulso { 0% { box-shadow: 0 0 0 0 rgba(21, 128, 61, 0.5); } 100% { box-shadow: 0 0 0 10px rgba(21, 128, 61, 0); } }
 
 .toast { position: fixed; bottom: 90px; left: 50%; transform: translateX(-50%); background: var(--texto); color: #fff; padding: 10px 16px; border-radius: 10px; z-index: 2000; font-size: 14px; }
+
+.pz-mapa.sem-fundo {
+  background-color: #f3ead9;
+  background-image: linear-gradient(rgba(122, 102, 86, 0.12) 1px, transparent 1px), linear-gradient(90deg, rgba(122, 102, 86, 0.12) 1px, transparent 1px);
+  background-size: 28px 28px;
+}

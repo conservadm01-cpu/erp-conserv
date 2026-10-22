@@ -4,7 +4,7 @@ import { salvarItem } from "../../db.js";
 import {
   brl, hora, STATUS, PAGAMENTOS, useColecao, useConfig, mudarStatus, ehHoje, repasseMotoboy,
 } from "../../logic.js";
-import { Modal, SeloStatus, toast } from "../../ui.jsx";
+import { Modal, SeloStatus, toast, BotaoConfirmar } from "../../ui.jsx";
 import Mapa from "../../Mapa.jsx";
 
 const COLUNAS = ["recebido", "preparo", "pronto", "em_rota"];
@@ -188,9 +188,9 @@ function DetalhePedido({ p, cfg, motoboys, posicoes, aoFechar }) {
 
         {!finalizado && (
           <div className="linha">
-            <button className="btn perigo" onClick={async () => { if (confirm("Cancelar este pedido?")) { await mudarStatus(p, "cancelado", {}, cfg); aoFechar(); } }}>
+            <BotaoConfirmar className="btn perigo" texto="Confirmar cancelamento" aoConfirmar={async () => { await mudarStatus(p, "cancelado", {}, cfg); aoFechar(); }}>
               Cancelar pedido
-            </button>
+            </BotaoConfirmar>
             {PROXIMO[p.status] && (
               <button
                 className="btn primario direita"

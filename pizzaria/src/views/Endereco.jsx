@@ -1,12 +1,14 @@
 import { useCallback, useState } from "react";
 import { Search, LocateFixed } from "lucide-react";
-import { buscarEndereco, enderecoDaPosicao, posicaoAtual } from "../logic.js";
+import { buscarEndereco, enderecoDaPosicao, posicaoAtual, useConfig } from "../logic.js";
+import { modoTeste } from "../db.js";
 import { Campo } from "../ui.jsx";
 import Mapa from "../Mapa.jsx";
 
 // Escolhe um endereço com coordenadas: busca por texto, "usar minha
 // localização" ou toque no mapa para ajustar o ponto exato da entrega.
 export default function EscolherEndereco({ inicial, aoSalvar, aoCancelar, textoBotao = "Usar este endereço", comRotulo = true }) {
+  const [cfg] = useConfig();
   const [busca, setBusca] = useState(inicial?.texto || "");
   const [resultados, setResultados] = useState([]);
   const [ponto, setPonto] = useState(inicial?.lat != null ? inicial : null);
@@ -24,7 +26,9 @@ export default function EscolherEndereco({ inicial, aoSalvar, aoCancelar, textoB
       setResultados(r);
       if (!r.length) setMsg("Nenhum endereço encontrado. Tente incluir número, bairro e cidade.");
       if (r.length === 1) { setPonto(r[0]); setResultados([]); }
-    } catch (err) { setMsg(err.message); } finally { setOcupado(false); }
+    } catch (err) {
+      setMsg(modoTeste ? "A busca de endereço não funciona na versão de teste. Toque no mapa para marcar o ponto." : err.message);
+    } finally { setOcupado(false); }
   }
 
   async function minhaLocalizacao() {
@@ -33,7 +37,9 @@ export default function EscolherEndereco({ inicial, aoSalvar, aoCancelar, textoB
       const p = await posicaoAtual();
       const texto = await enderecoDaPosicao(p.lat, p.lng);
       setPonto({ ...p, texto }); setBusca(texto); setResultados([]);
-    } catch (err) { setMsg(err.message); } finally { setOcupado(false); }
+    } catch (err) {
+      setMsg(modoTeste ? "A localização do aparelho não funciona na versão de teste. Toque no mapa para marcar o ponto." : err.message);
+    } finally { setOcupado(false); }
   }
 
   const ajustar = useCallback(async (p) => {
@@ -58,6 +64,12 @@ export default function EscolherEndereco({ inicial, aoSalvar, aoCancelar, textoB
             <button key={i} type="button" className="opcao pequeno" onClick={() => { setPonto(r); setResultados([]); }}>{r.texto}</button>
           ))}
         </div>
+      )}
+      {!ponto && modoTeste && (
+        <>
+          <Mapa pontos={[{ id: "loja", lat: cfg.loja.lat, lng: cfg.loja.lng, emoji: "🍕", rotulo: "Pizzaria" }]} altura={220} aoClicar={ajustar} seguir={false} />
+          <div className="suave pequeno">Versão de teste: toque no mapa para marcar onde entregar (a pizzaria é o 🍕).</div>
+        </>
       )}
       {ponto && (
         <>

@@ -19,7 +19,7 @@ const ABAS = [
 
 export default function Loja({ aba }) {
   const [cfg, carregado] = useConfig();
-  const [liberado, setLiberado] = useState(() => sessionStorage.getItem("pz-loja") === "ok");
+  const [liberado, setLiberado] = useState(() => { try { return sessionStorage.getItem("pz-loja") === "ok"; } catch { return false; } });
   const [pin, setPin] = useState("");
 
   if (!carregado) return <div className="vazio">Carregando…</div>;
@@ -30,7 +30,7 @@ export default function Loja({ aba }) {
         style={{ maxWidth: 360, margin: "40px auto" }}
         onSubmit={(e) => {
           e.preventDefault();
-          if (pin === String(cfg.adminPin)) { sessionStorage.setItem("pz-loja", "ok"); setLiberado(true); }
+          if (pin === String(cfg.adminPin)) { try { sessionStorage.setItem("pz-loja", "ok"); } catch { /* só nesta tela */ } setLiberado(true); }
           else setPin("");
         }}
       >

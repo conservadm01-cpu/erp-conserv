@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Plus, Trash2, Pencil } from "lucide-react";
 import { salvarItem, removerItem, uid } from "../../db.js";
 import { brl, hora, useColecao, useConfig, ehHoje, repasseMotoboy } from "../../logic.js";
-import { Modal, Campo, toast } from "../../ui.jsx";
+import { Modal, Campo, toast, BotaoConfirmar } from "../../ui.jsx";
 
 const VAZIO = { nome: "", telefone: "", cpf: "", veiculo: "", placa: "", cnh: "", pix: "", pin: "", ativo: true };
 const AO_VIVO_MS = 2 * 60 * 1000;
@@ -44,7 +44,7 @@ export default function Motoboys() {
               <div className="linha">
                 <button className="btn pequeno" onClick={() => setEditando({ ...VAZIO, ...m })}><Pencil size={14} /> Editar</button>
                 <button className="btn pequeno" onClick={() => salvarItem("motoboy", { ...m, ativo: m.ativo === false })}>{m.ativo === false ? "Reativar" : "Desativar"}</button>
-                <button className="btn pequeno perigo direita" onClick={() => confirm(`Excluir ${m.nome}?`) && removerItem("motoboy", m.id)}><Trash2 size={14} /></button>
+                <BotaoConfirmar className="btn pequeno perigo direita" texto="Excluir?" aoConfirmar={() => removerItem("motoboy", m.id)}><Trash2 size={14} /></BotaoConfirmar>
               </div>
             </div>
           );

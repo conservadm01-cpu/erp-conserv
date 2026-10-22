@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Search, ShoppingBag, Minus, Plus, Trash2, Tag } from "lucide-react";
-import { uid } from "../db.js";
+import { uid, armazem } from "../db.js";
 import { brl, CATEGORIAS, useColecao, precoPromocional, promocaoValida } from "../logic.js";
 import { Modal, Emoji } from "../ui.jsx";
 import Checkout from "./Checkout.jsx";
@@ -8,9 +8,9 @@ import Checkout from "./Checkout.jsx";
 // ---------- Carrinho (fica salvo no aparelho) ----------
 function useCarrinho() {
   const [itens, setItens] = useState(() => {
-    try { return JSON.parse(localStorage.getItem("pz-carrinho")) || []; } catch { return []; }
+    try { return JSON.parse(armazem.get("pz-carrinho")) || []; } catch { return []; }
   });
-  useEffect(() => { localStorage.setItem("pz-carrinho", JSON.stringify(itens)); }, [itens]);
+  useEffect(() => { armazem.set("pz-carrinho", JSON.stringify(itens)); }, [itens]);
   return [itens, setItens];
 }
 

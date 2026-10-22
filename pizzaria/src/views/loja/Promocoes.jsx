@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Plus, Trash2, Pencil } from "lucide-react";
 import { salvarItem, removerItem, uid } from "../../db.js";
 import { brl, CATEGORIAS, useColecao, promocaoValida } from "../../logic.js";
-import { Modal, Campo, numero, toast } from "../../ui.jsx";
+import { Modal, Campo, numero, toast, BotaoConfirmar } from "../../ui.jsx";
 
 const DIAS = ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"];
 const VAZIO = {
@@ -50,7 +50,7 @@ export default function Promocoes() {
             <div className="linha">
               <button className="btn pequeno" onClick={() => setEditando({ ...VAZIO, ...p })}><Pencil size={14} /> Editar</button>
               <button className="btn pequeno" onClick={() => salvarItem("promocao", { ...p, ativo: !p.ativo })}>{p.ativo ? "Pausar" : "Ativar"}</button>
-              <button className="btn pequeno perigo direita" onClick={() => confirm("Excluir promoção?") && removerItem("promocao", p.id)}><Trash2 size={14} /></button>
+              <BotaoConfirmar className="btn pequeno perigo direita" texto="Excluir?" aoConfirmar={() => removerItem("promocao", p.id)}><Trash2 size={14} /></BotaoConfirmar>
             </div>
           </div>
         ))}

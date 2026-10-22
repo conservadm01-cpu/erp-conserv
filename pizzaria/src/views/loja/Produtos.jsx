@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Plus, Trash2, Pencil, Sparkles } from "lucide-react";
 import { salvarItem, removerItem, uid } from "../../db.js";
 import { brl, CATEGORIAS, useColecao, criarExemplos } from "../../logic.js";
-import { Modal, Campo, Emoji, numero, toast } from "../../ui.jsx";
+import { Modal, Campo, Emoji, numero, toast, BotaoConfirmar } from "../../ui.jsx";
 
 const VAZIO = { nome: "", categoria: "pizza", descricao: "", imagem: "", ativo: true, meioAMeio: true, tamanhos: [{ nome: "Grande", preco: "" }] };
 
@@ -49,7 +49,7 @@ export default function Produtos() {
             <div className="linha">
               <button className="btn pequeno" onClick={() => setEditando({ ...p, tamanhos: p.tamanhos.map((t) => ({ ...t })) })}><Pencil size={14} /> Editar</button>
               <button className="btn pequeno" onClick={() => salvarItem("produto", { ...p, ativo: p.ativo === false })}>{p.ativo === false ? "Reativar" : "Pausar"}</button>
-              <button className="btn pequeno perigo direita" onClick={() => confirm(`Excluir ${p.nome}?`) && removerItem("produto", p.id)}><Trash2 size={14} /></button>
+              <BotaoConfirmar className="btn pequeno perigo direita" texto="Excluir?" aoConfirmar={() => removerItem("produto", p.id)}><Trash2 size={14} /></BotaoConfirmar>
             </div>
           </div>
         ))}

@@ -193,7 +193,7 @@ export default function Checkout({ itens, promocoes, aoFechar, aoConcluir }) {
           {aPagar > 0 && metodo === "pix" && pg.pix.chave && (
             <div className="cartao pequeno linha entre" style={{ background: "#f0fbf3" }}>
               <span>Chave Pix: <b>{pg.pix.chave}</b></span>
-              <button className="btn pequeno" onClick={() => { navigator.clipboard?.writeText(pg.pix.chave); toast("Chave copiada"); }}><Copy size={14} /> Copiar</button>
+              <button className="btn pequeno" onClick={() => navigator.clipboard?.writeText(pg.pix.chave).then(() => toast("Chave copiada"), () => toast("Copie a chave: " + pg.pix.chave))}><Copy size={14} /> Copiar</button>
             </div>
           )}
           {aPagar > 0 && metodo === "dinheiro" && (

@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
+import { modoTeste } from "./db.js";
 
 // Mapa OpenStreetMap com marcadores em emoji (sem depender de imagens
 // de ícone do Leaflet, que quebram no build do Vite).
@@ -27,10 +28,14 @@ export default function Mapa({ pontos = [], altura = 280, aoClicar, seguir = tru
 
   useEffect(() => {
     const m = L.map(div.current, { zoomControl: true, attributionControl: true });
-    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-      maxZoom: 19,
-      attribution: "© OpenStreetMap",
-    }).addTo(m);
+    // Na versão de teste (artefato) imagens externas são bloqueadas: o mapa
+    // fica sem fundo, só com os marcadores sobre uma grade.
+    if (!modoTeste) {
+      L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+        maxZoom: 19,
+        attribution: "© OpenStreetMap",
+      }).addTo(m);
+    }
     m.setView([-23.55, -46.63], 13);
     mapa.current = m;
     return () => { m.remove(); mapa.current = null; marcadores.current = {}; ajustado.current = false; };
@@ -79,5 +84,5 @@ export default function Mapa({ pontos = [], altura = 280, aoClicar, seguir = tru
     }
   }, [assinatura, seguir]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  return <div ref={div} className="pz-mapa" style={{ height: altura }} />;
+  return <div ref={div} className={"pz-mapa" + (modoTeste ? " sem-fundo" : "")} style={{ height: altura }} />;
 }

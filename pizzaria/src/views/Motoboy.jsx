@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Navigation, Phone, LogOut, MapPin, Zap } from "lucide-react";
-import { gravar, salvarItem } from "../db.js";
+import { gravar, salvarItem, armazem, modoTeste } from "../db.js";
 import {
   brl, hora, useColecao, useConfig, mudarStatus, repasseMotoboy, ehHoje, soDigitos, PAGAMENTOS, distanciaKm,
 } from "../logic.js";
@@ -46,22 +46,56 @@ function useRastreamento(motoboyId, ligado) {
   return estado;
 }
 
+// Versão de teste: sem GPS no artefato, então o motoboy "anda" sozinho da
+// pizzaria até o cliente em ~1 min, gravando a posição como o GPS faria.
+const PASSOS = 30;
+function useSimulacao(motoboyId, ligado, origem, destino) {
+  const [estado, setEstado] = useState({ ativo: false, erro: "", ultima: null });
+  const chave = destino ? `${destino.lat},${destino.lng}` : "";
+  useEffect(() => {
+    if (!ligado || !motoboyId || !destino) { setEstado((e) => ({ ...e, ativo: false })); return; }
+    let passo = 0;
+    const andar = () => {
+      const t = Math.min(1, passo / PASSOS);
+      // Pequena curva para não parecer uma linha reta perfeita.
+      const curva = Math.sin(t * Math.PI) * 0.004;
+      const pos = {
+        motoboyId,
+        lat: origem.lat + (destino.lat - origem.lat) * t + curva,
+        lng: origem.lng + (destino.lng - origem.lng) * t - curva,
+        precisao: 8,
+        em: new Date().toISOString(),
+      };
+      setEstado({ ativo: true, erro: "", ultima: pos });
+      gravar(`loc:${motoboyId}`, pos).catch(() => {});
+      if (passo < PASSOS) passo++;
+    };
+    andar();
+    const id = setInterval(andar, 2000);
+    return () => clearInterval(id);
+  }, [motoboyId, ligado, chave]); // eslint-disable-line react-hooks/exhaustive-deps
+  return estado;
+}
+
 export default function Motoboy() {
   const [cfg] = useConfig();
   const [motoboys, carregado] = useColecao("motoboy");
   const [pedidos] = useColecao("pedido", 8000);
-  const [meuId, setMeuId] = useState(() => localStorage.getItem(CHAVE));
+  const [meuId, setMeuId] = useState(() => armazem.get(CHAVE));
   const [gpsLigado, setGpsLigado] = useState(true);
   const eu = motoboys.find((m) => m.id === meuId);
 
   const meus = pedidos.filter((p) => p.motoboyId === meuId && (p.status === "pronto" || p.status === "em_rota"));
   const disponiveis = pedidos.filter((p) => p.status === "pronto" && !p.motoboyId);
   const emRota = meus.some((p) => p.status === "em_rota");
-  const gps = useRastreamento(meuId, !!eu && gpsLigado && (emRota || meus.length > 0));
+  const destinoSimulado = meus.find((p) => p.status === "em_rota")?.endereco;
+  const gpsReal = useRastreamento(meuId, !modoTeste && !!eu && gpsLigado && (emRota || meus.length > 0));
+  const gpsSimulado = useSimulacao(meuId, modoTeste && !!eu && gpsLigado && emRota, cfg.loja, destinoSimulado);
+  const gps = modoTeste ? gpsSimulado : gpsReal;
   const entreguesHoje = pedidos.filter((p) => p.motoboyId === meuId && p.status === "entregue" && ehHoje(p.criadoEm));
 
   if (!carregado) return <div className="vazio">Carregando…</div>;
-  if (!eu) return <EntrarMotoboy motoboys={motoboys.filter((m) => m.ativo !== false)} aoEntrar={(id) => { localStorage.setItem(CHAVE, id); setMeuId(id); }} />;
+  if (!eu) return <EntrarMotoboy motoboys={motoboys.filter((m) => m.ativo !== false)} aoEntrar={(id) => { armazem.set(CHAVE, id); setMeuId(id); }} />;
 
   async function pegar(p) {
     await salvarItem("pedido", { ...p, motoboyId: eu.id });
@@ -74,7 +108,7 @@ export default function Motoboy() {
     <div className="coluna" style={{ maxWidth: 680, margin: "0 auto", gap: 16 }}>
       <div className="linha entre">
         <h1>Olá, {eu.nome}</h1>
-        <button className="btn pequeno" onClick={() => { localStorage.removeItem(CHAVE); setMeuId(null); }}><LogOut size={14} /> Sair</button>
+        <button className="btn pequeno" onClick={() => { armazem.del(CHAVE); setMeuId(null); }}><LogOut size={14} /> Sair</button>
       </div>
 
       <div className="cartao linha">
@@ -82,6 +116,7 @@ export default function Motoboy() {
         <div style={{ flex: 1 }} className="pequeno">
           {gps.ativo
             ? <>Localização sendo compartilhada{gps.ultima ? ` · precisão ${gps.ultima.precisao} m · ${hora(gps.ultima.em)}` : ""}</>
+            : modoTeste ? "Versão de teste: ao tocar em \"Saí para entrega\" o trajeto é simulado."
             : meus.length ? (gps.erro || "Ligando GPS…") : "O GPS liga sozinho quando você tiver uma entrega."}
           {gps.ativo && <div className="suave">Mantenha esta tela aberta durante a entrega.</div>}
         </div>

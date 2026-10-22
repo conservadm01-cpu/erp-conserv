@@ -53,3 +53,19 @@ export function Toasts() {
 }
 
 export const numero = (v) => (v === "" || v == null ? 0 : Number(String(v).replace(",", ".")) || 0);
+
+// Botão que pede um segundo clique para confirmar (substitui o confirm()
+// do navegador, que nem sempre está disponível).
+export function BotaoConfirmar({ aoConfirmar, children, texto = "Confirmar?", className = "btn pequeno perigo" }) {
+  const [armado, setArmado] = useState(false);
+  useEffect(() => {
+    if (!armado) return;
+    const t = setTimeout(() => setArmado(false), 3000);
+    return () => clearTimeout(t);
+  }, [armado]);
+  return (
+    <button type="button" className={className} onClick={() => (armado ? (setArmado(false), aoConfirmar()) : setArmado(true))}>
+      {armado ? texto : children}
+    </button>
+  );
+}

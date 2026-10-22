@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { obter, salvarItem } from "./db.js";
+import { obter, salvarItem, armazem } from "./db.js";
 import { soDigitos, useRegistro } from "./logic.js";
 import { Campo } from "./ui.jsx";
 
@@ -7,9 +7,9 @@ import { Campo } from "./ui.jsx";
 // neste aparelho para os próximos pedidos.
 const CHAVE = "pz-cliente-id";
 
-export const clienteIdLocal = () => localStorage.getItem(CHAVE);
+export const clienteIdLocal = () => armazem.get(CHAVE);
 export const sairCliente = () => {
-  localStorage.removeItem(CHAVE);
+  armazem.del(CHAVE);
   window.dispatchEvent(new CustomEvent("pz-mudou", { detail: "cliente" }));
 };
 
@@ -39,7 +39,7 @@ export function Identificacao({ aoEntrar, titulo = "Identifique-se" }) {
         cliente = { id, nome: nome.trim(), telefone, enderecos: [], saldo: 0, movimentos: [], criadoEm: new Date().toISOString() };
         await salvarItem("cliente", cliente);
       }
-      localStorage.setItem(CHAVE, id);
+      armazem.set(CHAVE, id);
       window.dispatchEvent(new CustomEvent("pz-mudou", { detail: "cliente" }));
       aoEntrar && aoEntrar(cliente);
     } catch (e2) {

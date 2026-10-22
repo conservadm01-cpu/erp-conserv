@@ -20,21 +20,28 @@ if (url && anonKey) {
   try { supabase = createClient(url, anonKey); } catch (e) { console.error(e); }
 }
 export const modoDemo = !supabase;
+// Versão de teste publicada como artefato: sem GPS, sem mapas externos.
+export const modoTeste = import.meta.env.VITE_ARTEFATO === "1";
+
+// localStorage pode estar bloqueado (aba anônima, prévia); nesse caso os
+// dados ficam só na memória enquanto a página estiver aberta.
+const memoria = new Map();
+let temLocalStorage = false;
+try { localStorage.setItem("pz-teste", "1"); localStorage.removeItem("pz-teste"); temLocalStorage = true; } catch { /* sem localStorage */ }
+
+export const armazem = {
+  get: (k) => (temLocalStorage ? localStorage.getItem(k) : memoria.has(k) ? memoria.get(k) : null),
+  set: (k, v) => (temLocalStorage ? localStorage.setItem(k, v) : memoria.set(k, v)),
+  del: (k) => (temLocalStorage ? localStorage.removeItem(k) : memoria.delete(k)),
+  chaves: () => (temLocalStorage ? Object.keys(localStorage) : [...memoria.keys()]),
+};
 
 const local = {
-  async get(k) {
-    const v = localStorage.getItem(k);
-    return v == null ? null : v;
-  },
-  async set(k, v) { localStorage.setItem(k, v); },
-  async del(k) { localStorage.removeItem(k); },
+  async get(k) { return armazem.get(k); },
+  async set(k, v) { armazem.set(k, v); },
+  async del(k) { armazem.del(k); },
   async listValues(prefix) {
-    const out = [];
-    for (let i = 0; i < localStorage.length; i++) {
-      const k = localStorage.key(i);
-      if (k.startsWith(prefix)) out.push(localStorage.getItem(k));
-    }
-    return out;
+    return armazem.chaves().filter((k) => k.startsWith(prefix)).map((k) => armazem.get(k));
   },
 };
 

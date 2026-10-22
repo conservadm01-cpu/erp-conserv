@@ -30,7 +30,8 @@ export default function Acompanhar({ id }) {
     { id: "loja", lat: cfg.loja.lat, lng: cfg.loja.lng, emoji: "🍕", rotulo: cfg.loja.nome },
     { id: "dest", lat: pedido.endereco.lat, lng: pedido.endereco.lng, emoji: "🏠", rotulo: "Você" },
   ];
-  if (st === "em_rota" && aoVivo) pontos.push({ id: "moto", lat: loc.lat, lng: loc.lng, emoji: "🛵", rotulo: motoboy?.nome || "Motoboy" });
+  // A linha tracejada liga os pontos na ordem: pizzaria → motoboy → cliente.
+  if (st === "em_rota" && aoVivo) pontos.splice(1, 0, { id: "moto", lat: loc.lat, lng: loc.lng, emoji: "🛵", rotulo: motoboy?.nome || "Motoboy" });
 
   const zapLoja = soDigitos(cfg.loja.telefone);
 
