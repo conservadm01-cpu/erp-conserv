@@ -33,7 +33,7 @@ export const CONFIG_PADRAO = {
     taxaBase: 5,
     kmInclusos: 3,
     valorKmExtra: 1.5,
-    raioMaxKm: 12,
+    raioMaxKm: 5,
     fatorRota: 1.3, // distância em linha reta x fator ≈ distância pelas ruas
     velocidadeKmh: 25,
     tempoPreparoMin: 25,

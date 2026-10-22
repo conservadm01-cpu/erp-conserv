@@ -121,7 +121,7 @@ export default function Configuracoes() {
         <table className="tabela" style={{ marginTop: 6 }}>
           <thead><tr><th>Distância</th><th>Padrão</th>{cfg.entrega.dedicada.ativo && <th>Dedicada</th>}</tr></thead>
           <tbody>
-            {[1, 3, 5, 8, 12].map((km) => {
+            {[1, 2, 3, 4, 5, 6].map((km) => {
               const a = simular(km, false), b = simular(km, true);
               return (
                 <tr key={km}>
