@@ -11,7 +11,7 @@ import { CURRENCIES } from "@/lib/format";
 import { cn } from "@/lib/cn";
 import { NotificationBell } from "@/components/notifications/bell";
 
-const BARE = ["/login", "/privacidade", "/termos", "/convite"];
+const BARE = ["/login", "/auth", "/privacidade", "/termos", "/convite"];
 
 export function AppShell({ children }: { children: ReactNode }) {
   const pathname = usePathname() ?? "/";

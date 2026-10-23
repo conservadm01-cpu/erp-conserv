@@ -1,0 +1,353 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Prévia VIAJAR+</title>
+<style>
+:root{--bg:#f7f4ef;--surface:#fff;--surface-2:#f1ede6;--fg:#1c2530;--muted:#5d6875;--line:#e2dcd2;--accent:#1f7596;--accent-fg:#fff;--s1:#2a78d6;--s2:#eb6834;--s3:#1baf7a;--good:#047857;--bad:#b91c1c;--warn:#b45309;color-scheme:light}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#0f1419;--surface:#171e26;--surface-2:#1f2832;--fg:#e8edf2;--muted:#9aa7b4;--line:#2b3742;--accent:#4cb3d8;--accent-fg:#06202b;--s1:#3987e5;--s2:#d95926;--s3:#199e70;--good:#34d399;--bad:#f87171;--warn:#fbbf24;color-scheme:dark}}
+:root[data-theme="dark"]{--bg:#0f1419;--surface:#171e26;--surface-2:#1f2832;--fg:#e8edf2;--muted:#9aa7b4;--line:#2b3742;--accent:#4cb3d8;--accent-fg:#06202b;--s1:#3987e5;--s2:#d95926;--s3:#199e70;--good:#34d399;--bad:#f87171;--warn:#fbbf24;color-scheme:dark}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.5 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+.serif{font-family:"Iowan Old Style","Palatino Linotype",Palatino,Georgia,serif;letter-spacing:-.01em}
+.wrap{max-width:1100px;margin:0 auto;padding:0 16px 64px}
+header.top{display:flex;align-items:center;gap:12px;padding:16px 0}
+.logo{font:700 24px/1 "Iowan Old Style",Georgia,serif}.logo b{color:#ea7a32}
+.top .sp{flex:1}
+button,.btn{font:inherit;cursor:pointer;border-radius:10px;border:1px solid var(--line);background:var(--surface);color:var(--fg);padding:8px 14px}
+button.pri{background:var(--accent);color:var(--accent-fg);border-color:transparent}
+button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.hero{border-radius:24px;padding:28px;color:#fff;background:linear-gradient(135deg,#1b5f7a,#12394a 60%,#0b1e28);position:relative;overflow:hidden}
+.hero:after{content:"";position:absolute;inset:0;background:radial-gradient(circle at 85% 15%,rgba(234,122,50,.55),transparent 40%);pointer-events:none}
+.hero h1{font-size:clamp(26px,5vw,44px);margin:6px 0 10px;line-height:1.1}
+.hero .k{font-size:12px;letter-spacing:.22em;text-transform:uppercase;opacity:.75}
+.hero .meta{display:flex;flex-wrap:wrap;gap:6px 20px;opacity:.9;font-size:14px}
+.badge{display:inline-block;font-size:12px;font-weight:600;border-radius:999px;padding:2px 9px;border:1px solid var(--line);background:var(--surface-2);color:var(--muted)}
+.b-ok{background:#d1fae5;color:#065f46;border-color:#a7f3d0}.b-pend{background:#fef3c7;color:#92400e;border-color:#fde68a}.b-cred{background:#dbeafe;color:#1e40af;border-color:#bfdbfe}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]) .b-ok{background:#064e3b;color:#a7f3d0;border-color:#065f46}:root:not([data-theme="light"]) .b-pend{background:#451a03;color:#fde68a;border-color:#78350f}:root:not([data-theme="light"]) .b-cred{background:#172554;color:#bfdbfe;border-color:#1e3a8a}}
+:root[data-theme="dark"] .b-ok{background:#064e3b;color:#a7f3d0;border-color:#065f46}:root[data-theme="dark"] .b-pend{background:#451a03;color:#fde68a;border-color:#78350f}:root[data-theme="dark"] .b-cred{background:#172554;color:#bfdbfe;border-color:#1e3a8a}
+.note{border:1px solid #fde68a;background:#fffbeb;color:#78350f;border-radius:12px;padding:10px 14px;font-size:14px;margin:16px 0}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]) .note{background:#2a1d05;border-color:#78350f;color:#fde68a}}
+:root[data-theme="dark"] .note{background:#2a1d05;border-color:#78350f;color:#fde68a}
+nav.tabs{display:flex;gap:4px;overflow-x:auto;background:var(--surface-2);border:1px solid var(--line);border-radius:12px;padding:4px;margin:20px 0}
+nav.tabs button{border:0;background:transparent;color:var(--muted);white-space:nowrap;font-weight:600}
+nav.tabs button[aria-selected="true"]{background:var(--surface);color:var(--fg);box-shadow:0 1px 2px rgba(0,0,0,.08)}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:18px;margin-bottom:16px}
+.card h2{margin:0 0 4px;font-size:20px}.sub{color:var(--muted);font-size:13px;margin:0 0 12px}
+.stats{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:10px;margin-bottom:16px}
+.stat{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:12px}
+.stat .l{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);font-weight:600}
+.stat .v{font-size:19px;font-weight:700;font-variant-numeric:tabular-nums;margin-top:2px}
+.stat .h{font-size:12px;color:var(--muted)}
+.good{color:var(--good)}.bad{color:var(--bad)}.warn{color:var(--warn)}
+.meter{display:flex;gap:2px;height:16px;border-radius:999px;overflow:hidden;background:var(--surface-2)}
+.legend{display:flex;flex-wrap:wrap;gap:4px 18px;font-size:12px;color:var(--muted);margin-top:10px}
+.legend i{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:6px;vertical-align:-1px}
+.tw{overflow-x:auto}
+table{width:100%;border-collapse:collapse;font-size:14px;min-width:720px}
+th{font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);text-align:left;padding:8px 6px;border-bottom:1px solid var(--line)}
+td{padding:8px 6px;border-bottom:1px solid var(--line);vertical-align:top}
+td.n,th.n{text-align:right;font-variant-numeric:tabular-nums}
+form.row{display:grid;gap:8px;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));align-items:end}
+label{display:flex;flex-direction:column;gap:4px;font-size:13px;font-weight:600}
+input,select{font:inherit;font-weight:400;border:1px solid var(--line);background:var(--surface);color:var(--fg);border-radius:10px;padding:8px 10px;width:100%}
+.alert{border-radius:12px;padding:10px 14px;margin-bottom:10px;font-size:14px;border:1px solid}
+.a-info{background:#eff6ff;border-color:#bfdbfe;color:#1e3a8a}.a-warn{background:#fffbeb;border-color:#fde68a;color:#78350f}.a-crit{background:#fef2f2;border-color:#fecaca;color:#7f1d1d}
+.day{border-left:2px solid var(--line);padding:0 0 18px 20px;position:relative}
+.day:before{content:"";position:absolute;left:-8px;top:4px;width:14px;height:14px;border-radius:50%;background:var(--accent);border:2px solid var(--surface)}
+.day h3{margin:0;font-size:18px}.day ul{margin:6px 0 0;padding:0;list-style:none;font-size:14px}.day li{display:flex;gap:10px}.day li span{color:var(--muted);width:46px;flex:none;font-variant-numeric:tabular-nums}
+.grid2{display:grid;gap:16px;grid-template-columns:repeat(auto-fit,minmax(300px,1fr))}
+.mod{display:flex;gap:10px;align-items:flex-start;padding:8px 0;border-bottom:1px solid var(--line);font-size:14px}.mod:last-child{border-bottom:0}.mod .badge{flex:none}
+[hidden]{display:none!important}
+.small{font-size:12px;color:var(--muted)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <span class="logo">VIAJAR<b>+</b></span>
+    <span class="badge">prévia local</span>
+    <span class="sp"></span>
+    <button id="theme" aria-label="Alternar tema claro/escuro">◐ Tema</button>
+  </header>
+
+  <section class="hero">
+    <div class="k" id="countdown">Planejando</div>
+    <h1 class="serif">Patagônia em família — El Calafate</h1>
+    <div class="meta">
+      <span>📍 El Calafate, Argentina</span><span>📅 10 → 15 dez 2026</span><span>👨‍👩‍👧 4 adultos + 1 criança (8 anos)</span><span>✈️ saída de Guarulhos · apartamento tipo Airbnb · carro alugado</span>
+    </div>
+  </section>
+
+  <div class="note"><strong>Dados de demonstração.</strong> Os valores são estimativas fictícias para ilustrar o sistema e <strong>não são cotações reais</strong>. Nesta prévia, tudo fica só no seu navegador.</div>
+
+  <nav class="tabs" role="tablist" aria-label="Seções">
+    <button role="tab" aria-selected="true" data-tab="orc">Orçamento</button>
+    <button role="tab" aria-selected="false" data-tab="tl">Linha do tempo</button>
+    <button role="tab" aria-selected="false" data-tab="mod">Módulos do app</button>
+  </nav>
+
+  <!-- ORÇAMENTO -->
+  <section id="orc" role="tabpanel">
+    <div id="alerts"></div>
+    <div class="stats" id="stats"></div>
+    <div class="card">
+      <div class="meter" id="meter" role="img"></div>
+      <div class="legend">
+        <span><i style="background:var(--s1)"></i>Pago</span>
+        <span><i style="background:var(--s2)"></i>Compromissos a pagar</span>
+        <span><i style="background:repeating-linear-gradient(45deg,var(--s3) 0 2px,transparent 2px 4px)"></i>Estimativas não reservadas</span>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2 class="serif">Itens do orçamento</h2>
+      <p class="sub">Previsto, cotado, reservado e pago são separados. Reserva é compromisso, não dinheiro pago. Clique em “Pagar” para lançar pagamentos parciais ou estornos.</p>
+      <div class="tw"><table>
+        <thead><tr><th>Item</th><th class="n">Previsto</th><th class="n">Cotado</th><th class="n">Reservado</th><th class="n">Pago</th><th class="n">Saldo</th><th>Status</th><th></th></tr></thead>
+        <tbody id="rows"></tbody>
+      </table></div>
+    </div>
+
+    <div class="grid2">
+      <div class="card">
+        <h2 class="serif">Novo item</h2>
+        <form class="row" id="fItem">
+          <label style="grid-column:1/-1">Descrição<input name="d" required minlength="2" placeholder="Ex.: Jantar de cordeiro patagônico"></label>
+          <label>Previsto (R$)<input name="p" type="number" step="0.01" min="0" value="0"></label>
+          <label>Cotado (R$)<input name="q" type="number" step="0.01" min="0" value="0"></label>
+          <label>Reservado (R$)<input name="r" type="number" step="0.01" min="0" value="0"></label>
+          <button class="pri" type="submit">Adicionar</button>
+        </form>
+      </div>
+      <div class="card" id="payCard" hidden>
+        <h2 class="serif" id="payTitle">Pagamento</h2>
+        <form class="row" id="fPay">
+          <label>Tipo<select name="k"><option value="pagamento">Pagamento</option><option value="estorno">Estorno</option></select></label>
+          <label>Valor<input name="a" type="number" step="0.01" min="0.01" required></label>
+          <label>Moeda<select name="c"><option>BRL</option><option>ARS</option><option>USD</option></select></label>
+          <label>Câmbio → BRL<input name="fx" type="number" step="any" min="0" value="1" required></label>
+          <button class="pri" type="submit">Registrar</button>
+        </form>
+        <p class="small" id="payInfo"></p>
+      </div>
+    </div>
+    <p class="small">Fórmulas: projeção = realizado + compromissos pendentes + estimativas dos itens não reservados · diferença = realizado − previsto · economia = previsto − realizado. Valores em centavos inteiros.</p>
+    <button id="reset">Restaurar dados de demonstração</button>
+  </section>
+
+  <!-- LINHA DO TEMPO -->
+  <section id="tl" role="tabpanel" hidden>
+    <div class="grid2">
+      <div class="card">
+        <h2 class="serif">Roteiro sugerido</h2>
+        <p class="sub">Sugestões para confirmar com os fornecedores. Nada aparece como reservado sem confirmação.</p>
+        <div id="days"></div>
+      </div>
+      <div>
+        <div class="card">
+          <h2 class="serif">Onde e quando fotografar</h2>
+          <p class="sub">Horário dourado calculado astronomicamente para 12/12/2026 em El Calafate (UTC−3)</p>
+          <div class="stats" id="sun"></div>
+          <ul class="small" style="padding-left:18px;margin:0">
+            <li>Mirantes rendem mais na luz dourada; ao meio-dia, prefira bosques e detalhes.</li>
+            <li>Uma pessoa em primeiro plano dá escala ao glaciar.</li>
+            <li>Em locais religiosos, confirme se fotos são permitidas e evite flash.</li>
+          </ul>
+        </div>
+        <div class="card">
+          <h2 class="serif">Ao subir uma foto, o app pergunta</h2>
+          <ul style="padding-left:18px;margin:0;font-size:14px">
+            <li>O que vocês estavam sentindo neste momento?</li>
+            <li>Quem aparece na foto?</li>
+            <li>Era comida? Qual prato e onde?</li>
+            <li>Este lugar merece estar no book? É instagramável?</li>
+          </ul>
+          <p class="small">As respostas viram legenda, etiquetas e o registro do dia no diário.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- MÓDULOS -->
+  <section id="mod" role="tabpanel" hidden>
+    <div class="card">
+      <h2 class="serif">Situação dos módulos do MVP</h2>
+      <p class="sub">Em <code>viajar-plus/</code>, branch <code>feat/viajar-plus</code>. A prévia acima reproduz só o orçamento e a linha do tempo; o app completo roda com <code>npm run dev</code>.</p>
+      <div id="mods"></div>
+    </div>
+  </section>
+</div>
+
+<script>
+(() => {
+  const KEY = "viajar-previa-v1";
+  const brl = (v) => v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+  const C = (v) => Math.round((Number(v) || 0) * 100);
+  const F = (c) => c / 100;
+  const DEMO = () => ({
+    items: [
+      ["Voos GRU ⇄ FTE (5 passageiros)", 17500, 0, 0],
+      ["Bagagem e transporte até Guarulhos", 900, 0, 0],
+      ["Apartamento tipo Airbnb — 5 noites", 6000, 0, 0],
+      ["Carro SUV 7 lugares — 5 diárias", 3500, 0, 0],
+      ["Combustível e estacionamento", 900, 0, 0],
+      ["Ingressos Parque Nacional Los Glaciares", 1500, 0, 0],
+      ["Navegação pelos glaciares", 3000, 0, 0],
+      ["Refeições e mercado", 4000, 0, 0],
+      ["Seguro viagem (5 pessoas)", 600, 0, 0],
+      ["Chip/eSIM de dados", 200, 0, 0],
+      ["Reserva para imprevistos", 1500, 0, 0],
+    ].map(([d, p, q, r], i) => ({ id: "i" + i, d, p, q, r, status: "" })),
+    pays: [],
+    budget: 40000,
+  });
+  let S;
+  try { S = JSON.parse(localStorage.getItem(KEY)) || DEMO(); } catch { S = DEMO(); }
+  const save = () => { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch {} };
+
+  // Mesmas regras de src/lib/budget/calc.ts
+  function fig(it) {
+    const paid = S.pays.filter((p) => p.e === it.id).reduce((s, p) => s + (p.k === "estorno" ? -1 : 1) * C(Math.abs(p.a) * p.fx), 0);
+    const pl = C(it.p), q = C(it.q), r = C(it.r);
+    const committed = r > 0, expected = committed ? r : q > 0 ? q : pl;
+    const pending = committed ? Math.max(0, r - paid) : 0;
+    const unc = committed ? 0 : Math.max(0, expected - paid);
+    let st = paid > 0 && paid >= expected ? "Pago" : paid > 0 ? "Pago parcial" : committed ? "Reservado" : q > 0 ? "Cotado" : "Previsto";
+    return { pl, q, r, paid, pending, unc, proj: paid + pending + unc, st };
+  }
+
+  function render() {
+    const fs = S.items.map((it) => [it, fig(it)]);
+    const sum = (k) => fs.reduce((s, [, f]) => s + f[k], 0);
+    const T = { pl: sum("pl"), q: sum("q"), r: sum("r"), paid: sum("paid"), pending: sum("pending"), unc: sum("unc"), proj: sum("proj") };
+    const B = C(S.budget);
+    const consumed = B ? (T.paid / B) * 100 : 0, projPct = B ? (T.proj / B) * 100 : 0;
+    const stat = (l, v, h = "", cls = "") => `<div class="stat"><div class="l">${l}</div><div class="v ${cls}">${v}</div><div class="h">${h}</div></div>`;
+    document.getElementById("stats").innerHTML =
+      stat("Orçamento", brl(F(B)), brl(F(B) / 5) + " por pessoa") +
+      stat("Previsto", brl(F(T.pl))) +
+      stat("Cotado", brl(F(T.q))) +
+      stat("Reservado", brl(F(T.r)), "compromissos") +
+      stat("Realizado (pago)", brl(F(T.paid)), consumed.toFixed(1).replace(".", ",") + "% do orçamento", consumed >= 100 ? "bad" : consumed >= 90 ? "warn" : "") +
+      stat("Saldo a pagar", brl(F(T.pending))) +
+      stat("Projeção final", brl(F(T.proj)), "pago + a pagar + estimativas", projPct > 100 ? "bad" : "") +
+      stat("Diferença", brl(F(T.paid - T.pl)), "realizado − previsto") +
+      stat("Economia", brl(F(T.pl - T.paid)), "previsto − realizado", T.pl - T.paid >= 0 ? "good" : "bad") +
+      stat("Disponível", brl(F(B - T.proj)), "orçamento − projeção", B - T.proj < 0 ? "bad" : "good") +
+      stat("Custo diário", brl(F(T.proj) / 6), "6 dias · projeção");
+    const tot = Math.max(B, T.proj, 1), w = (v) => Math.max(0, (v / tot) * 100) + "%";
+    const m = document.getElementById("meter");
+    m.innerHTML = `<div style="width:${w(T.paid)};background:var(--s1)"></div><div style="width:${w(T.pending)};background:var(--s2)"></div><div style="width:${w(T.unc)};background:repeating-linear-gradient(45deg,var(--s3) 0 4px,transparent 4px 8px)"></div>`;
+    m.setAttribute("aria-label", `Pago ${brl(F(T.paid))}, a pagar ${brl(F(T.pending))}, estimado ${brl(F(T.unc))}, orçamento ${brl(F(B))}`);
+    const al = [];
+    const th = [70, 90, 100];
+    const hr = th.filter((t) => consumed >= t).pop(), hp = th.filter((t) => projPct >= t).pop();
+    const cls = (t) => (t >= 100 ? "a-crit" : t >= 90 ? "a-warn" : "a-info");
+    if (hr) al.push(`<div class="alert ${cls(hr)}" role="alert">⚠ Gastos pagos atingiram ${hr}% do orçamento.</div>`);
+    if (hp && hp !== hr) al.push(`<div class="alert ${cls(hp)}">ℹ A projeção final chega a ${hp}% do orçamento.</div>`);
+    document.getElementById("alerts").innerHTML = al.join("");
+    const tone = { "Pago": "b-ok", "Pago parcial": "b-pend", "Reservado": "b-cred", "Cotado": "b-cred", "Previsto": "" };
+    document.getElementById("rows").innerHTML = fs.map(([it, f]) => `<tr>
+      <td>${it.d.replace(/</g, "&lt;")}</td><td class="n">${brl(F(f.pl))}</td><td class="n">${f.q ? brl(F(f.q)) : "—"}</td>
+      <td class="n">${f.r ? brl(F(f.r)) : "—"}</td><td class="n">${f.paid ? brl(F(f.paid)) : "—"}</td><td class="n">${f.pending ? brl(F(f.pending)) : "—"}</td>
+      <td><span class="badge ${tone[f.st]}">${f.st}</span></td>
+      <td style="white-space:nowrap"><button data-pay="${it.id}">Pagar</button> <button data-res="${it.id}" title="Registrar reserva pelo valor cotado ou previsto">Reservar</button> <button data-del="${it.id}" aria-label="Excluir">×</button></td></tr>`).join("");
+    save();
+  }
+
+  let paying = null;
+  document.getElementById("rows").addEventListener("click", (e) => {
+    const b = e.target.closest("button"); if (!b) return;
+    if (b.dataset.del) { if (!confirm("Excluir este item e seus pagamentos?")) return; S.items = S.items.filter((i) => i.id !== b.dataset.del); S.pays = S.pays.filter((p) => p.e !== b.dataset.del); render(); }
+    if (b.dataset.res) { const it = S.items.find((i) => i.id === b.dataset.res); const v = prompt("Valor reservado (compromisso, não é pagamento) em R$:", it.r || it.q || it.p); if (v !== null && Number(v) >= 0) { it.r = Number(v); render(); } }
+    if (b.dataset.pay) {
+      paying = S.items.find((i) => i.id === b.dataset.pay);
+      const f = fig(paying);
+      document.getElementById("payCard").hidden = false;
+      document.getElementById("payTitle").textContent = "Pagamento — " + paying.d;
+      document.getElementById("payInfo").textContent = `Pago até agora ${brl(F(f.paid))} · saldo a pagar ${brl(F(f.pending))} · estimativa restante ${brl(F(f.unc))}`;
+      document.querySelector("#fPay [name=a]").value = (F(f.pending || f.unc)).toFixed(2);
+      document.querySelector("#fPay [name=a]").focus();
+    }
+  });
+  document.getElementById("fPay").addEventListener("submit", (e) => {
+    e.preventDefault(); if (!paying) return;
+    const d = new FormData(e.target);
+    S.pays.push({ e: paying.id, k: d.get("k"), a: Number(d.get("a")), c: d.get("c"), fx: Number(d.get("fx")) });
+    document.getElementById("payCard").hidden = true; paying = null; render();
+  });
+  document.querySelector("#fPay [name=c]").addEventListener("change", (e) => {
+    document.querySelector("#fPay [name=fx]").value = { BRL: 1, ARS: 0.0055, USD: 5.4 }[e.target.value];
+    document.getElementById("payInfo").textContent = "Câmbio sugerido apenas como exemplo — use a taxa efetivamente cobrada. No app, o câmbio atual vem do ExchangeRate-API/Frankfurter.";
+  });
+  document.getElementById("fItem").addEventListener("submit", (e) => {
+    e.preventDefault(); const d = new FormData(e.target);
+    S.items.push({ id: "n" + Date.now(), d: String(d.get("d")).trim(), p: Number(d.get("p")) || 0, q: Number(d.get("q")) || 0, r: Number(d.get("r")) || 0 });
+    e.target.reset(); render();
+  });
+  document.getElementById("reset").addEventListener("click", () => { if (confirm("Voltar aos dados de demonstração?")) { S = DEMO(); render(); } });
+
+  // Abas
+  const tabs = [...document.querySelectorAll("[role=tab]")];
+  tabs.forEach((t) => t.addEventListener("click", () => {
+    tabs.forEach((x) => { x.setAttribute("aria-selected", x === t); document.getElementById(x.dataset.tab).hidden = x !== t; });
+  }));
+
+  // Tema
+  document.getElementById("theme").addEventListener("click", () => {
+    const r = document.documentElement, dark = r.dataset.theme ? r.dataset.theme === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
+    r.dataset.theme = dark ? "light" : "dark";
+  });
+
+  // Contagem regressiva
+  const days = Math.ceil((new Date(2026, 11, 10) - new Date()) / 864e5);
+  document.getElementById("countdown").textContent = days > 0 ? `Faltam ${days} dias` : "Viagem em andamento ou concluída";
+
+  // Roteiro
+  const plan = [
+    ["Qui 10/12", [["15:00", "Chegada a El Calafate e retirada do carro"], ["17:30", "Reserva Natural Laguna Nimez (aves)"]]],
+    ["Sex 11/12", [["09:00", "Glaciar Perito Moreno — passarelas"]]],
+    ["Sáb 12/12", [["08:30", "Navegação pelos glaciares (verificar idade mínima)"]]],
+    ["Dom 13/12", [["07:00", "Bate-volta a El Chaltén (≈ 3h por trecho)"]]],
+    ["Seg 14/12", [["10:30", "Glaciarium — museu do gelo"], ["20:30", "Pôr do sol no Lago Argentino (fotos)"]]],
+    ["Ter 15/12", [["11:00", "Devolução do carro e voo de volta"]]],
+  ];
+  document.getElementById("days").innerHTML = plan.map(([d, it], i) => `<div class="day"><h3 class="serif">Dia ${i + 1} <span class="small">· ${d}</span></h3><ul>${it.map(([h, t]) => `<li><span>${h}</span>${t} <span class="badge" style="width:auto">sugestão</span></li>`).join("")}</ul></div>`).join("");
+
+  // Sol (mesmo algoritmo de src/lib/guide/sun.ts)
+  function sun(iso, lat, lng) {
+    const r = Math.PI / 180, [y, mo, d] = iso.split("-").map(Number);
+    const noon = new Date(Date.UTC(y, mo - 1, d, 12) - (lng / 15) * 36e5), n = noon.getTime() / 864e5 + 2440587.5 - 2451545;
+    const M = (357.5291 + 0.98560028 * n) % 360, Cc = 1.9148 * Math.sin(M * r) + 0.02 * Math.sin(2 * M * r) + 0.0003 * Math.sin(3 * M * r);
+    const L = (M + Cc + 180 + 102.9372) % 360, tr = 2451545 + n + 0.0053 * Math.sin(M * r) - 0.0069 * Math.sin(2 * L * r);
+    const de = Math.asin(Math.sin(L * r) * Math.sin(23.4397 * r)), H = Math.acos((Math.sin(-0.833 * r) - Math.sin(lat * r) * Math.sin(de)) / (Math.cos(lat * r) * Math.cos(de))) / r / 360;
+    const t = (j) => new Date((j - 2440587.5) * 864e5);
+    return [t(tr - H), t(tr + H)];
+  }
+  const [sr, ss] = sun("2026-12-12", -50.3379, -72.2648);
+  const hm = (dt) => dt.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit", timeZone: "America/Argentina/Rio_Gallegos" });
+  document.getElementById("sun").innerHTML = `<div class="stat"><div class="l">🌅 Nascer</div><div class="v">${hm(sr)}</div><div class="h">luz dourada até ${hm(new Date(+sr + 36e5))}</div></div><div class="stat"><div class="l">🌇 Pôr do sol</div><div class="v">${hm(ss)}</div><div class="h">luz dourada desde ${hm(new Date(+ss - 36e5))}</div></div>`;
+
+  // Módulos
+  const mods = [
+    ["ok", "Viagens", "Cadastro completo, viajantes, responsáveis, convites com permissões."],
+    ["ok", "Orçamento", "13 categorias + personalizadas, pagamentos parciais, estornos, câmbio, rateio, acerto de contas, alertas 70/90/100%, CSV/Excel/PDF."],
+    ["ok", "Diário e linha do tempo", "Registros por dia/local/pessoa, gastos ligados ao orçamento, rascunhos offline com resolução de conflitos, histórias do dia."],
+    ["ok", "Roteiro e reservas", "Arrastar e soltar, conflitos de horário/deslocamento, reservas com documentos e vínculo ao orçamento sem contar como pago."],
+    ["ok", "Vídeo", "Linha do tempo de clipes, cortes, títulos, transições, proporções, exportação pelo navegador (MediaRecorder)."],
+    ["ok", "Banco e segurança", "Migrations SQL + RLS testadas em PostgreSQL 16 real, buckets privados, LGPD (exportar/excluir), rate limit."],
+    ["pend", "Pesquisa e guia local", "Em finalização: OpenStreetMap (restaurantes, bares, templos, mirantes), clima, câmbio, comparador."],
+    ["ok", "Fotos, editor e book", "Galeria sem limite de quantidade, perguntas a cada foto enviada, editor com 7 molduras, ajustes, texto e versões, colagem, book em PDF."],
+    ["cred", "Voos, hotéis e atividades (Amadeus/Duffel)", "Adaptadores prontos; exigem credenciais. Sem elas, o app mostra links de pesquisa externa e não inventa preços."],
+    ["cred", "Login e sincronização", "Exigem projeto Supabase. Sem ele, o app roda em modo demonstração local."],
+  ];
+  const lab = { ok: ["b-ok", "funcional"], pend: ["b-pend", "em finalização"], cred: ["b-cred", "requer credenciais"] };
+  document.getElementById("mods").innerHTML = mods.map(([s, t, d]) => `<div class="mod"><span class="badge ${lab[s][0]}">${lab[s][1]}</span><div><strong>${t}</strong><br><span class="small">${d}</span></div></div>`).join("");
+
+  render();
+})();
+</script>
+</body>
+</html>

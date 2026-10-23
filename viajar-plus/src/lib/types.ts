@@ -528,6 +528,8 @@ export interface VideoClip {
   muted: boolean;
   title: string;
   caption: string;
+  date_label?: string;
+  location_label?: string;
 }
 
 export interface VideoProject extends Timestamps {
