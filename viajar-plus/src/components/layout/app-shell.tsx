@@ -9,6 +9,7 @@ import { useTrip } from "@/lib/trips/context";
 import { dataMode } from "@/lib/data";
 import { CURRENCIES } from "@/lib/format";
 import { cn } from "@/lib/cn";
+import { NotificationBell } from "@/components/notifications/bell";
 
 const BARE = ["/login", "/privacidade", "/termos", "/convite"];
 
@@ -139,6 +140,7 @@ function TopBar({ onMenu }: { onMenu: () => void }) {
             <option key={c} value={c}>{c}</option>
           ))}
         </select>
+        <NotificationBell />
         <button
           className="rounded-lg p-2 hover:bg-surface-2"
           onClick={() => setTheme(resolvedTheme === "dark" ? "light" : "dark")}
