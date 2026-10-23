@@ -66,7 +66,9 @@ export function integrationStatus(): IntegrationStatus[] {
       name: "Amadeus for Developers",
       area: "Voos, hotéis e passeios",
       state: ama.configured ? "configurada" : "pendente",
-      detail: ama.configured ? `Ambiente: ${ama.env === "production" ? "produção" : "teste (dados limitados)"}` : "Defina AMADEUS_CLIENT_ID e AMADEUS_CLIENT_SECRET.",
+      detail: ama.configured
+        ? `Credenciais presentes (${ama.env === "production" ? "produção" : "teste"}). O Self-Service foi encerrado em 17/07/2026: requer contrato Enterprise.`
+        : "Self-Service encerrado em 17/07/2026; exige contrato Amadeus Enterprise (AMADEUS_CLIENT_ID, AMADEUS_CLIENT_SECRET, AMADEUS_BASE_URL).",
       docs: "docs/INTEGRACOES.md#amadeus",
     },
     {

@@ -91,7 +91,7 @@ function Dashboard({ trip }: { trip: Trip }) {
         <Stat label="Projeção final" value={fmt(b.totals.projected)} tone={b.totals.projectedPct > 100 ? "bad" : "default"} />
       </div>
 
-      <div className="grid gap-6 lg:grid-cols-3">
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
         <Card className="lg:col-span-2">
           <CardHeader title="Saldo do orçamento" action={<LinkButton href="/orcamento" variant="outline" size="sm">Abrir orçamento</LinkButton>} />
           <CardBody><BudgetMeter realized={b.totals.realized} pending={b.totals.pending} uncommitted={b.totals.uncommitted} budget={b.totals.budget} fmt={fmt} /></CardBody>

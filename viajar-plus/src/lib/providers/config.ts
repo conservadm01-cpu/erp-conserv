@@ -9,7 +9,9 @@ export function amadeusConfig() {
     id: id ?? "",
     secret: secret ?? "",
     env,
-    base: env === "production" ? "https://api.amadeus.com" : "https://test.api.amadeus.com",
+    // O portal Self-Service foi desativado em 17/07/2026; com contrato Enterprise,
+    // informe a URL base fornecida pela Amadeus em AMADEUS_BASE_URL.
+    base: process.env.AMADEUS_BASE_URL || (env === "production" ? "https://api.amadeus.com" : "https://test.api.amadeus.com"),
   };
 }
 

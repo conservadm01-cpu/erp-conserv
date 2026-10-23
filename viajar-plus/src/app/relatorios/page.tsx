@@ -82,7 +82,7 @@ function Reports({ trip }: { trip: Trip }) {
         <Stat label="Memórias" value={media.data.length + diary.data.length} hint={`${media.data.length} mídias · ${diary.data.length} registros`} />
       </div>
 
-      <div className="grid gap-6 lg:grid-cols-2">
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
         <Card><CardHeader title="Previsto × realizado" /><CardBody><PlannedVsRealized data={b.byCategory} categories={b.categories} fmt={fmt} /></CardBody></Card>
         <Card><CardHeader title="Evolução dos pagamentos" /><CardBody><Evolution data={spendingEvolution(b.payments)} budget={t.budget} fmt={fmt} /></CardBody></Card>
         <Card><CardHeader title="Custo por pessoa" /><CardBody><PerPerson data={b.shares} fmt={fmt} /></CardBody></Card>

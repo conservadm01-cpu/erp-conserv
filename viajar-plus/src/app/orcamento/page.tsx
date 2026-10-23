@@ -162,7 +162,7 @@ function Budget({ trip }: { trip: Trip }) {
             value: "graficos",
             label: "Gráficos",
             content: (
-              <div className="grid gap-6 lg:grid-cols-2">
+              <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
                 <Card><CardHeader title="Previsto × realizado por categoria" /><CardBody><PlannedVsRealized data={b.byCategory} categories={b.categories} fmt={fmt} /></CardBody></Card>
                 <Card><CardHeader title="Despesas por categoria (projeção)" /><CardBody><ByCategory data={b.byCategory} categories={b.categories} fmt={fmt} /></CardBody></Card>
                 <Card><CardHeader title="Evolução dos gastos" subtitle="Realizado acumulado por data de pagamento" /><CardBody><Evolution data={spendingEvolution(b.payments)} budget={t.budget} fmt={fmt} /></CardBody></Card>
@@ -323,7 +323,7 @@ function SharesPanel({ shares, fmt }: { shares: ReturnType<typeof useBudget>["sh
   const transfers = settleUp(shares);
   const name = (id: string) => shares.find((s) => s.traveler_id === id)?.name ?? "?";
   return (
-    <div className="grid gap-6 lg:grid-cols-2">
+    <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
       <Card>
         <CardHeader title="Parte de cada viajante" subtitle="Base configurável em “Configurar” (projeção, realizado ou previsto)" />
         <CardBody className="overflow-x-auto">
@@ -371,7 +371,7 @@ function BudgetSettings({ trip }: { trip: Trip }) {
     getRepo().update("budgets", budget.id, patch).then(() => toast("Configuração salva")).catch((e) => toast(String(e), "error"));
 
   return (
-    <div className="grid gap-6 lg:grid-cols-2">
+    <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
       <Card>
         <CardHeader title="Limites e cálculo" />
         <CardBody className="space-y-4">

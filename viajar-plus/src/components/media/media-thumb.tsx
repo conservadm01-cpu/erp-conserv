@@ -29,7 +29,7 @@ export function MediaThumb({ asset, className, alt }: { asset: MediaAsset; class
       </div>
     );
   // eslint-disable-next-line @next/next/no-img-element
-  return <img src={url} alt={label} loading="lazy" className={cn("object-cover", className)} />;
+  return <img src={url} alt={label} loading="lazy" className={cn("bg-surface-2 object-cover", className)} />;
 }
 
 /** Mídia em tamanho real (imagem ou vídeo com controles). */

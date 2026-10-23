@@ -115,7 +115,7 @@ function TopBar({ onMenu }: { onMenu: () => void }) {
       <label className="sr-only" htmlFor="trip-select">Viagem ativa</label>
       <select
         id="trip-select"
-        className="h-9 min-w-0 max-w-[55vw] flex-1 truncate rounded-lg border border-line bg-surface px-2 text-sm md:max-w-md md:flex-none"
+        className="h-9 w-0 min-w-0 flex-1 truncate rounded-lg border border-line bg-surface px-2 text-sm md:w-auto md:max-w-md md:flex-none"
         value={trip?.id ?? ""}
         onChange={(e) => select(e.target.value || null)}
       >
@@ -126,12 +126,12 @@ function TopBar({ onMenu }: { onMenu: () => void }) {
           </option>
         ))}
       </select>
-      <div className="ml-auto flex items-center gap-2">
+      <div className="ml-auto flex shrink-0 items-center gap-1 md:gap-2">
         <label className="sr-only" htmlFor="cur-select">Moeda de exibição</label>
         <select
           id="cur-select"
           title="Moeda de exibição dos totais"
-          className="h-9 rounded-lg border border-line bg-surface px-2 text-sm"
+          className="h-9 w-20 rounded-lg border border-line bg-surface px-1 text-sm md:w-auto md:px-2"
           value={displayCurrency ?? ""}
           onChange={(e) => setDisplayCurrency(e.target.value || null)}
         >

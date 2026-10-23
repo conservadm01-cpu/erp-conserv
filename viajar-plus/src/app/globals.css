@@ -91,3 +91,9 @@ body {
     display: none !important;
   }
 }
+
+/* Contêineres com rolagem horizontal também recortam elementos absolutos
+   (ex.: rótulos sr-only em tabelas), evitando rolagem lateral da página no celular. */
+.overflow-x-auto {
+  position: relative;
+}

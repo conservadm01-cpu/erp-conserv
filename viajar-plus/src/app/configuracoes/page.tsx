@@ -144,7 +144,7 @@ export default function SettingsPage() {
         </CardBody>
       </Card>
 
-      <div className="grid gap-6 lg:grid-cols-2">
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
         <Card>
           <CardHeader title="Perfil e preferências" />
           <CardBody className="space-y-4">

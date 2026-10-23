@@ -113,7 +113,7 @@ function Timeline({ trip }: { trip: Trip }) {
         </ol>
       </section>
 
-      <div className="grid gap-6 lg:grid-cols-[1fr_360px]">
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-[1fr_360px]">
         <div className="space-y-6">
           {byDay.map((d, i) => (
             <DayBlock key={d.date} trip={trip} index={i + 1} {...d} />

@@ -328,7 +328,7 @@ export function VideoEditor({ trip }: { trip: Trip }) {
               subtitle={`${clips.length} clipe(s) · ${fmtTime(total)} · ${size.width}×${size.height}${dirty ? " · alterações não salvas" : ""}`}
               action={<Button size="sm" variant="outline" onClick={saveProject}><Save className="h-4 w-4" /> Salvar projeto</Button>}
             />
-            <CardBody className="grid gap-6 lg:grid-cols-[1fr_260px]">
+            <CardBody className="grid grid-cols-1 gap-6 lg:grid-cols-[1fr_260px]">
               <div className="flex flex-col items-center gap-3">
                 <div className="grid w-full place-items-center rounded-xl bg-black p-2" style={{ minHeight: 260 }}>
                   <canvas
@@ -540,7 +540,7 @@ function ClipInspector(props: {
   return (
     <Card>
       <CardHeader title="Editar clipe" subtitle={`${asset?.original_name ?? ""} · trecho ${fmtTime(clip.start)} → ${fmtTime(clip.end)} de ${fmtTime(srcDur)}`} />
-      <CardBody className="grid gap-6 lg:grid-cols-2">
+      <CardBody className="grid grid-cols-1 gap-6 lg:grid-cols-2">
         <div className="space-y-3">
           {url ? (
             <video

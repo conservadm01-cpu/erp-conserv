@@ -18,7 +18,7 @@ export function Tabs({ tabs, value, onValueChange, defaultValue, className }: { 
         ))}
       </T.List>
       {tabs.map((t) => (
-        <T.Content key={t.value} value={t.value}>
+        <T.Content key={t.value} value={t.value} className="min-w-0">
           {t.content}
         </T.Content>
       ))}
