@@ -7,6 +7,12 @@ export const OSM_ATTRIBUTION = "© colaboradores do OpenStreetMap (ODbL 1.0) —
 
 export const OVERPASS_ENDPOINTS = ["https://overpass-api.de/api/interpreter", "https://overpass.kumi.systems/api/interpreter"];
 
+/** Instância própria (OVERPASS_URL) tem prioridade sobre as públicas. */
+export function overpassEndpoints(): string[] {
+  const own = process.env.OVERPASS_URL;
+  return own && /^https?:\/\//.test(own) ? [own, ...OVERPASS_ENDPOINTS] : OVERPASS_ENDPOINTS;
+}
+
 const LOCAL_CUISINE = "regional|local|traditional|asado|parrilla|grill|steak_house|argentinian|brazilian|chilean|peruvian|mexican|patagonian|lamb|empanada";
 
 /** Filtros Overpass por categoria do guia. */
@@ -81,7 +87,7 @@ export class OverpassPlaces implements PlacesProvider {
     return true;
   }
 
-  constructor(private endpoints = OVERPASS_ENDPOINTS) {}
+  constructor(private endpoints = overpassEndpoints()) {}
 
   async places(p: PlacesParams): Promise<ProviderResponse<Place>> {
     const key = `osm:places:${p.category}:${p.lat.toFixed(3)},${p.lng.toFixed(3)}:${p.radius_m}:${p.limit}`;
@@ -94,7 +100,7 @@ export class OverpassPlaces implements PlacesProvider {
               method: "POST",
               body,
               headers: { "Content-Type": "application/x-www-form-urlencoded" },
-              timeoutMs: 30_000,
+              timeoutMs: 20_000,
             }),
         ),
       );
