@@ -1,0 +1,740 @@
+<title>OFF Communication Lab</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;800&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: bancada de teste — o celular selecionado à esquerda, a malha de aparelhos à direita, checklist e registro abaixo. */
+:root {
+  --bg: #eef2f3;
+  --surface: #ffffff;
+  --surface-2: #f5f8f9;
+  --line: #cdd8dc;
+  --fg: #13232c;
+  --muted: #56666e;
+  --brand: #122b3a;
+  --brand-fg: #ffffff;
+  --online: #1f6fb2;
+  --mesh: #2f7a5f;
+  --isolated: #9a5b13;
+  --ptt: #173e53;
+  --ptt-hot: #b83b32;
+  --ptt-off: #6b7377;
+  --sim: #fff6e2;
+  --sim-line: #e8c98a;
+  --ok: #2f7a5f;
+  --bad: #b83b32;
+  --display: "Barlow Condensed", "Arial Narrow", sans-serif;
+  --body: "IBM Plex Sans", system-ui, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0d171d; --surface: #15232b; --surface-2: #1b2c35; --line: #2c414c;
+    --fg: #e4eef2; --muted: #93a6ae; --brand: #0a1820; --brand-fg: #e4eef2;
+    --online: #5aa6e6; --mesh: #5fbf98; --isolated: #e0a55a;
+    --ptt: #2a6383; --ptt-hot: #e0574d; --ptt-off: #56636a;
+    --sim: #2b2618; --sim-line: #6d5a2e; --ok: #5fbf98; --bad: #ef7a70;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0d171d; --surface: #15232b; --surface-2: #1b2c35; --line: #2c414c;
+  --fg: #e4eef2; --muted: #93a6ae; --brand: #0a1820; --brand-fg: #e4eef2;
+  --online: #5aa6e6; --mesh: #5fbf98; --isolated: #e0a55a;
+  --ptt: #2a6383; --ptt-hot: #e0574d; --ptt-off: #56636a;
+  --sim: #2b2618; --sim-line: #6d5a2e; --ok: #5fbf98; --bad: #ef7a70;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--fg); font-family: var(--body); font-size: 14px; line-height: 1.45; }
+header.top { background: var(--brand); color: var(--brand-fg); }
+.wrap { max-width: 1180px; margin: 0 auto; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+header.top .wrap { padding-block: 18px; display: flex; flex-wrap: wrap; gap: 8px 24px; align-items: baseline; justify-content: space-between; }
+h1 { font-family: var(--display); font-weight: 800; font-size: 30px; letter-spacing: .04em; margin: 0; line-height: 1; text-wrap: balance; }
+.tag { font-size: 11px; letter-spacing: .14em; text-transform: uppercase; opacity: .8; }
+.notice { font-size: 12.5px; color: var(--muted); margin: 14px 0 0; max-width: 75ch; }
+main.wrap { padding-block: 18px 40px; display: grid; gap: 18px; grid-template-columns: minmax(0, 360px) minmax(0, 1fr); align-items: start; }
+@media (max-width: 860px) { main.wrap { grid-template-columns: minmax(0, 1fr); } }
+.panel { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 16px; min-width: 0; }
+.panel h2 { font-family: var(--display); font-weight: 800; font-size: 19px; letter-spacing: .06em; text-transform: uppercase; margin: 0 0 10px; }
+.label { font-size: 11px; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); }
+.col { display: grid; gap: 18px; min-width: 0; }
+
+/* Celular */
+.phone { border-radius: 30px; border: 1px solid var(--line); background: var(--surface-2); overflow: hidden; }
+.phone .bar { background: var(--brand); color: var(--brand-fg); padding: 14px 16px 10px; }
+.phone .bar b { font-family: var(--display); font-size: 20px; letter-spacing: .05em; display: block; line-height: 1; }
+.phone .bar span { font-size: 9.5px; letter-spacing: .14em; }
+.phone .body { padding: 14px; display: grid; gap: 12px; }
+.devpick { display: flex; flex-wrap: wrap; gap: 6px; }
+.devpick button { font: 500 12px var(--body); border: 1px solid var(--line); background: var(--surface); color: var(--fg); border-radius: 999px; padding: 5px 10px; cursor: pointer; }
+.devpick button[aria-pressed="true"] { background: var(--fg); color: var(--surface); border-color: var(--fg); }
+.status { background: var(--surface); border-radius: 12px; padding: 12px; display: grid; gap: 8px; }
+.mode { font-family: var(--display); font-weight: 800; font-size: 32px; letter-spacing: .08em; line-height: 1; }
+.paths { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.path { border: 1px solid var(--line); border-radius: 10px; padding: 8px; font-size: 12px; color: var(--muted); }
+.path b { display: block; font-size: 11px; letter-spacing: .1em; }
+.path.on-online { border-color: var(--online); color: var(--fg); }
+.path.on-online b { color: var(--online); }
+.path.on-mesh { border-color: var(--mesh); color: var(--fg); }
+.path.on-mesh b { color: var(--mesh); }
+.channel { background: var(--surface); border-radius: 12px; padding: 10px 12px; display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.channel select { font: 500 13px var(--body); background: var(--surface-2); color: var(--fg); border: 1px solid var(--line); border-radius: 8px; padding: 4px 6px; }
+.pttwrap { display: grid; justify-items: center; gap: 8px; padding-block: 6px; }
+#ptt { width: 168px; height: 168px; max-width: 100%; border-radius: 50%; border: none; background: var(--ptt); color: #fff; font: 600 13px var(--body); letter-spacing: .08em; cursor: pointer; display: grid; place-content: center; gap: 6px; box-shadow: 0 10px 22px rgba(0,0,0,.18); transition: background .12s, transform .12s; touch-action: none; user-select: none; -webkit-user-select: none; }
+#ptt svg { margin: 0 auto; }
+#ptt.hot { background: var(--ptt-hot); transform: scale(.97); }
+#ptt.noroute { background: var(--ptt-off); }
+#ptt:focus-visible, button:focus-visible, select:focus-visible, input:focus-visible { outline: 3px solid var(--online); outline-offset: 2px; }
+.hint { font-size: 12px; text-align: center; color: var(--muted); min-height: 3em; max-width: 34ch; }
+.actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.btn { font: 600 12.5px var(--body); border: 1px solid var(--line); background: var(--surface); color: var(--fg); border-radius: 10px; padding: 9px 10px; cursor: pointer; }
+.btn:hover { border-color: var(--fg); }
+.btn.primary { background: var(--brand); color: var(--brand-fg); border-color: var(--brand); }
+.inbox { background: var(--surface); border-radius: 12px; padding: 10px 12px; display: grid; gap: 6px; max-height: 210px; overflow-y: auto; }
+.msg { font-size: 12.5px; display: grid; gap: 1px; border-bottom: 1px solid var(--line); padding-bottom: 6px; }
+.msg:last-child { border-bottom: none; }
+.msg small { color: var(--muted); font-family: var(--mono); font-size: 11px; }
+.empty { font-size: 12px; color: var(--muted); }
+.sim-badge { font-size: 10.5px; text-align: center; color: var(--muted); }
+
+/* Malha */
+.controls { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; margin-bottom: 10px; }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; flex-wrap: wrap; }
+.seg button { font: 500 12.5px var(--body); background: var(--surface); color: var(--fg); border: none; padding: 7px 11px; cursor: pointer; border-right: 1px solid var(--line); }
+.seg button:last-child { border-right: none; }
+.seg button[aria-pressed="true"] { background: var(--fg); color: var(--surface); }
+.switch { display: inline-flex; align-items: center; gap: 8px; font-weight: 500; cursor: pointer; }
+.switch input { width: 36px; height: 20px; accent-color: var(--online); }
+.hop { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; }
+.hop input { width: 54px; font: 500 13px var(--mono); background: var(--surface-2); color: var(--fg); border: 1px solid var(--line); border-radius: 8px; padding: 3px 6px; }
+.stage { background: var(--surface-2); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+.stage svg { display: block; width: 100%; height: auto; max-width: 100%; }
+.stage .link { stroke: var(--line); stroke-width: 3; cursor: pointer; }
+.stage .link.up { stroke: var(--mesh); }
+.stage .link.hit { stroke: transparent; stroke-width: 18; cursor: pointer; }
+.stage .cloudlink { stroke: var(--online); stroke-width: 2; stroke-dasharray: 5 6; opacity: .7; }
+.stage .node circle.ring { fill: var(--surface); stroke: var(--fg); stroke-width: 2.5; }
+.stage .node.off circle.ring { stroke: var(--muted); stroke-dasharray: 4 4; fill: var(--surface-2); }
+.stage .node.sel circle.ring { stroke: var(--ptt-hot); stroke-width: 4; }
+.stage .node text { fill: var(--fg); font-family: var(--body); font-size: 13px; text-anchor: middle; }
+.stage .node text.sub { fill: var(--muted); font-size: 11px; }
+.stage .node text.big { font-family: var(--display); font-weight: 800; font-size: 20px; }
+.stage .node .queue { fill: var(--isolated); }
+.stage .node .queue-t { fill: #fff; font-size: 11px; font-weight: 600; }
+.stage .node { cursor: pointer; }
+.stage .cloud text { fill: var(--online); font-family: var(--display); font-weight: 800; font-size: 15px; text-anchor: middle; letter-spacing: .08em; }
+.stage .cloud rect { fill: var(--surface); stroke: var(--online); stroke-width: 2; }
+.stage .dot { fill: var(--ptt-hot); }
+.stage .dot.online { fill: var(--online); }
+.stage .flash { fill: none; stroke: var(--mesh); stroke-width: 3; }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 12px; color: var(--muted); margin-top: 10px; }
+.legend i { display: inline-block; width: 18px; height: 3px; vertical-align: middle; margin-right: 6px; background: var(--mesh); }
+.legend i.off { background: var(--line); }
+.legend i.cl { background: var(--online); }
+.scenario { font-size: 12.5px; color: var(--muted); margin: 10px 0 0; max-width: 80ch; }
+.grid2 { display: grid; gap: 18px; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+@media (max-width: 1060px) { .grid2 { grid-template-columns: minmax(0, 1fr); } }
+.checks { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.checks li { display: grid; grid-template-columns: 22px minmax(0, 1fr); gap: 8px; align-items: start; font-size: 13px; }
+.checks .st { width: 20px; height: 20px; border-radius: 50%; border: 2px solid var(--line); display: grid; place-items: center; font-size: 12px; font-weight: 700; }
+.checks li.pass .st { border-color: var(--ok); background: var(--ok); color: var(--surface); }
+.checks small { display: block; color: var(--muted); font-size: 11.5px; }
+.log { font-family: var(--mono); font-size: 11.5px; background: var(--surface-2); border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; height: 260px; overflow-y: auto; display: grid; align-content: start; gap: 2px; }
+.log .d { color: var(--ok); }
+.log .x { color: var(--bad); }
+.log .q { color: var(--isolated); }
+.log .o { color: var(--online); }
+.stats { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 8px; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.stats b { color: var(--fg); }
+@media (prefers-reduced-motion: reduce) { #ptt { transition: none; } }
+</style>
+
+<header class="top">
+  <div class="wrap">
+    <div>
+      <h1>OFF COMMUNICATION LAB</h1>
+      <div class="tag">Simulador de teste · rede híbrida online + mesh</div>
+    </div>
+    <div class="tag">Protocolo v1 · Fase A</div>
+  </div>
+</header>
+
+<div class="wrap">
+  <p class="notice">Simulador no navegador da lógica da Fase A e da malha planejada para a Fase B. Os aparelhos, os enlaces e a internet são simulados e nenhum áudio é gravado. Serve para testar as regras de rota, retransmissão, deduplicação e fila antes do teste com 2 Androids, 2 iPhones e o repetidor.</p>
+</div>
+
+<main class="wrap">
+  <section class="col" aria-label="Celular simulado">
+    <div class="phone">
+      <div class="bar"><b>OFF COMMUNICATION</b><span>INTERNET OU MESH · SEMPRE O MELHOR CAMINHO</span></div>
+      <div class="body">
+        <div>
+          <div class="label" style="margin-bottom:6px">Você está no aparelho</div>
+          <div class="devpick" id="devpick"></div>
+        </div>
+        <div class="status">
+          <div class="label">Rede ativa</div>
+          <div class="mode" id="mode">SEM REDE</div>
+          <div class="paths">
+            <div class="path" id="p-online"><b>ONLINE</b><span id="p-online-t">Sem internet</span></div>
+            <div class="path" id="p-mesh"><b>MESH</b><span id="p-mesh-t">Nenhum aparelho próximo</span></div>
+          </div>
+        </div>
+        <div class="channel">
+          <label for="chan" class="label">Canal</label>
+          <select id="chan">
+            <option>Equipe OFF</option><option>Canal 02</option><option>Viagem</option>
+          </select>
+        </div>
+        <div class="pttwrap">
+          <button id="ptt" type="button" aria-label="Push-to-talk: segure para falar">
+            <svg width="40" height="40" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 14a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3Zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-3.08A7 7 0 0 0 19 11h-2Z"/></svg>
+            <span id="ptt-l">SEGURE<br>PARA FALAR</span>
+          </button>
+          <div class="hint" id="hint">Segure o botão para falar no canal.</div>
+        </div>
+        <div class="actions">
+          <button class="btn" id="rec" type="button">Gravar voz (mensagem)</button>
+          <button class="btn" id="txt" type="button">Enviar texto</button>
+        </div>
+        <div>
+          <div class="label" style="margin-bottom:6px">Recebidas neste aparelho</div>
+          <div class="inbox" id="inbox"><div class="empty">Nada recebido ainda.</div></div>
+        </div>
+        <div class="sim-badge">Simulação · áudio, criptografia e rádio reais não envolvidos</div>
+      </div>
+    </div>
+  </section>
+
+  <section class="col" aria-label="Malha de aparelhos">
+    <div class="panel">
+      <h2>Malha de aparelhos</h2>
+      <div class="controls">
+        <div class="seg" role="group" aria-label="Topologia">
+          <button type="button" data-topo="router">Mesmo roteador</button>
+          <button type="button" data-topo="relay" aria-pressed="true">Teste do repetidor</button>
+          <button type="button" data-topo="chain">Cadeia</button>
+        </div>
+        <label class="switch" for="net"><input type="checkbox" id="net"> Internet</label>
+        <label class="hop" for="hl">Limite de saltos <input type="number" id="hl" min="1" max="8" value="4"></label>
+        <button class="btn" type="button" id="reset">Limpar</button>
+      </div>
+      <div class="stage"><svg id="svg" viewBox="0 0 720 400" role="img" aria-label="Aparelhos e enlaces da malha"></svg></div>
+      <div class="legend">
+        <span><i></i>Enlace ativo (toque para cortar)</span>
+        <span><i class="off"></i>Sem alcance</span>
+        <span><i class="cl"></i>Caminho pela internet</span>
+        <span>Toque num aparelho para ligar/desligar · número laranja = fila</span>
+      </div>
+      <p class="scenario" id="scenario"></p>
+    </div>
+
+    <div class="grid2">
+      <div class="panel">
+        <h2>Roteiro de validação</h2>
+        <ul class="checks" id="checks"></ul>
+      </div>
+      <div class="panel">
+        <h2>Registro de pacotes</h2>
+        <div class="log" id="log" aria-live="polite"></div>
+        <div class="stats">
+          <span>Enviados <b id="s-sent">0</b></span>
+          <span>Entregas <b id="s-deliv">0</b></span>
+          <span>Duplicadas descartadas <b id="s-dup">0</b></span>
+          <span>Retransmissões <b id="s-fwd">0</b></span>
+        </div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<script>
+(() => {
+  const NODES = {
+    A1: { name: 'Android 1', short: 'A1', os: 'Android', x: 110, y: 120 },
+    I1: { name: 'iPhone 1', short: 'I1', os: 'iOS', x: 110, y: 300 },
+    R:  { name: 'Repetidor', short: 'R', os: 'Android', x: 360, y: 230 },
+    A2: { name: 'Android 2', short: 'A2', os: 'Android', x: 610, y: 120 },
+    I2: { name: 'iPhone 2', short: 'I2', os: 'iOS', x: 610, y: 300 },
+  };
+  const IDS = Object.keys(NODES);
+  const MAIN = ['A1', 'I1', 'A2', 'I2'];
+  const CLOUD = { x: 360, y: 52 };
+  const ALL_PAIRS = [];
+  for (let i = 0; i < IDS.length; i++) for (let j = i + 1; j < IDS.length; j++) ALL_PAIRS.push([IDS[i], IDS[j]]);
+
+  const TOPOS = {
+    router: { pairs: ALL_PAIRS, text: 'Todos no mesmo roteador/hotspot sem internet: todos se alcançam direto. Aqui o repetidor não é necessário, e por isso este cenário não prova o multi-hop.' },
+    relay: { pairs: [['A1','I1'],['A1','R'],['I1','R'],['A2','I2'],['A2','R'],['I2','R']], text: 'Dois grupos fora de alcance entre si (A1+I1 e A2+I2). Só o Repetidor alcança os dois lados. Uma mensagem de A1 para I2 precisa passar por R e chegar com 1 salto.' },
+    chain: { pairs: [['A1','I1'],['I1','R'],['R','A2'],['A2','I2']], text: 'Cadeia A1 → I1 → R → A2 → I2. Mostra vários saltos. Baixe o limite de saltos para 2 e veja a mensagem parar antes de I2.' },
+  };
+
+  const TTL_MS = 5 * 60 * 1000;
+  const HOP_MS = matchMedia('(prefers-reduced-motion: reduce)').matches ? 120 : 520;
+
+  const S = {
+    topo: 'relay',
+    links: new Set(),
+    power: Object.fromEntries(IDS.map(id => [id, true])),
+    internet: false,
+    hopLimit: 4,
+    selected: 'A1',
+    seen: Object.fromEntries(IDS.map(id => [id, new Set()])),
+    // Mensagens gravadas/texto que cada aparelho guarda para repassar (store-carry-forward): id -> salto em que recebeu (-1 = origem).
+    carry: Object.fromEntries(IDS.map(id => [id, new Map()])),
+    // Mensagens que já chegaram ao servidor (sincronização online).
+    cloud: new Set(),
+    inbox: Object.fromEntries(IDS.map(id => [id, []])),
+    queue: Object.fromEntries(IDS.map(id => [id, []])),
+    stats: { sent: 0, deliv: 0, dup: 0, fwd: 0 },
+    packets: {},
+    checks: {},
+    seq: 0,
+  };
+
+  const key = (a, b) => [a, b].sort().join('-');
+  const linked = (a, b) => S.links.has(key(a, b));
+  const neighbors = id => S.power[id] ? IDS.filter(o => o !== id && S.power[o] && linked(id, o)) : [];
+  const hasInternet = id => S.internet && S.power[id];
+
+  // Mesma política do ConnectivityCoordinator (lib/communication/coordinator).
+  function snapshot(id) {
+    const peers = neighbors(id).length;
+    const internet = hasInternet(id);
+    return { internet, peers, mode: internet ? 'online' : peers > 0 ? 'mesh' : 'isolated' };
+  }
+  function routeLive(id) {
+    const s = snapshot(id);
+    if (s.mode === 'online') return { route: 'online', reason: 'Internet disponível' };
+    if (s.mode === 'mesh') return { route: 'mesh', reason: s.peers + ' aparelho(s) próximo(s)' };
+    if (!S.power[id]) return { route: 'unavailable', reason: 'Este aparelho está desligado' };
+    return { route: 'unavailable', reason: 'Nenhum caminho: sem internet e sem aparelhos próximos' };
+  }
+
+  // ---------- Desenho ----------
+  const svg = document.getElementById('svg');
+  const NS = 'http://www.w3.org/2000/svg';
+  const el = (tag, attrs = {}, parent = svg) => {
+    const e = document.createElementNS(NS, tag);
+    for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v);
+    parent.appendChild(e);
+    return e;
+  };
+  let gLinks, gCloud, gDots, gNodes;
+
+  function draw() {
+    svg.textContent = '';
+    gCloud = el('g'); gLinks = el('g'); gDots = el('g'); gNodes = el('g');
+    if (S.internet) {
+      for (const id of IDS) if (S.power[id]) el('line', { class: 'cloudlink', x1: CLOUD.x, y1: CLOUD.y + 16, x2: NODES[id].x, y2: NODES[id].y }, gCloud);
+      const c = el('g', { class: 'cloud' }, gCloud);
+      el('rect', { x: CLOUD.x - 62, y: CLOUD.y - 18, width: 124, height: 34, rx: 17 }, c);
+      el('text', { x: CLOUD.x, y: CLOUD.y + 5 }, c).textContent = 'INTERNET';
+    }
+    for (const [a, b] of ALL_PAIRS) {
+      const up = linked(a, b);
+      const A = NODES[a], B = NODES[b];
+      if (up) el('line', { class: 'link up', x1: A.x, y1: A.y, x2: B.x, y2: B.y, opacity: S.power[a] && S.power[b] ? 1 : .35 }, gLinks);
+      const hit = el('line', { class: 'link hit', x1: A.x, y1: A.y, x2: B.x, y2: B.y }, gLinks);
+      const t = el('title', {}, hit); t.textContent = (up ? 'Cortar enlace ' : 'Criar enlace ') + NODES[a].short + '–' + NODES[b].short;
+      hit.addEventListener('click', () => toggleLink(a, b));
+    }
+    for (const id of IDS) {
+      const n = NODES[id];
+      const g = el('g', { class: 'node' + (S.power[id] ? '' : ' off') + (S.selected === id ? ' sel' : ''), tabindex: 0, role: 'button', 'aria-label': n.name + (S.power[id] ? ' ligado' : ' desligado') + '. Ativar para ligar ou desligar.' }, gNodes);
+      el('circle', { class: 'ring', cx: n.x, cy: n.y, r: 30 }, g);
+      el('text', { class: 'big', x: n.x, y: n.y + 7 }, g).textContent = n.short;
+      el('text', { x: n.x, y: n.y + 50 }, g).textContent = n.name;
+      el('text', { class: 'sub', x: n.x, y: n.y + 65 }, g).textContent = S.power[id] ? n.os + ' · ' + modeLabel(snapshot(id).mode) : 'desligado';
+      const q = S.queue[id].length;
+      if (q) {
+        el('circle', { class: 'queue', cx: n.x + 24, cy: n.y - 24, r: 11 }, g);
+        el('text', { class: 'queue-t', x: n.x + 24, y: n.y - 20 }, g).textContent = q;
+      }
+      const toggle = () => togglePower(id);
+      g.addEventListener('click', toggle);
+      g.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(); } });
+    }
+  }
+  const modeLabel = m => m === 'online' ? 'ONLINE' : m === 'mesh' ? 'MESH' : 'SEM REDE';
+
+  function animate(from, to, kind, done) {
+    const A = from === 'cloud' ? CLOUD : NODES[from];
+    const B = to === 'cloud' ? CLOUD : NODES[to];
+    const dot = el('circle', { class: 'dot' + (kind === 'online' ? ' online' : ''), r: 7, cx: A.x, cy: A.y }, gDots);
+    const t0 = performance.now();
+    const step = now => {
+      const k = Math.min(1, (now - t0) / HOP_MS);
+      dot.setAttribute('cx', A.x + (B.x - A.x) * k);
+      dot.setAttribute('cy', A.y + (B.y - A.y) * k);
+      if (k < 1) requestAnimationFrame(step); else { dot.remove(); done(); }
+    };
+    requestAnimationFrame(step);
+  }
+
+  // ---------- Protocolo ----------
+  const logEl = document.getElementById('log');
+  function log(text, cls = '') {
+    const d = document.createElement('div');
+    if (cls) d.className = cls;
+    const t = new Date();
+    d.textContent = t.toLocaleTimeString('pt-BR') + '  ' + text;
+    logEl.appendChild(d);
+    while (logEl.children.length > 250) logEl.firstChild.remove();
+    logEl.scrollTop = logEl.scrollHeight;
+  }
+
+  const TYPE_LABEL = { voiceChunk: 'voz ao vivo', voiceMessage: 'mensagem de voz', text: 'texto' };
+
+  function makePacket(origin, type) {
+    S.seq++;
+    const id = 'm' + String(S.seq).padStart(3, '0');
+    const now = Date.now();
+    const p = { id, origin, type, channel: document.getElementById('chan').value, createdAt: now, expiresAt: now + TTL_MS, hopLimit: S.hopLimit, hopCount: 0, deliveredTo: {}, viaR: false, createdWhileROff: !S.power.R };
+    S.packets[id] = p;
+    return p;
+  }
+
+  function originate(origin, type) {
+    if (!S.power[origin]) { log(NODES[origin].short + ' está desligado', 'x'); return; }
+    const p = makePacket(origin, type);
+    S.stats.sent++;
+    S.seen[origin].add(p.id);
+    if (type !== 'voiceChunk') S.carry[origin].set(p.id, -1);
+    const r = routeLive(origin);
+    if (r.route === 'unavailable') {
+      if (type === 'voiceChunk') {
+        log(p.id + ' ' + NODES[origin].short + ': voz ao vivo sem rota, descartada (voz ao vivo não vai para a fila)', 'x');
+      } else {
+        S.queue[origin].push(p.id);
+        log(p.id + ' ' + NODES[origin].short + ': sem rota, ' + TYPE_LABEL[type] + ' guardada na fila', 'q');
+      }
+      refresh();
+      return;
+    }
+    log(p.id + ' ' + NODES[origin].short + ' envia ' + TYPE_LABEL[type] + ' por ' + (r.route === 'online' ? 'ONLINE' : 'MESH') + ' (limite ' + p.hopLimit + ' saltos)', r.route === 'online' ? 'o' : '');
+    transmit(origin, p, null);
+    refresh();
+  }
+
+  function transmit(nodeId, p, exclude) {
+    if (hasInternet(nodeId)) {
+      animate(nodeId, 'cloud', 'online', () => {
+        if (p.type !== 'voiceChunk') S.cloud.add(p.id);
+        for (const id of IDS) if (id !== nodeId && S.power[id] && hasInternet(id) && !S.seen[id].has(p.id)) animate('cloud', id, 'online', () => receive(id, p, 'cloud', p.hopCount));
+      });
+      return;
+    }
+    for (const nb of neighbors(nodeId)) {
+      if (nb === exclude) continue;
+      const hc = p.hopCount;
+      animate(nodeId, nb, 'mesh', () => receive(nb, p, nodeId, hc));
+    }
+  }
+
+  function receive(nodeId, p, from, hopCount) {
+    if (!S.power[nodeId]) return;
+    if (from !== 'cloud' && !linked(nodeId, from)) return; // enlace caiu no meio
+    const fromLabel = from === 'cloud' ? 'internet' : NODES[from].short;
+    if (Date.now() >= p.expiresAt) { log(p.id + ' em ' + NODES[nodeId].short + ': expirado, descartado', 'x'); return; }
+    if (S.seen[nodeId].has(p.id)) {
+      S.stats.dup++;
+      log(p.id + ' em ' + NODES[nodeId].short + ': duplicada vinda de ' + fromLabel + ', descartada');
+      refresh();
+      return;
+    }
+    S.seen[nodeId].add(p.id);
+    if (p.type !== 'voiceChunk') S.carry[nodeId].set(p.id, hopCount);
+    S.stats.deliv++;
+    if (from === 'R') p.viaR = true;
+    p.deliveredTo[nodeId] = { hop: hopCount, via: fromLabel, viaR: p.viaR || from === 'R' };
+    S.inbox[nodeId].unshift({ id: p.id, origin: p.origin, type: p.type, channel: p.channel, hop: hopCount, via: fromLabel, at: Date.now() });
+    log(p.id + ' entregue em ' + NODES[nodeId].short + ' (salto ' + hopCount + ', via ' + fromLabel + ')', 'd');
+    if (from !== 'cloud') {
+      if (hopCount < p.hopLimit) {
+        const next = neighbors(nodeId).filter(n => n !== from);
+        if (next.length) {
+          S.stats.fwd++;
+          const ref = S.packets[p.id];
+          log(p.id + ' ' + NODES[nodeId].short + ' retransmite (salto ' + (hopCount + 1) + ') para ' + next.map(n => NODES[n].short).join(', '));
+          for (const nb of next) animate(nodeId, nb, 'mesh', () => receive(nb, ref, nodeId, hopCount + 1));
+        }
+      } else if (neighbors(nodeId).some(n => n !== from)) {
+        log(p.id + ' em ' + NODES[nodeId].short + ': limite de saltos atingido, não retransmite', 'x');
+      }
+    }
+    evaluate();
+    refresh();
+  }
+
+  function flushQueues() {
+    for (const id of IDS) {
+      if (!S.queue[id].length) continue;
+      if (routeLive(id).route === 'unavailable') continue;
+      const ids = S.queue[id].splice(0);
+      for (const mid of ids) {
+        const p = S.packets[mid];
+        if (Date.now() >= p.expiresAt) { log(mid + ' expirou na fila de ' + NODES[id].short, 'x'); continue; }
+        log(mid + ' rota disponível: ' + NODES[id].short + ' sincroniza a fila', 'q');
+        transmit(id, p, null);
+      }
+    }
+  }
+
+  // Ao surgir um enlace, cada lado repassa ao vizinho as mensagens guardadas que ele ainda não tem.
+  // No app real isso é uma troca de resumo (lista de messageId) antes do envio.
+  function syncPair(a, b) {
+    for (const [mid, held] of S.carry[a]) {
+      const p = S.packets[mid];
+      if (!p || S.seen[b].has(mid)) continue;
+      if (Date.now() >= p.expiresAt) { S.carry[a].delete(mid); continue; }
+      const hop = held + 1;
+      if (hop > p.hopLimit) continue;
+      const qi = S.queue[a].indexOf(mid);
+      if (qi >= 0) S.queue[a].splice(qi, 1);
+      log(mid + ' ' + NODES[a].short + ' encontrou ' + NODES[b].short + ' e repassa a mensagem guardada', 'q');
+      animate(a, b, 'mesh', () => receive(b, p, a, hop));
+    }
+  }
+  // Com internet: cada aparelho envia ao servidor o que guarda e baixa o que ainda não viu.
+  function cloudSync() {
+    if (!S.internet) return;
+    for (const id of IDS) {
+      if (!S.power[id]) continue;
+      for (const [mid] of S.carry[id]) {
+        const p = S.packets[mid];
+        if (!p || Date.now() >= p.expiresAt || S.cloud.has(mid)) continue;
+        const qi = S.queue[id].indexOf(mid);
+        if (qi >= 0) S.queue[id].splice(qi, 1);
+        log(mid + ' ' + NODES[id].short + ' sincroniza com o servidor', 'o');
+        animate(id, 'cloud', 'online', () => { S.cloud.add(mid); deliverFromCloud(); });
+      }
+    }
+    deliverFromCloud();
+  }
+  function deliverFromCloud() {
+    for (const id of IDS) {
+      if (!hasInternet(id)) continue;
+      for (const mid of S.cloud) {
+        const p = S.packets[mid];
+        if (!p || S.seen[id].has(mid) || Date.now() >= p.expiresAt) continue;
+        animate('cloud', id, 'online', () => receive(id, p, 'cloud', 0));
+      }
+    }
+  }
+  function syncAll() {
+    cloudSync();
+    for (const [a, b] of ALL_PAIRS) {
+      if (!S.power[a] || !S.power[b] || !linked(a, b)) continue;
+      syncPair(a, b); syncPair(b, a);
+    }
+  }
+
+  // ---------- Validação ----------
+  const CHECKS = [
+    { id: 'all4', t: 'Internet desligada: os 4 aparelhos principais se comunicam', d: 'Envie uma mensagem com a internet desligada. Os outros 3 entre A1, I1, A2 e I2 precisam receber.' },
+    { id: 'cross', t: 'Android ↔ iPhone nos dois sentidos', d: 'Uma mensagem de um Android chega a um iPhone e outra de um iPhone chega a um Android, sem internet.' },
+    { id: 'relay', t: 'O repetidor retransmitiu de verdade', d: 'Em "Teste do repetidor", uma mensagem atravessa R e chega ao outro lado com salto 1.' },
+    { id: 'dedup', t: 'Nenhuma entrega duplicada', d: 'Em "Mesmo roteador" as cópias chegam por vários caminhos. Cada aparelho entrega uma vez e descarta o resto.' },
+    { id: 'store', t: 'Armazenar e repassar: entrega quando o repetidor volta', d: 'Em "Teste do repetidor", desligue R, grave voz em A1 e religue R. A1 e I1 guardam a mensagem e a repassam quando R volta ao alcance.' },
+    { id: 'hybrid', t: 'Volta da internet sincroniza a fila', d: 'Deixe um aparelho isolado guardar uma mensagem e ligue a internet. A fila sobe para o servidor e chega pelo caminho ONLINE, inclusive a quem ligar depois.' },
+  ];
+
+  function evaluate() {
+    for (const p of Object.values(S.packets)) {
+      const got = Object.keys(p.deliveredTo);
+      if (MAIN.includes(p.origin)) {
+        const others = MAIN.filter(m => m !== p.origin);
+        if (others.every(o => p.deliveredTo[o] && p.deliveredTo[o].via !== 'internet')) S.checks.all4 = true;
+      }
+      const isAnd = id => NODES[id].os === 'Android' && id !== 'R';
+      const isIos = id => NODES[id].os === 'iOS';
+      for (const [to, v] of Object.entries(p.deliveredTo)) {
+        if (v.via === 'internet') continue;
+        if (isAnd(p.origin) && isIos(to)) S.checks.crossAI = true;
+        if (isIos(p.origin) && isAnd(to)) S.checks.crossIA = true;
+      }
+      if (S.checks.crossAI && S.checks.crossIA) S.checks.cross = true;
+      if (S.topo === 'relay' && p.origin !== 'R') {
+        const left = ['A1', 'I1'], right = ['A2', 'I2'];
+        const other = left.includes(p.origin) ? right : left;
+        if (other.some(o => p.deliveredTo[o] && p.deliveredTo[o].via !== 'internet' && p.deliveredTo[o].hop === 1)) S.checks.relay = true;
+        if (p.createdWhileROff && p.type !== 'voiceChunk' && other.some(o => p.deliveredTo[o] && p.deliveredTo[o].via !== 'internet')) S.checks.store = true;
+      }
+      if (S.topo === 'router' && S.stats.dup > 0 && got.length >= 4) S.checks.dedup = true;
+      if (p.queuedIsolated && Object.values(p.deliveredTo).some(v => v.via === 'internet')) S.checks.hybrid = true;
+    }
+  }
+
+  function renderChecks() {
+    const ul = document.getElementById('checks');
+    ul.textContent = '';
+    for (const c of CHECKS) {
+      const li = document.createElement('li');
+      if (S.checks[c.id]) li.className = 'pass';
+      li.innerHTML = '<span class="st" aria-hidden="true">' + (S.checks[c.id] ? '✓' : '') + '</span><span></span>';
+      li.lastChild.textContent = c.t;
+      const sm = document.createElement('small'); sm.textContent = (S.checks[c.id] ? 'Aprovado. ' : '') + c.d;
+      li.lastChild.appendChild(sm);
+      ul.appendChild(li);
+    }
+  }
+
+  // ---------- Celular ----------
+  const pttBtn = document.getElementById('ptt');
+  const pttLabel = document.getElementById('ptt-l');
+  const hint = document.getElementById('hint');
+  let pressed = false;
+
+  function renderPhone() {
+    const id = S.selected;
+    const s = snapshot(id);
+    const m = document.getElementById('mode');
+    m.textContent = S.power[id] ? modeLabel(s.mode) : 'DESLIGADO';
+    m.style.color = s.mode === 'online' ? 'var(--online)' : s.mode === 'mesh' ? 'var(--mesh)' : 'var(--isolated)';
+    const po = document.getElementById('p-online'), pm = document.getElementById('p-mesh');
+    po.className = 'path' + (s.internet ? ' on-online' : '');
+    pm.className = 'path' + (s.peers ? ' on-mesh' : '');
+    document.getElementById('p-online-t').textContent = s.internet ? 'Internet disponível' : 'Sem internet';
+    document.getElementById('p-mesh-t').textContent = s.peers === 0 ? 'Nenhum aparelho próximo' : s.peers === 1 ? '1 aparelho conectado' : s.peers + ' aparelhos conectados';
+    const box = document.getElementById('inbox');
+    box.textContent = '';
+    const items = S.inbox[id];
+    if (!items.length) { box.innerHTML = '<div class="empty">Nada recebido ainda.</div>'; }
+    for (const it of items.slice(0, 30)) {
+      const d = document.createElement('div'); d.className = 'msg';
+      const b = document.createElement('span');
+      b.textContent = (it.type === 'voiceChunk' ? 'Voz ao vivo' : it.type === 'voiceMessage' ? 'Mensagem de voz' : 'Texto') + ' de ' + NODES[it.origin].name + ' · ' + it.channel;
+      const sm = document.createElement('small');
+      sm.textContent = it.id + ' · ' + (it.via === 'internet' ? 'via internet' : 'salto ' + it.hop + ' · via ' + it.via);
+      d.append(b, sm); box.appendChild(d);
+    }
+    const q = S.queue[id].length;
+    const devs = document.getElementById('devpick');
+    for (const b of devs.children) b.setAttribute('aria-pressed', String(b.dataset.id === id));
+    if (!pressed) {
+      pttBtn.className = '';
+      pttLabel.innerHTML = 'SEGURE<br>PARA FALAR';
+      hint.textContent = q ? q + ' mensagem(ns) na fila deste aparelho, aguardando rota.' : 'Segure o botão para falar no canal.';
+    }
+  }
+
+  function setPtt(down) {
+    const id = S.selected;
+    if (down === pressed) return;
+    pressed = down;
+    if (down) {
+      const r = routeLive(id);
+      if (r.route === 'unavailable') {
+        pttBtn.className = 'noroute';
+        pttLabel.textContent = 'SEM ROTA';
+        hint.textContent = r.reason + '. Voz ao vivo indisponível. Use "Gravar voz" para deixar na fila.';
+      } else {
+        pttBtn.className = 'hot';
+        pttLabel.textContent = 'TRANSMITINDO';
+        hint.textContent = 'Rota: ' + (r.route === 'online' ? 'ONLINE (WebRTC)' : 'MESH (rede local)') + ' · ' + r.reason + '. Simulação: nenhum áudio é captado.';
+      }
+    } else {
+      const wasNoRoute = pttBtn.classList.contains('noroute');
+      pttBtn.className = '';
+      if (!wasNoRoute) originate(id, 'voiceChunk');
+      else log(NODES[id].short + ': PTT sem rota, nada transmitido', 'x');
+      renderPhone();
+    }
+  }
+  pttBtn.addEventListener('pointerdown', e => { e.preventDefault(); try { pttBtn.setPointerCapture(e.pointerId); } catch (_) {} setPtt(true); });
+  pttBtn.addEventListener('pointerup', () => setPtt(false));
+  pttBtn.addEventListener('pointercancel', () => setPtt(false));
+  pttBtn.addEventListener('keydown', e => { if ((e.key === ' ' || e.key === 'Enter') && !e.repeat) { e.preventDefault(); setPtt(true); } });
+  pttBtn.addEventListener('keyup', e => { if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); setPtt(false); } });
+  pttBtn.addEventListener('contextmenu', e => e.preventDefault());
+
+  function stored(type) {
+    const id = S.selected;
+    const before = S.queue[id].length;
+    originate(id, type);
+    if (S.queue[id].length > before && !S.internet) {
+      const p = S.packets[S.queue[id][S.queue[id].length - 1]];
+      if (p) p.queuedIsolated = true;
+    }
+  }
+  document.getElementById('rec').addEventListener('click', () => stored('voiceMessage'));
+  document.getElementById('txt').addEventListener('click', () => stored('text'));
+
+  const devpick = document.getElementById('devpick');
+  for (const id of IDS) {
+    const b = document.createElement('button');
+    b.type = 'button'; b.dataset.id = id; b.textContent = NODES[id].name;
+    b.addEventListener('click', () => { S.selected = id; refresh(); });
+    devpick.appendChild(b);
+  }
+
+  // ---------- Controles ----------
+  function setTopo(t) {
+    S.topo = t;
+    S.links = new Set(TOPOS[t].pairs.map(([a, b]) => key(a, b)));
+    for (const b of document.querySelectorAll('[data-topo]')) b.setAttribute('aria-pressed', String(b.dataset.topo === t));
+    document.getElementById('scenario').textContent = TOPOS[t].text;
+    log('Topologia: ' + document.querySelector('[data-topo="' + t + '"]').textContent);
+    flushQueues();
+    syncAll();
+    refresh();
+  }
+  for (const b of document.querySelectorAll('[data-topo]')) b.addEventListener('click', () => setTopo(b.dataset.topo));
+
+  function toggleLink(a, b) {
+    const k = key(a, b);
+    if (S.links.has(k)) { S.links.delete(k); log('Enlace ' + NODES[a].short + '–' + NODES[b].short + ' cortado'); }
+    else { S.links.add(k); log('Enlace ' + NODES[a].short + '–' + NODES[b].short + ' ativo'); flushQueues(); syncAll(); }
+    refresh();
+  }
+  function togglePower(id) {
+    S.power[id] = !S.power[id];
+    log(NODES[id].name + (S.power[id] ? ' ligado' : ' desligado'), S.power[id] ? '' : 'x');
+    if (S.power[id]) { flushQueues(); syncAll(); }
+    refresh();
+  }
+  document.getElementById('net').addEventListener('change', e => {
+    S.internet = e.target.checked;
+    log(S.internet ? 'Internet voltou' : 'Internet desligada', 'o');
+    if (S.internet) { flushQueues(); cloudSync(); }
+    refresh();
+  });
+  document.getElementById('hl').addEventListener('change', e => {
+    const v = Math.max(1, Math.min(8, parseInt(e.target.value, 10) || 4));
+    e.target.value = v; S.hopLimit = v;
+    log('Limite de saltos para novas mensagens: ' + v);
+  });
+  document.getElementById('reset').addEventListener('click', () => {
+    for (const id of IDS) { S.seen[id].clear(); S.carry[id].clear(); S.inbox[id] = []; S.queue[id] = []; S.power[id] = true; }
+    S.stats = { sent: 0, deliv: 0, dup: 0, fwd: 0 }; S.packets = {}; S.checks = {}; S.cloud.clear();
+    logEl.textContent = '';
+    log('Bancada limpa');
+    refresh();
+  });
+
+  function refresh() {
+    draw();
+    renderPhone();
+    renderChecks();
+    document.getElementById('s-sent').textContent = S.stats.sent;
+    document.getElementById('s-deliv').textContent = S.stats.deliv;
+    document.getElementById('s-dup').textContent = S.stats.dup;
+    document.getElementById('s-fwd').textContent = S.stats.fwd;
+  }
+
+  // Estado inicial de exemplo: teste do repetidor, internet desligada, uma mensagem já trafegou.
+  setTopo('relay');
+  const p0 = makePacket('A1', 'text'); S.stats.sent++; S.seen.A1.add(p0.id);
+  const fake = (to, hop, via) => { S.seen[to].add(p0.id); S.stats.deliv++; p0.deliveredTo[to] = { hop, via }; S.inbox[to].unshift({ id: p0.id, origin: 'A1', type: 'text', channel: 'Equipe OFF', hop, via, at: Date.now() }); };
+  S.carry.A1.set(p0.id, -1); for (const [n, h] of [['I1', 0], ['R', 0], ['A2', 1], ['I2', 1]]) S.carry[n].set(p0.id, h);
+  fake('I1', 0, 'A1'); fake('R', 0, 'A1'); fake('A2', 1, 'R'); fake('I2', 1, 'R');
+  S.stats.dup = 1; S.stats.fwd = 2;
+  log('Exemplo: m001 de A1 cruzou o repetidor e chegou a A2 e I2 com salto 1', 'd');
+  evaluate();
+  S.selected = 'I2';
+  refresh();
+})();
+</script>

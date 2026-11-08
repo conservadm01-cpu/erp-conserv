@@ -65,3 +65,14 @@ auditada (ex.: libsodium).
 Na Fase A foram removidas do `pubspec.yaml` `sqflite`, `uuid`, `path` e
 `permission_handler`, que ainda não tinham uso. Voltam junto com o código que
 as usa (Fase B).
+
+## ADR-009: Mensagens gravadas usam "guardar, carregar e repassar" (2026-11-08)
+
+Descoberto no simulador (`tools/off_lab.html`): uma fila só no aparelho de
+origem não basta. Se a origem ainda alcança algum vizinho, a mensagem sai
+para ele e nunca chega a quem entrar em alcance depois. Decisão para a
+Fase B: todo aparelho guarda mensagens gravadas e de texto válidas (dentro
+de `expiresAt` e de `hopLimit`) e, ao surgir um enlace novo, os dois lados
+trocam a lista de `messageId` e enviam só o que o outro não tem. Com
+internet, a mesma troca é feita com o servidor, que guarda a mensagem para
+quem estiver desligado. Voz ao vivo continua fora disso (ADR-004).
