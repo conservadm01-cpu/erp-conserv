@@ -1,0 +1,23 @@
+name: off_communication
+description: Comunicação PTT híbrida — internet quando disponível, malha local quando necessário.
+publish_to: 'none'
+version: 0.1.0+1
+
+environment:
+  sdk: '>=3.5.0 <4.0.0'
+
+# Dependências enxutas na Fase A. Entram nas próximas fases, quando houver
+# código que as use: sqflite (persistência), uuid (messageId),
+# permission_handler (microfone), WebRTC e codec Opus (ver DECISIONS.md).
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.8
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^5.0.0
+
+flutter:
+  uses-material-design: true
