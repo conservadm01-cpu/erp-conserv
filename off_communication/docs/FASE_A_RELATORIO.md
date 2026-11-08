@@ -51,7 +51,7 @@ simulado: dono cria organização → vê 1, vira membro `owner`; outro usuário
 - `flutter build apk` / `flutter build ios`: este ambiente não tem Android
   SDK nem Xcode. Rodar localmente: `flutter run` num Android e num iPhone.
 - Nenhum teste em aparelho físico.
-- O print `fase_a_tela_inicial.png` vem de um build web temporário usado só
+- Os prints em `docs/` vêm de um build web temporário usado só
   para visualizar a interface; o projeto não tem alvo web.
 
 ## Limitações conhecidas

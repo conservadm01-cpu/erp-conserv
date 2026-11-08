@@ -1,27 +1,38 @@
 import 'package:flutter/material.dart';
 
-import '../communication/coordinator/connectivity_coordinator.dart';
-import '../features/channels/channel_repository.dart';
-import '../features/home/home_screen.dart';
-import '../features/network_status/simulated_connectivity.dart';
-import 'off_colors.dart';
+import '../features/shell/main_shell.dart';
+import 'off_services.dart';
+import 'off_theme.dart';
 
 class OffCommunicationApp extends StatefulWidget {
-  const OffCommunicationApp({super.key});
+  const OffCommunicationApp({super.key, this.services});
+
+  /// Injetável para testes; por padrão cria os serviços reais/simulados.
+  final OffServices? services;
 
   @override
   State<OffCommunicationApp> createState() => _OffCommunicationAppState();
 }
 
-class _OffCommunicationAppState extends State<OffCommunicationApp> {
-  // Fase A: estado de rede simulado. Na Fase B/C o coordenador passa a ser
-  // alimentado por LanTransport/OnlineTransport via updateFromTransports().
-  final _coordinator = ConnectivityCoordinator();
-  late final _simulation = SimulatedConnectivity(_coordinator);
+class _OffCommunicationAppState extends State<OffCommunicationApp> with WidgetsBindingObserver {
+  late final OffServices _services = widget.services ?? OffServices();
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // App indo para segundo plano libera a palavra: não prender o canal.
+    if (state != AppLifecycleState.resumed) _services.ptt.release();
+  }
 
   @override
   void dispose() {
-    _coordinator.dispose();
+    WidgetsBinding.instance.removeObserver(this);
+    if (widget.services == null) _services.dispose();
     super.dispose();
   }
 
@@ -30,16 +41,8 @@ class _OffCommunicationAppState extends State<OffCommunicationApp> {
     return MaterialApp(
       title: 'OFF Communication',
       debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: OffColors.brand),
-        useMaterial3: true,
-        scaffoldBackgroundColor: OffColors.background,
-      ),
-      home: HomeScreen(
-        coordinator: _coordinator,
-        channels: const DemoChannelRepository(),
-        simulation: _simulation,
-      ),
+      theme: buildOffTheme(),
+      home: MainShell(services: _services),
     );
   }
 }

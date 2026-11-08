@@ -1,7 +1,7 @@
 name: off_communication
 description: Comunicação PTT híbrida — internet quando disponível, malha local quando necessário.
 publish_to: 'none'
-version: 0.1.0+1
+version: 0.3.0+3
 
 environment:
   sdk: '>=3.5.0 <4.0.0'

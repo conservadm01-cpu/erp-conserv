@@ -16,30 +16,42 @@ Comunicação push-to-talk (PTT) e mensagens de voz para Android e iOS com
 O usuário não troca de modo: o `ConnectivityCoordinator` escolhe a rota
 (ver `docs/DECISIONS.md`, ADR-005).
 
-## Estado atual: Fase A concluída
+## Estado atual: v0.3
 
-![Tela inicial — Fase A](docs/fase_a_tela_inicial.png)
+![Tela Rádio](docs/v03_radio.png)
+
+Visual e abas da v0.2 (Rádio, Grupos, Localização, Ajustes) sobre a
+arquitetura da Fase A. Detalhes em
+[`docs/V03_RELATORIO.md`](docs/V03_RELATORIO.md) e
+[`docs/FASE_A_RELATORIO.md`](docs/FASE_A_RELATORIO.md).
 
 O que **funciona** hoje:
 
-- App Flutter com tela inicial "Minha comunicação", status **ONLINE / MESH /
-  SEM REDE**, lista de canais de demonstração e botão PTT que reage no toque.
-- Decisão de rota real (lógica pura e testada): internet → ONLINE; sem
-  internet com peers → MESH; sem nada → voz ao vivo indisponível e mensagem
-  gravada vai para a fila.
-- Envelope de protocolo versionado (`MeshPacket`) com validação: expiração,
-  tamanho, hop limit, versão, destino obrigatório.
-- Transporte UDP (`UdpLanTransport`) que envia/recebe `MeshPacket`, testado
-  em loopback; ainda **não** ligado à interface.
-- Permissões nativas Android/iOS de rede local e microfone.
+- **PTT hold-to-talk com um transmissor por vez**
+  ([`docs/FLOOR_CONTROL.md`](docs/FLOOR_CONTROL.md)):
+  - estados SEGURE, FALANDO, OUVINDO, OCUPADO e SEM ROTA;
+  - limite de 60 s;
+  - som e vibração no início e no fim.
+- **Escolha automática de rota:**
+  - internet → ONLINE;
+  - sem internet e com peers → MESH;
+  - sem nada → voz ao vivo indisponível.
+
+  Se a rota passa de ONLINE para MESH durante a fala, a fala continua.
+- **Envelope de protocolo** (`MeshPacket`) validado e transporte UDP testado
+  em loopback.
+- **Localização** desligada por padrão, com consentimento explícito.
+- **Laboratório de teste** em Ajustes para simular internet, aparelhos
+  próximos e outra pessoa falando.
 
 O que **não existe ainda** (não está simulado como se funcionasse):
 
-- Estado de rede real: a Fase A usa um **painel de simulação** na tela.
-- Captura/reprodução de áudio, codec Opus, WebRTC.
-- Descoberta de peers, retransmissão Mesh, fila persistida, criptografia.
+- Rede real: o estado de rede vem do laboratório de teste.
+- Captura e envio de voz, Opus, WebRTC.
+- Coordenação da palavra entre aparelhos diferentes: o árbitro ainda é local.
+- Descoberta de peers, malha, fila persistida, criptografia, mapa.
 
-Relatório detalhado: [`docs/FASE_A_RELATORIO.md`](docs/FASE_A_RELATORIO.md).
+Simulador da malha com 5 aparelhos: `tools/off_lab.html`.
 
 ## Requisitos
 

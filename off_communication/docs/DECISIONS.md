@@ -76,3 +76,17 @@ de `expiresAt` e de `hopLimit`) e, ao surgir um enlace novo, os dois lados
 trocam a lista de `messageId` e enviam só o que o outro não tem. Com
 internet, a mesma troca é feita com o servidor, que guarda a mensagem para
 quem estiver desligado. Voz ao vivo continua fora disso (ADR-004).
+
+## ADR-010: v0.2 incorporada sobre a arquitetura da Fase A (2026-11-08)
+
+Da v0.2 ficam a identidade visual (escuro + verde-limão), as 4 abas, o PTT
+hold-to-talk com retorno sonoro/háptico e a regra de um transmissor por vez.
+A estrutura de arquivo único e a chave manual online/offline não ficam: o modo
+continua automático (ADR-005), e a simulação vai para um laboratório em Ajustes.
+
+"Canal ocupado" passa a vir de um `FloorArbiter`, nunca de um booleano local:
+
+- online: o servidor é a autoridade;
+- malha: arbitragem distribuída e determinística (FLOOR_CONTROL.md).
+
+Localização fica desligada por padrão e exige confirmação.

@@ -9,16 +9,19 @@ off_communication/
 ├── docs/
 │   ├── TECHNICAL_ARCHITECTURE.md
 │   ├── DECISIONS.md                 # ADRs (ADR-005 = rede híbrida)
+│   ├── FLOOR_CONTROL.md             # um transmissor por vez (online e malha)
+│   ├── V03_RELATORIO.md
 │   ├── FASE_A_RELATORIO.md
 │   ├── PLATFORM_SETUP.md
 │   └── CLAUDE_MASTER_PROMPT.md
 ├── lib/
 │   ├── main.dart
-│   ├── app/                         # MaterialApp, tema, cores
+│   ├── app/                         # MaterialApp, tema, OffServices (injeção)
 │   ├── core/config/                 # LanConfig
 │   ├── communication/
 │   │   ├── contracts/               # CommunicationTransport (interface comum)
 │   │   ├── coordinator/             # ConnectivityCoordinator (escolha de rota)
+│   │   ├── floor/                   # FloorArbiter (um transmissor por vez)
 │   │   ├── protocol/                # MeshPacket (envelope versionado)
 │   │   └── transports/
 │   │       ├── lan/                 # UdpLanTransport (experimental)
@@ -26,10 +29,13 @@ off_communication/
 │   ├── data/local/                  # contratos: identidade, mensagens, vistos
 │   ├── features/
 │   │   ├── channels/                # canais + repositório de demonstração
-│   │   ├── home/                    # tela "Minha comunicação"
-│   │   ├── network_status/          # card ONLINE/MESH + simulação (Fase A)
-│   │   └── ptt/                     # PttController + PttButton
+│   │   ├── shell/                   # abas Rádio/Grupos/Localização/Ajustes
+│   │   ├── radio/  groups/  location/  settings/
+│   │   ├── common/                  # cabeçalho com o modo de rede
+│   │   ├── network_status/          # card ONLINE/MESH + simulação
+│   │   └── ptt/                     # PttController, PttButton, feedback
 │   └── platform/audio/              # contratos de captura/codec/saída
+├── tools/off_lab.html               # simulador da malha no navegador
 ├── supabase/migrations/
 └── test/
 ```
