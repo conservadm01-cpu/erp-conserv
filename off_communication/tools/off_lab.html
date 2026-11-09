@@ -24,6 +24,7 @@
   --sim-line: #e8c98a;
   --ok: #2f7a5f;
   --bad: #b83b32;
+  --talk: #6e9f12;
   --display: "Barlow Condensed", "Arial Narrow", sans-serif;
   --body: "IBM Plex Sans", system-ui, sans-serif;
   --mono: "IBM Plex Mono", ui-monospace, monospace;
@@ -34,7 +35,7 @@
     --fg: #e4eef2; --muted: #93a6ae; --brand: #0a1820; --brand-fg: #e4eef2;
     --online: #5aa6e6; --mesh: #5fbf98; --isolated: #e0a55a;
     --ptt: #2a6383; --ptt-hot: #e0574d; --ptt-off: #56636a;
-    --sim: #2b2618; --sim-line: #6d5a2e; --ok: #5fbf98; --bad: #ef7a70;
+    --sim: #2b2618; --sim-line: #6d5a2e; --ok: #5fbf98; --bad: #ef7a70; --talk: #b8f34a;
     color-scheme: dark;
   }
 }
@@ -43,7 +44,7 @@
   --fg: #e4eef2; --muted: #93a6ae; --brand: #0a1820; --brand-fg: #e4eef2;
   --online: #5aa6e6; --mesh: #5fbf98; --isolated: #e0a55a;
   --ptt: #2a6383; --ptt-hot: #e0574d; --ptt-off: #56636a;
-  --sim: #2b2618; --sim-line: #6d5a2e; --ok: #5fbf98; --bad: #ef7a70;
+  --sim: #2b2618; --sim-line: #6d5a2e; --ok: #5fbf98; --bad: #ef7a70; --talk: #b8f34a;
   color-scheme: dark;
 }
 * { box-sizing: border-box; }
@@ -61,43 +62,65 @@ main.wrap { padding-block: 18px 40px; display: grid; gap: 18px; grid-template-co
 .label { font-size: 11px; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); }
 .col { display: grid; gap: 18px; min-width: 0; }
 
-/* Celular */
-.phone { border-radius: 30px; border: 1px solid var(--line); background: var(--surface-2); overflow: hidden; }
-.phone .bar { background: var(--brand); color: var(--brand-fg); padding: 14px 16px 10px; }
-.phone .bar b { font-family: var(--display); font-size: 20px; letter-spacing: .05em; display: block; line-height: 1; }
-.phone .bar span { font-size: 9.5px; letter-spacing: .14em; }
-.phone .body { padding: 14px; display: grid; gap: 12px; }
+/* Celular: o app v0.3 é sempre escuro com verde-limão, nos dois temas da página. */
+.devwrap { display: grid; gap: 6px; }
 .devpick { display: flex; flex-wrap: wrap; gap: 6px; }
 .devpick button { font: 500 12px var(--body); border: 1px solid var(--line); background: var(--surface); color: var(--fg); border-radius: 999px; padding: 5px 10px; cursor: pointer; }
 .devpick button[aria-pressed="true"] { background: var(--fg); color: var(--surface); border-color: var(--fg); }
-.status { background: var(--surface); border-radius: 12px; padding: 12px; display: grid; gap: 8px; }
-.mode { font-family: var(--display); font-weight: 800; font-size: 32px; letter-spacing: .08em; line-height: 1; }
-.paths { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-.path { border: 1px solid var(--line); border-radius: 10px; padding: 8px; font-size: 12px; color: var(--muted); }
-.path b { display: block; font-size: 11px; letter-spacing: .1em; }
-.path.on-online { border-color: var(--online); color: var(--fg); }
-.path.on-online b { color: var(--online); }
-.path.on-mesh { border-color: var(--mesh); color: var(--fg); }
-.path.on-mesh b { color: var(--mesh); }
-.channel { background: var(--surface); border-radius: 12px; padding: 10px 12px; display: flex; justify-content: space-between; align-items: center; gap: 8px; }
-.channel select { font: 500 13px var(--body); background: var(--surface-2); color: var(--fg); border: 1px solid var(--line); border-radius: 8px; padding: 4px 6px; }
-.pttwrap { display: grid; justify-items: center; gap: 8px; padding-block: 6px; }
-#ptt { width: 168px; height: 168px; max-width: 100%; border-radius: 50%; border: none; background: var(--ptt); color: #fff; font: 600 13px var(--body); letter-spacing: .08em; cursor: pointer; display: grid; place-content: center; gap: 6px; box-shadow: 0 10px 22px rgba(0,0,0,.18); transition: background .12s, transform .12s; touch-action: none; user-select: none; -webkit-user-select: none; }
-#ptt svg { margin: 0 auto; }
-#ptt.hot { background: var(--ptt-hot); transform: scale(.97); }
-#ptt.noroute { background: var(--ptt-off); }
+.devpick button.talk::after { content: " • fala"; color: var(--talk); font-weight: 600; }
+.phone { --p-ink: #101820; --p-panel: #1a2732; --p-high: #263844; --p-lime: #b8f34a; --p-muted: #9aa8b3; --p-line: rgba(255,255,255,.1); --p-busy: #ff6b5e; --p-iso: #ffa94d; --p-mesh: #5cd6c0; --p-sim: #ffd166;
+  background: var(--p-ink); color: #eef3f5; border-radius: 30px; border: 1px solid var(--line); padding: 18px 16px 16px; display: grid; gap: 12px; color-scheme: dark; }
+.phone.shake { animation: shake .28s linear; }
+@keyframes shake { 0%,100% { transform: translateX(0); } 25% { transform: translateX(-5px); } 75% { transform: translateX(5px); } }
+.ph-head { display: flex; align-items: center; gap: 10px; }
+.ph-logo { width: 38px; height: 38px; border-radius: 12px; background: var(--p-lime); display: grid; place-items: center; color: var(--p-ink); flex: none; }
+.ph-brand { flex: 1; min-width: 0; line-height: 1.05; }
+.ph-brand b { display: block; font-size: 20px; font-weight: 900; letter-spacing: .12em; }
+.ph-brand span { font-size: 8.5px; letter-spacing: .24em; color: var(--p-muted); font-weight: 700; }
+.pill { display: inline-flex; align-items: center; gap: 6px; padding: 6px 10px; border-radius: 20px; font-size: 10px; font-weight: 700; letter-spacing: .04em; }
+.pill i { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+.ph-label { font-size: 9.5px; letter-spacing: .18em; font-weight: 700; color: var(--p-muted); }
+.ph-chan { display: flex; align-items: center; gap: 12px; background: var(--p-panel); border: 1px solid var(--p-line); border-radius: 16px; padding: 12px; }
+.ph-chan .ic { width: 40px; height: 40px; border-radius: 12px; background: rgba(184,243,74,.14); color: var(--p-lime); display: grid; place-items: center; flex: none; }
+.ph-chan .ct { min-width: 0; flex: 1; display: grid; gap: 2px; }
+.ph-chan select { font: 700 15px var(--body); color: #eef3f5; background: transparent; border: none; padding: 0; width: 100%; cursor: pointer; }
+.ph-chan select option { color: #101820; }
+.ph-chan small { font-size: 11px; color: var(--p-muted); }
+.ph-chan small.busy { color: var(--p-busy); }
+.ph-mid { display: grid; justify-items: center; gap: 10px; padding-block: 10px 4px; }
+.ph-headline { font-size: 10.5px; letter-spacing: .2em; font-weight: 700; color: var(--p-muted); }
+#ptt { --ring: var(--p-lime); width: 176px; height: 176px; max-width: 100%; border-radius: 50%; background: var(--p-high); color: #fff; border: 2px solid var(--ring); font: 900 13.5px var(--body); letter-spacing: .12em; cursor: pointer; display: grid; place-content: center; gap: 8px; box-shadow: 0 0 22px 2px color-mix(in srgb, var(--ring) 14%, transparent); transition: transform .12s, background .12s, box-shadow .12s; touch-action: none; user-select: none; -webkit-user-select: none; }
+#ptt svg { margin: 0 auto; color: var(--ring); }
+#ptt.talking { --ring: var(--p-lime); background: var(--p-lime); color: var(--p-ink); transform: scale(1.06); box-shadow: 0 0 42px 8px rgba(184,243,74,.3); }
+#ptt.talking svg { color: var(--p-ink); }
+#ptt.listening, #ptt.busy { --ring: var(--p-busy); }
+#ptt.busy { background: rgba(255,107,94,.18); }
+#ptt.noroute { --ring: var(--p-iso); }
 #ptt:focus-visible, button:focus-visible, select:focus-visible, input:focus-visible { outline: 3px solid var(--online); outline-offset: 2px; }
-.hint { font-size: 12px; text-align: center; color: var(--muted); min-height: 3em; max-width: 34ch; }
+.hint { font-size: 12px; text-align: center; color: var(--p-muted); min-height: 3em; max-width: 34ch; white-space: pre-line; }
+.ph-rule { font-size: 10px; color: var(--p-muted); text-align: center; }
+.paths { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.path { background: var(--p-panel); border: 1px solid var(--p-line); border-radius: 14px; padding: 9px 10px; font-size: 11px; color: var(--p-muted); min-width: 0; }
+.path b { font-size: 10.5px; letter-spacing: .08em; margin-right: 6px; }
+.path em { font-style: normal; font-size: 8px; font-weight: 700; letter-spacing: .1em; }
+.path span { display: block; }
+.path.avail-online b { color: var(--p-lime); }
+.path.avail-mesh b { color: var(--p-mesh); }
+.path.use-online { border: 1.6px solid var(--p-lime); color: #eef3f5; }
+.path.use-online em { color: var(--p-lime); }
+.path.use-mesh { border: 1.6px solid var(--p-mesh); color: #eef3f5; }
+.path.use-mesh em { color: var(--p-mesh); }
 .actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.phone .btn { background: var(--p-panel); color: #eef3f5; border-color: var(--p-line); }
+.phone .btn:hover { border-color: var(--p-lime); }
 .btn { font: 600 12.5px var(--body); border: 1px solid var(--line); background: var(--surface); color: var(--fg); border-radius: 10px; padding: 9px 10px; cursor: pointer; }
 .btn:hover { border-color: var(--fg); }
-.btn.primary { background: var(--brand); color: var(--brand-fg); border-color: var(--brand); }
-.inbox { background: var(--surface); border-radius: 12px; padding: 10px 12px; display: grid; gap: 6px; max-height: 210px; overflow-y: auto; }
-.msg { font-size: 12.5px; display: grid; gap: 1px; border-bottom: 1px solid var(--line); padding-bottom: 6px; }
+.inbox { background: var(--p-panel); border-radius: 12px; padding: 10px 12px; display: grid; gap: 6px; max-height: 190px; overflow-y: auto; }
+.msg { font-size: 12.5px; display: grid; gap: 1px; border-bottom: 1px solid var(--p-line); padding-bottom: 6px; }
 .msg:last-child { border-bottom: none; }
-.msg small { color: var(--muted); font-family: var(--mono); font-size: 11px; }
-.empty { font-size: 12px; color: var(--muted); }
-.sim-badge { font-size: 10.5px; text-align: center; color: var(--muted); }
+.msg small { color: var(--p-muted); font-family: var(--mono); font-size: 11px; }
+.empty { font-size: 12px; color: var(--p-muted); }
+.sim-badge { font-size: 10px; text-align: center; color: var(--p-sim); letter-spacing: .04em; }
 
 /* Malha */
 .controls { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; margin-bottom: 10px; }
@@ -118,6 +141,10 @@ main.wrap { padding-block: 18px 40px; display: grid; gap: 18px; grid-template-co
 .stage .node circle.ring { fill: var(--surface); stroke: var(--fg); stroke-width: 2.5; }
 .stage .node.off circle.ring { stroke: var(--muted); stroke-dasharray: 4 4; fill: var(--surface-2); }
 .stage .node.sel circle.ring { stroke: var(--ptt-hot); stroke-width: 4; }
+.stage .node.talk circle.ring { fill: var(--talk); stroke: var(--talk); }
+.stage .node.talk text.big { fill: #101820; }
+.stage .node.talk text.sub { fill: var(--talk); font-weight: 600; }
+.stage .node .halo { fill: none; stroke: var(--talk); stroke-width: 2; opacity: .5; }
 .stage .node text { fill: var(--fg); font-family: var(--body); font-size: 13px; text-anchor: middle; }
 .stage .node text.sub { fill: var(--muted); font-size: 11px; }
 .stage .node text.big { font-family: var(--display); font-weight: 800; font-size: 20px; }
@@ -136,6 +163,7 @@ main.wrap { padding-block: 18px 40px; display: grid; gap: 18px; grid-template-co
 .scenario { font-size: 12.5px; color: var(--muted); margin: 10px 0 0; max-width: 80ch; }
 .grid2 { display: grid; gap: 18px; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
 @media (max-width: 1060px) { .grid2 { grid-template-columns: minmax(0, 1fr); } }
+.checks h3 { font: 600 11px var(--body); letter-spacing: .12em; text-transform: uppercase; color: var(--muted); margin: 6px 0 0; }
 .checks { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
 .checks li { display: grid; grid-template-columns: 22px minmax(0, 1fr); gap: 8px; align-items: start; font-size: 13px; }
 .checks .st { width: 20px; height: 20px; border-radius: 50%; border: 2px solid var(--line); display: grid; place-items: center; font-size: 12px; font-weight: 700; }
@@ -148,7 +176,11 @@ main.wrap { padding-block: 18px 40px; display: grid; gap: 18px; grid-template-co
 .log .o { color: var(--online); }
 .stats { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 8px; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
 .stats b { color: var(--fg); }
-@media (prefers-reduced-motion: reduce) { #ptt { transition: none; } }
+@media (prefers-reduced-motion: reduce) { #ptt { transition: none; } .phone.shake { animation: none; } }
+.floorline { font-size: 12.5px; margin-top: 8px; color: var(--muted); }
+.floorline b { color: var(--fg); }
+.controls + .controls { margin-top: -2px; }
+.controls select { font: 500 12.5px var(--body); background: var(--surface-2); color: var(--fg); border: 1px solid var(--line); border-radius: 8px; padding: 5px 6px; }
 </style>
 
 <header class="top">
@@ -157,54 +189,56 @@ main.wrap { padding-block: 18px 40px; display: grid; gap: 18px; grid-template-co
       <h1>OFF COMMUNICATION LAB</h1>
       <div class="tag">Simulador de teste · rede híbrida online + mesh</div>
     </div>
-    <div class="tag">Protocolo v1 · Fase A</div>
+    <div class="tag">App v0.3 · Protocolo v1</div>
   </div>
 </header>
 
 <div class="wrap">
-  <p class="notice">Simulador no navegador da lógica da Fase A e da malha planejada para a Fase B. Os aparelhos, os enlaces e a internet são simulados e nenhum áudio é gravado. Serve para testar as regras de rota, retransmissão, deduplicação e fila antes do teste com 2 Androids, 2 iPhones e o repetidor.</p>
+  <p class="notice">Simulador no navegador do app v0.3 e da malha planejada para a Fase B. Os aparelhos, os enlaces e a internet são simulados e nenhum áudio é gravado; os bipes e o tremor do celular só representam o som e a vibração do app. Serve para testar rota, retransmissão, fila e o controle de fala (um transmissor por vez) antes do teste com 2 Androids, 2 iPhones e o repetidor.</p>
 </div>
 
 <main class="wrap">
   <section class="col" aria-label="Celular simulado">
-    <div class="phone">
-      <div class="bar"><b>OFF COMMUNICATION</b><span>INTERNET OU MESH · SEMPRE O MELHOR CAMINHO</span></div>
-      <div class="body">
-        <div>
-          <div class="label" style="margin-bottom:6px">Você está no aparelho</div>
-          <div class="devpick" id="devpick"></div>
-        </div>
-        <div class="status">
-          <div class="label">Rede ativa</div>
-          <div class="mode" id="mode">SEM REDE</div>
-          <div class="paths">
-            <div class="path" id="p-online"><b>ONLINE</b><span id="p-online-t">Sem internet</span></div>
-            <div class="path" id="p-mesh"><b>MESH</b><span id="p-mesh-t">Nenhum aparelho próximo</span></div>
-          </div>
-        </div>
-        <div class="channel">
-          <label for="chan" class="label">Canal</label>
-          <select id="chan">
+    <div class="devwrap">
+      <div class="label">Você está no aparelho</div>
+      <div class="devpick" id="devpick"></div>
+    </div>
+    <div class="phone" id="phone">
+      <div class="ph-head">
+        <div class="ph-logo" aria-hidden="true"><svg width="24" height="24" viewBox="0 0 24 24"><path fill="currentColor" d="M11 3h2v18h-2zM7 7h2v10H7zM15 7h2v10h-2zM3 10h2v4H3zM19 10h2v4h-2z"/></svg></div>
+        <div class="ph-brand"><b>OFF</b><span>COMMUNICATION</span></div>
+        <div class="pill" id="pill"><i></i><span id="pill-t">SEM REDE</span></div>
+      </div>
+      <div class="ph-label">CANAL ATIVO</div>
+      <div class="ph-chan">
+        <div class="ic" aria-hidden="true"><svg width="22" height="22" viewBox="0 0 24 24"><path fill="currentColor" d="M18 11v2h4v-2h-4zm-2 6.61c.96.71 2.21 1.65 3.2 2.39.4-.53.8-1.07 1.2-1.6-.99-.74-2.24-1.68-3.2-2.4-.4.54-.8 1.08-1.2 1.61zM20.4 5.6c-.4-.53-.8-1.07-1.2-1.6-.99.74-2.24 1.68-3.2 2.4.4.53.8 1.07 1.2 1.6.96-.72 2.21-1.65 3.2-2.4zM4 9c-1.1 0-2 .9-2 2v2c0 1.1.9 2 2 2h1v4h2v-4h1l5 3V6L8 9H4zm11.5 3c0-1.33-.58-2.53-1.5-3.35v6.69c.92-.81 1.5-2.01 1.5-3.34z"/></svg></div>
+        <div class="ct">
+          <select id="chan" aria-label="Canal ativo">
             <option>Equipe OFF</option><option>Canal 02</option><option>Viagem</option>
           </select>
+          <small id="chan-sub">Toque para trocar de canal</small>
         </div>
-        <div class="pttwrap">
-          <button id="ptt" type="button" aria-label="Push-to-talk: segure para falar">
-            <svg width="40" height="40" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 14a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3Zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-3.08A7 7 0 0 0 19 11h-2Z"/></svg>
-            <span id="ptt-l">SEGURE<br>PARA FALAR</span>
-          </button>
-          <div class="hint" id="hint">Segure o botão para falar no canal.</div>
-        </div>
-        <div class="actions">
-          <button class="btn" id="rec" type="button">Gravar voz (mensagem)</button>
-          <button class="btn" id="txt" type="button">Enviar texto</button>
-        </div>
-        <div>
-          <div class="label" style="margin-bottom:6px">Recebidas neste aparelho</div>
-          <div class="inbox" id="inbox"><div class="empty">Nada recebido ainda.</div></div>
-        </div>
-        <div class="sim-badge">Simulação · áudio, criptografia e rádio reais não envolvidos</div>
       </div>
+      <div class="ph-mid">
+        <div class="ph-headline" id="headline">APERTE PARA FALAR</div>
+        <button id="ptt" type="button" aria-label="Push-to-talk: segure para falar, solte para ouvir">
+          <svg width="46" height="46" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 14a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3Zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-3.08A7 7 0 0 0 19 11h-2Z"/></svg>
+          <span id="ptt-l">SEGURE</span>
+        </button>
+        <div class="hint" id="hint">Canal livre</div>
+        <div class="ph-rule">Um participante por vez • segure para falar • limite de <span id="limit-t">60</span> s</div>
+      </div>
+      <div class="paths">
+        <div class="path" id="p-online"><b>ONLINE</b><em id="p-online-e"></em><span id="p-online-t">Sem internet</span></div>
+        <div class="path" id="p-mesh"><b>MESH</b><em id="p-mesh-e"></em><span id="p-mesh-t">Nenhum aparelho próximo</span></div>
+      </div>
+      <div class="actions">
+        <button class="btn" id="rec" type="button">Gravar voz (mensagem)</button>
+        <button class="btn" id="txt" type="button">Enviar texto</button>
+      </div>
+      <div class="ph-label">RECEBIDAS NESTE APARELHO</div>
+      <div class="inbox" id="inbox"><div class="empty">Nada recebido ainda.</div></div>
+      <div class="sim-badge">SIMULAÇÃO • a voz não é captada nem enviada</div>
     </div>
   </section>
 
@@ -221,14 +255,27 @@ main.wrap { padding-block: 18px 40px; display: grid; gap: 18px; grid-template-co
         <label class="hop" for="hl">Limite de saltos <input type="number" id="hl" min="1" max="8" value="4"></label>
         <button class="btn" type="button" id="reset">Limpar</button>
       </div>
+      <div class="controls" role="group" aria-label="Controle de fala">
+        <label class="hop" for="talklimit">Limite de fala
+          <select id="talklimit"><option value="60">60 s (app)</option><option value="10">10 s (teste rápido)</option></select>
+        </label>
+        <label class="hop" for="spk">Fazer
+          <select id="spk"></select>
+        </label>
+        <button class="btn" type="button" id="spk-go">falar 5 s</button>
+        <button class="btn" type="button" id="collide">Dois apertam juntos</button>
+        <label class="switch" for="snd"><input type="checkbox" id="snd" checked> Bipes</label>
+        <label class="switch" for="latch" title="Para testar com mouse: um clique segura o PTT, outro solta"><input type="checkbox" id="latch"> PTT travado</label>
+      </div>
       <div class="stage"><svg id="svg" viewBox="0 0 720 400" role="img" aria-label="Aparelhos e enlaces da malha"></svg></div>
       <div class="legend">
         <span><i></i>Enlace ativo (toque para cortar)</span>
         <span><i class="off"></i>Sem alcance</span>
         <span><i class="cl"></i>Caminho pela internet</span>
-        <span>Toque num aparelho para ligar/desligar · número laranja = fila</span>
+        <span>Toque num aparelho para ligar/desligar · número laranja = fila · verde-limão = com a palavra</span>
       </div>
       <p class="scenario" id="scenario"></p>
+      <p class="floorline" id="floorline"></p>
     </div>
 
     <div class="grid2">
@@ -292,6 +339,10 @@ main.wrap { padding-block: 18px 40px; display: grid; gap: 18px; grid-template-co
     packets: {},
     checks: {},
     seq: 0,
+    // Controle de fala: canal -> lista de quem está com a palavra. Mais de um só acontece com a malha partida.
+    floor: {},
+    talkLimit: 60,
+    me: { state: 'idle', reason: '', speaker: null, end: '' },
   };
 
   const key = (a, b) => [a, b].sort().join('-');
@@ -343,11 +394,13 @@ main.wrap { padding-block: 18px 40px; display: grid; gap: 18px; grid-template-co
     }
     for (const id of IDS) {
       const n = NODES[id];
-      const g = el('g', { class: 'node' + (S.power[id] ? '' : ' off') + (S.selected === id ? ' sel' : ''), tabindex: 0, role: 'button', 'aria-label': n.name + (S.power[id] ? ' ligado' : ' desligado') + '. Ativar para ligar ou desligar.' }, gNodes);
+      const talking = isTalking(id);
+      const g = el('g', { class: 'node' + (S.power[id] ? '' : ' off') + (S.selected === id ? ' sel' : '') + (talking ? ' talk' : ''), tabindex: 0, role: 'button', 'aria-label': n.name + (S.power[id] ? ' ligado' : ' desligado') + '. Ativar para ligar ou desligar.' }, gNodes);
+      if (talking) el('circle', { class: 'halo', cx: n.x, cy: n.y, r: 40 }, g);
       el('circle', { class: 'ring', cx: n.x, cy: n.y, r: 30 }, g);
       el('text', { class: 'big', x: n.x, y: n.y + 7 }, g).textContent = n.short;
       el('text', { x: n.x, y: n.y + 50 }, g).textContent = n.name;
-      el('text', { class: 'sub', x: n.x, y: n.y + 65 }, g).textContent = S.power[id] ? n.os + ' · ' + modeLabel(snapshot(id).mode) : 'desligado';
+      el('text', { class: 'sub', x: n.x, y: n.y + 65 }, g).textContent = talking ? 'COM A PALAVRA' : S.power[id] ? n.os + ' · ' + modeLabel(snapshot(id).mode) : 'desligado';
       const q = S.queue[id].length;
       if (q) {
         el('circle', { class: 'queue', cx: n.x + 24, cy: n.y - 24, r: 11 }, g);
@@ -397,9 +450,10 @@ main.wrap { padding-block: 18px 40px; display: grid; gap: 18px; grid-template-co
     return p;
   }
 
-  function originate(origin, type) {
+  function originate(origin, type, secs) {
     if (!S.power[origin]) { log(NODES[origin].short + ' está desligado', 'x'); return; }
     const p = makePacket(origin, type);
+    if (secs) p.secs = secs;
     S.stats.sent++;
     S.seen[origin].add(p.id);
     if (type !== 'voiceChunk') S.carry[origin].set(p.id, -1);
@@ -450,7 +504,7 @@ main.wrap { padding-block: 18px 40px; display: grid; gap: 18px; grid-template-co
     S.stats.deliv++;
     if (from === 'R') p.viaR = true;
     p.deliveredTo[nodeId] = { hop: hopCount, via: fromLabel, viaR: p.viaR || from === 'R' };
-    S.inbox[nodeId].unshift({ id: p.id, origin: p.origin, type: p.type, channel: p.channel, hop: hopCount, via: fromLabel, at: Date.now() });
+    S.inbox[nodeId].unshift({ id: p.id, origin: p.origin, type: p.type, channel: p.channel, hop: hopCount, via: fromLabel, at: Date.now(), secs: p.secs });
     log(p.id + ' entregue em ' + NODES[nodeId].short + ' (salto ' + hopCount + ', via ' + fromLabel + ')', 'd');
     if (from !== 'cloud') {
       if (hopCount < p.hopLimit) {
@@ -534,12 +588,20 @@ main.wrap { padding-block: 18px 40px; display: grid; gap: 18px; grid-template-co
 
   // ---------- Validação ----------
   const CHECKS = [
+    { group: 'Rede e mensagens' },
     { id: 'all4', t: 'Internet desligada: os 4 aparelhos principais se comunicam', d: 'Envie uma mensagem com a internet desligada. Os outros 3 entre A1, I1, A2 e I2 precisam receber.' },
     { id: 'cross', t: 'Android ↔ iPhone nos dois sentidos', d: 'Uma mensagem de um Android chega a um iPhone e outra de um iPhone chega a um Android, sem internet.' },
     { id: 'relay', t: 'O repetidor retransmitiu de verdade', d: 'Em "Teste do repetidor", uma mensagem atravessa R e chega ao outro lado com salto 1.' },
     { id: 'dedup', t: 'Nenhuma entrega duplicada', d: 'Em "Mesmo roteador" as cópias chegam por vários caminhos. Cada aparelho entrega uma vez e descarta o resto.' },
     { id: 'store', t: 'Armazenar e repassar: entrega quando o repetidor volta', d: 'Em "Teste do repetidor", desligue R, grave voz em A1 e religue R. A1 e I1 guardam a mensagem e a repassam quando R volta ao alcance.' },
     { id: 'hybrid', t: 'Volta da internet sincroniza a fila', d: 'Deixe um aparelho isolado guardar uma mensagem e ligue a internet. A fila sobe para o servidor e chega pelo caminho ONLINE, inclusive a quem ligar depois.' },
+    { group: 'Controle de fala (v0.3)' },
+    { id: 'one', t: 'Um transmissor por vez', d: 'Faça outro aparelho falar 5 s e aperte o PTT no seu. Você vê OUVINDO e, ao apertar, OCUPADO com o nome de quem fala.' },
+    { id: 'collide', t: 'Desempate quando dois apertam juntos', d: '"Dois apertam juntos": pedidos com 120 ms de diferença contam como simultâneos e todos escolhem o mesmo vencedor (menor identificador).' },
+    { id: 'maxtalk', t: 'Limite de fala encerra sozinho', d: 'Escolha "10 s" e segure o PTT. A fala termina e o canal é liberado sem soltar o botão.' },
+    { id: 'handover', t: 'Internet cai, fala continua pela malha', d: 'Ligue "PTT travado" para usar o mouse. Com internet e aparelhos próximos, aperte o PTT e desligue a internet. A rota passa de ONLINE para MESH sem cortar a fala.' },
+    { id: 'routelost', t: 'Rede some durante a fala: fala encerrada', d: 'Com "PTT travado", aperte o PTT e desligue os vizinhos do seu aparelho (ou corte os enlaces). A fala termina, aparece SEM ROTA e o canal fica livre.' },
+    { id: 'heartbeat', t: 'Falante some: canal liberado em 5 s', d: 'Faça outro aparelho falar e desligue-o. Os demais continuam ouvindo por 5 s (sem sinal de vida) e então o canal volta a ficar livre.' },
   ];
 
   function evaluate() {
@@ -572,6 +634,7 @@ main.wrap { padding-block: 18px 40px; display: grid; gap: 18px; grid-template-co
     const ul = document.getElementById('checks');
     ul.textContent = '';
     for (const c of CHECKS) {
+      if (c.group) { const h = document.createElement('h3'); h.textContent = c.group; ul.appendChild(h); continue; }
       const li = document.createElement('li');
       if (S.checks[c.id]) li.className = 'pass';
       li.innerHTML = '<span class="st" aria-hidden="true">' + (S.checks[c.id] ? '✓' : '') + '</span><span></span>';
@@ -582,23 +645,200 @@ main.wrap { padding-block: 18px 40px; display: grid; gap: 18px; grid-template-co
     }
   }
 
+  // ---------- Controle de fala (mesmas regras do FloorArbiter / PttController da v0.3) ----------
+  const chan = () => document.getElementById('chan').value;
+  const holders = (ch = chan()) => (S.floor[ch] = S.floor[ch] || []);
+  const isTalking = id => holders().some(h => h.peer === id && !h.lost);
+  let tokenSeq = 0;
+
+  // Aparelhos que recebem os avisos de fala de [id]: malha (todos os saltos) e, com internet, todos os que estão online.
+  function reach(id) {
+    const seen = new Set([id]);
+    const stack = [id];
+    while (stack.length) {
+      const cur = stack.pop();
+      const next = [...neighbors(cur)];
+      if (hasInternet(cur)) for (const o of IDS) if (hasInternet(o)) next.push(o);
+      for (const n of next) if (!seen.has(n)) { seen.add(n); stack.push(n); }
+    }
+    return seen;
+  }
+  // Um falante que sumiu continua "ouvido" por quem o alcançava até o fim dos 5 s sem sinal.
+  const speakerFor = id => holders().find(h => h.peer !== id && (h.lost ? h.audience : reach(h.peer)).has(id));
+
+  function grant(peer, ms) {
+    const r = routeLive(peer);
+    const h = { peer, ch: chan(), token: 't' + (++tokenSeq), startedAt: Date.now(), expiresAt: Date.now() + (ms || S.talkLimit * 1000), route: r.route, lost: false, audience: reach(peer) };
+    holders(h.ch).push(h);
+    h.timer = setTimeout(() => endTalk(h, ms ? 'auto' : 'maxTalk'), ms || S.talkLimit * 1000);
+    log('FLOOR ' + NODES[peer].short + ' pega a palavra em "' + h.ch + '" via ' + (r.route === 'online' ? 'ONLINE' : 'MESH'), 'd');
+    return h;
+  }
+
+  function endTalk(h, reason) {
+    const list = holders(h.ch);
+    const i = list.indexOf(h);
+    if (i < 0) return;
+    list.splice(i, 1);
+    clearTimeout(h.timer); clearTimeout(h.lostTimer);
+    const secs = Math.max(1, Math.round((Date.now() - h.startedAt) / 1000));
+    const why = { released: 'soltou o botão', maxTalk: 'limite de ' + S.talkLimit + ' s', routeLost: 'a rede caiu', heartbeat: 'sem sinal por 5 s', auto: 'terminou de falar', channel: 'trocou de canal', device: 'trocou de aparelho' }[reason];
+    log('FLOOR ' + NODES[h.peer].short + ' libera o canal (' + why + ')', reason === 'heartbeat' || reason === 'routeLost' ? 'x' : '');
+    if (reason === 'maxTalk') S.checks.maxtalk = true;
+    if (reason === 'routeLost') S.checks.routelost = true;
+    if (reason === 'heartbeat') S.checks.heartbeat = true;
+    if (h.peer === S.selected && S.me.state === 'talking') {
+      S.me.end = reason;
+      S.me.state = reason === 'routeLost' ? 'noroute' : 'idle';
+      if (reason === 'routeLost') S.me.reason = routeLive(h.peer).reason;
+      else pressedDown = false;
+      cue('end');
+    }
+    if (reason !== 'routeLost' && reason !== 'heartbeat' && S.power[h.peer]) originate(h.peer, 'voiceChunk', secs);
+    refresh();
+  }
+
+  // Rede mudou: confere cada fala em andamento.
+  function checkTalkRoutes() {
+    for (const list of Object.values(S.floor)) for (const h of [...list]) {
+      if (!S.power[h.peer]) {
+        if (!h.lost) {
+          h.lost = true;
+          clearTimeout(h.timer);
+          log('FLOOR ' + NODES[h.peer].short + ' sumiu falando; os outros aguardam 5 s sem sinal de vida', 'x');
+          h.lostTimer = setTimeout(() => endTalk(h, 'heartbeat'), 5000);
+        }
+        continue;
+      }
+      const r = routeLive(h.peer);
+      if (r.route === 'unavailable') { endTalk(h, 'routeLost'); continue; }
+      if (r.route !== h.route) {
+        log('FLOOR ' + NODES[h.peer].short + ': rota mudou de ' + h.route.toUpperCase() + ' para ' + r.route.toUpperCase() + ', a fala continua', 'o');
+        if (h.route === 'online' && r.route === 'mesh') S.checks.handover = true;
+        h.route = r.route;
+      }
+      h.audience = reach(h.peer);
+    }
+  }
+
+  // ---------- Som e vibração simulados ----------
+  let actx = null;
+  function beep(freq, at, dur) {
+    try {
+      actx = actx || new (window.AudioContext || window.webkitAudioContext)();
+      const o = actx.createOscillator(), g = actx.createGain();
+      o.frequency.value = freq; o.type = 'sine';
+      g.gain.setValueAtTime(0.0001, actx.currentTime + at);
+      g.gain.exponentialRampToValueAtTime(0.18, actx.currentTime + at + 0.01);
+      g.gain.exponentialRampToValueAtTime(0.0001, actx.currentTime + at + dur);
+      o.connect(g).connect(actx.destination);
+      o.start(actx.currentTime + at); o.stop(actx.currentTime + at + dur + 0.02);
+    } catch (_) { /* sem áudio: segue só o visual */ }
+  }
+  function cue(kind) {
+    const snd = document.getElementById('snd').checked;
+    if (kind === 'start' && snd) { beep(880, 0, .07); beep(1320, .08, .09); }
+    if (kind === 'end' && snd) { beep(990, 0, .07); beep(660, .08, .1); }
+    if (kind === 'denied') {
+      if (snd) { beep(330, 0, .09); beep(330, .14, .09); }
+      const ph = document.getElementById('phone');
+      ph.classList.remove('shake'); void ph.offsetWidth; ph.classList.add('shake');
+    }
+  }
+
   // ---------- Celular ----------
   const pttBtn = document.getElementById('ptt');
   const pttLabel = document.getElementById('ptt-l');
   const hint = document.getElementById('hint');
-  let pressed = false;
+  let pressedDown = false;
+
+  function press() {
+    const id = S.selected;
+    if (pressedDown) return;
+    pressedDown = true;
+    S.me.end = '';
+    const r = routeLive(id);
+    if (r.route === 'unavailable') {
+      S.me = { state: 'noroute', reason: r.reason, speaker: null, end: '' };
+      log(NODES[id].short + ': PTT sem rota', 'x');
+      cue('denied');
+    } else {
+      const sp = speakerFor(id);
+      if (sp) {
+        S.me = { state: 'busy', reason: '', speaker: sp.peer, end: '' };
+        S.checks.one = true;
+        log('FLOOR ' + NODES[id].short + ' pede a palavra: negado, ' + NODES[sp.peer].short + ' está falando', 'x');
+        cue('denied');
+      } else {
+        grant(id);
+        S.me = { state: 'talking', reason: '', speaker: null, end: '' };
+        cue('start');
+      }
+    }
+    refresh();
+  }
+
+  function release() {
+    if (!pressedDown) return;
+    pressedDown = false;
+    const h = holders().find(x => x.peer === S.selected);
+    if (S.me.state === 'talking' && h) endTalk(h, 'released');
+    S.me.state = 'idle';
+    refresh();
+  }
 
   function renderPhone() {
     const id = S.selected;
     const s = snapshot(id);
-    const m = document.getElementById('mode');
-    m.textContent = S.power[id] ? modeLabel(s.mode) : 'DESLIGADO';
-    m.style.color = s.mode === 'online' ? 'var(--online)' : s.mode === 'mesh' ? 'var(--mesh)' : 'var(--isolated)';
+    const pill = document.getElementById('pill');
+    const lbl = !S.power[id] ? 'DESLIGADO' : modeLabel(s.mode);
+    const col = s.mode === 'online' ? 'var(--p-lime)' : s.mode === 'mesh' ? 'var(--p-mesh)' : 'var(--p-iso)';
+    document.getElementById('pill-t').textContent = lbl;
+    pill.style.color = col;
+    pill.style.background = 'color-mix(in srgb, ' + col + ' 14%, transparent)';
     const po = document.getElementById('p-online'), pm = document.getElementById('p-mesh');
-    po.className = 'path' + (s.internet ? ' on-online' : '');
-    pm.className = 'path' + (s.peers ? ' on-mesh' : '');
+    po.className = 'path' + (s.internet ? ' avail-online' : '') + (s.mode === 'online' ? ' use-online' : '');
+    pm.className = 'path' + (s.peers ? ' avail-mesh' : '') + (s.mode === 'mesh' ? ' use-mesh' : '');
+    document.getElementById('p-online-e').textContent = s.mode === 'online' ? 'EM USO' : '';
+    document.getElementById('p-mesh-e').textContent = s.mode === 'mesh' ? 'EM USO' : '';
     document.getElementById('p-online-t').textContent = s.internet ? 'Internet disponível' : 'Sem internet';
     document.getElementById('p-mesh-t').textContent = s.peers === 0 ? 'Nenhum aparelho próximo' : s.peers === 1 ? '1 aparelho conectado' : s.peers + ' aparelhos conectados';
+    document.getElementById('limit-t').textContent = S.talkLimit;
+
+    // Estados do botão (iguais ao app v0.3).
+    const listening = speakerFor(id);
+    const me = S.me;
+    let cls = '', label = 'SEGURE', head = 'APERTE PARA FALAR', text = 'Canal livre', headCol = 'var(--p-muted)';
+    if (me.state === 'talking') {
+      const h = holders().find(x => x.peer === id);
+      const left = h ? Math.max(0, Math.ceil((h.expiresAt - Date.now()) / 1000)) : 0;
+      cls = 'talking'; label = 'FALANDO'; head = 'COM A PALAVRA'; headCol = 'var(--p-lime)';
+      text = 'Rota ' + (h && h.route === 'online' ? 'ONLINE' : 'MESH') + ' • ' + routeLive(id).reason + '\n' + left + ' s restantes • simulação: sem áudio';
+    } else if (me.state === 'busy') {
+      cls = 'busy'; label = 'OCUPADO'; head = 'CANAL OCUPADO'; headCol = 'var(--p-busy)';
+      text = NODES[me.speaker].name + ' está falando. Solte e aguarde o canal liberar.';
+    } else if (me.state === 'noroute') {
+      cls = 'noroute'; label = 'SEM ROTA'; head = 'SEM ROTA'; headCol = 'var(--p-iso)';
+      text = (me.end === 'routeLost' ? 'A rede caiu durante a fala. ' : '') + me.reason + '.\nVoz ao vivo indisponível.';
+    } else if (listening) {
+      cls = 'listening'; label = 'OUVINDO'; head = 'OUVINDO'; headCol = 'var(--p-busy)';
+      text = NODES[listening.peer].name + ' está falando agora.' + (listening.lost ? '\n(sem sinal dele; o canal libera em até 5 s)' : '');
+    } else if (me.end === 'maxTalk') {
+      text = 'Tempo máximo de fala atingido. Aperte de novo para continuar.';
+    } else {
+      const q = S.queue[id].length;
+      if (q) text = q + ' mensagem(ns) na fila deste aparelho, aguardando rota.';
+    }
+    pttBtn.className = cls;
+    pttLabel.textContent = label;
+    const hd = document.getElementById('headline');
+    hd.textContent = head; hd.style.color = headCol;
+    hint.textContent = text;
+    hint.style.color = cls === 'talking' ? 'var(--p-lime)' : cls === 'busy' || cls === 'listening' ? 'var(--p-busy)' : cls === 'noroute' ? 'var(--p-iso)' : 'var(--p-muted)';
+    const sub = document.getElementById('chan-sub');
+    sub.textContent = listening ? NODES[listening.peer].name + ' falando' : 'Toque para trocar de canal';
+    sub.className = listening ? 'busy' : '';
+
     const box = document.getElementById('inbox');
     box.textContent = '';
     const items = S.inbox[id];
@@ -606,50 +846,56 @@ main.wrap { padding-block: 18px 40px; display: grid; gap: 18px; grid-template-co
     for (const it of items.slice(0, 30)) {
       const d = document.createElement('div'); d.className = 'msg';
       const b = document.createElement('span');
-      b.textContent = (it.type === 'voiceChunk' ? 'Voz ao vivo' : it.type === 'voiceMessage' ? 'Mensagem de voz' : 'Texto') + ' de ' + NODES[it.origin].name + ' · ' + it.channel;
+      b.textContent = (it.type === 'voiceChunk' ? 'Voz ao vivo' + (it.secs ? ' (' + it.secs + ' s)' : '') : it.type === 'voiceMessage' ? 'Mensagem de voz' : 'Texto') + ' de ' + NODES[it.origin].name + ' · ' + it.channel;
       const sm = document.createElement('small');
       sm.textContent = it.id + ' · ' + (it.via === 'internet' ? 'via internet' : 'salto ' + it.hop + ' · via ' + it.via);
       d.append(b, sm); box.appendChild(d);
     }
-    const q = S.queue[id].length;
     const devs = document.getElementById('devpick');
-    for (const b of devs.children) b.setAttribute('aria-pressed', String(b.dataset.id === id));
-    if (!pressed) {
-      pttBtn.className = '';
-      pttLabel.innerHTML = 'SEGURE<br>PARA FALAR';
-      hint.textContent = q ? q + ' mensagem(ns) na fila deste aparelho, aguardando rota.' : 'Segure o botão para falar no canal.';
-    }
+    for (const b of devs.children) { b.setAttribute('aria-pressed', String(b.dataset.id === id)); b.classList.toggle('talk', isTalking(b.dataset.id)); }
   }
 
-  function setPtt(down) {
-    const id = S.selected;
-    if (down === pressed) return;
-    pressed = down;
-    if (down) {
-      const r = routeLive(id);
-      if (r.route === 'unavailable') {
-        pttBtn.className = 'noroute';
-        pttLabel.textContent = 'SEM ROTA';
-        hint.textContent = r.reason + '. Voz ao vivo indisponível. Use "Gravar voz" para deixar na fila.';
-      } else {
-        pttBtn.className = 'hot';
-        pttLabel.textContent = 'TRANSMITINDO';
-        hint.textContent = 'Rota: ' + (r.route === 'online' ? 'ONLINE (WebRTC)' : 'MESH (rede local)') + ' · ' + r.reason + '. Simulação: nenhum áudio é captado.';
-      }
-    } else {
-      const wasNoRoute = pttBtn.classList.contains('noroute');
-      pttBtn.className = '';
-      if (!wasNoRoute) originate(id, 'voiceChunk');
-      else log(NODES[id].short + ': PTT sem rota, nada transmitido', 'x');
-      renderPhone();
-    }
-  }
-  pttBtn.addEventListener('pointerdown', e => { e.preventDefault(); try { pttBtn.setPointerCapture(e.pointerId); } catch (_) {} setPtt(true); });
-  pttBtn.addEventListener('pointerup', () => setPtt(false));
-  pttBtn.addEventListener('pointercancel', () => setPtt(false));
-  pttBtn.addEventListener('keydown', e => { if ((e.key === ' ' || e.key === 'Enter') && !e.repeat) { e.preventDefault(); setPtt(true); } });
-  pttBtn.addEventListener('keyup', e => { if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); setPtt(false); } });
+  // "PTT travado": com mouse não dá para segurar o botão e mexer na rede ao mesmo tempo.
+  const latched = () => document.getElementById('latch').checked;
+  pttBtn.addEventListener('pointerdown', e => {
+    e.preventDefault();
+    if (latched()) { if (pressedDown) release(); else press(); return; }
+    try { pttBtn.setPointerCapture(e.pointerId); } catch (_) {}
+    press();
+  });
+  pttBtn.addEventListener('pointerup', () => { if (!latched()) release(); });
+  pttBtn.addEventListener('pointercancel', () => { if (!latched()) release(); });
+  document.getElementById('latch').addEventListener('change', e => { if (!e.target.checked) release(); });
+  pttBtn.addEventListener('keydown', e => { if ((e.key === ' ' || e.key === 'Enter') && !e.repeat) { e.preventDefault(); press(); } });
+  pttBtn.addEventListener('keyup', e => { if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); release(); } });
   pttBtn.addEventListener('contextmenu', e => e.preventDefault());
+
+  // Outro aparelho fala por 5 s (pelo mesmo árbitro).
+  function otherTalks(id, ms) {
+    const r = routeLive(id);
+    if (r.route === 'unavailable') { log(NODES[id].short + ': sem rota, não consegue falar', 'x'); return false; }
+    const sp = speakerFor(id) || (isTalking(id) ? holders().find(h => h.peer === id) : null);
+    if (sp) { log('FLOOR ' + NODES[id].short + ' pede a palavra: negado, ' + NODES[sp.peer].short + ' está falando', 'x'); return false; }
+    grant(id, ms);
+    return true;
+  }
+
+  function collide() {
+    const pool = IDS.filter(id => S.power[id] && !isTalking(id) && id !== S.selected && routeLive(id).route !== 'unavailable');
+    let pair = null;
+    for (const a of pool) { for (const b of pool) if (a < b && reach(a).has(b)) { pair = [a, b]; break; } if (pair) break; }
+    if (!pair) { log('Dois apertam juntos: precisa de dois aparelhos ligados que se alcancem (além do seu)', 'x'); return; }
+    if (pair.some(id => speakerFor(id))) { log('Dois apertam juntos: o canal já está ocupado', 'x'); return; }
+    // Pedidos com 120 ms de diferença: o "mais novo" pela ordem é o de menor id, para mostrar que o desempate não depende de quem chegou primeiro.
+    const first = pair[1], second = pair[0];
+    log('FLOOR_CLAIM ' + NODES[first].short + ' em t=0 ms e ' + NODES[second].short + ' em t=120 ms', 'q');
+    const winner = pair[0] < pair[1] ? pair[0] : pair[1];
+    const loser = winner === first ? second : first;
+    log('Colisão: diferença 120 ms < 300 ms conta como simultâneo; vence o menor identificador: ' + NODES[winner].short + '. ' + NODES[loser].short + ' para e passa a ouvir.', 'q');
+    S.checks.collide = true;
+    grant(winner, 4000);
+    refresh();
+  }
 
   function stored(type) {
     const id = S.selected;
@@ -667,7 +913,13 @@ main.wrap { padding-block: 18px 40px; display: grid; gap: 18px; grid-template-co
   for (const id of IDS) {
     const b = document.createElement('button');
     b.type = 'button'; b.dataset.id = id; b.textContent = NODES[id].name;
-    b.addEventListener('click', () => { S.selected = id; refresh(); });
+    b.addEventListener('click', () => {
+      const h = holders().find(x => x.peer === S.selected && S.me.state === 'talking');
+      if (h) endTalk(h, 'device');
+      pressedDown = false;
+      S.selected = id; S.me = { state: 'idle', reason: '', speaker: null, end: '' };
+      refresh();
+    });
     devpick.appendChild(b);
   }
 
@@ -680,6 +932,7 @@ main.wrap { padding-block: 18px 40px; display: grid; gap: 18px; grid-template-co
     log('Topologia: ' + document.querySelector('[data-topo="' + t + '"]').textContent);
     flushQueues();
     syncAll();
+    checkTalkRoutes();
     refresh();
   }
   for (const b of document.querySelectorAll('[data-topo]')) b.addEventListener('click', () => setTopo(b.dataset.topo));
@@ -688,18 +941,21 @@ main.wrap { padding-block: 18px 40px; display: grid; gap: 18px; grid-template-co
     const k = key(a, b);
     if (S.links.has(k)) { S.links.delete(k); log('Enlace ' + NODES[a].short + '–' + NODES[b].short + ' cortado'); }
     else { S.links.add(k); log('Enlace ' + NODES[a].short + '–' + NODES[b].short + ' ativo'); flushQueues(); syncAll(); }
+    checkTalkRoutes();
     refresh();
   }
   function togglePower(id) {
     S.power[id] = !S.power[id];
     log(NODES[id].name + (S.power[id] ? ' ligado' : ' desligado'), S.power[id] ? '' : 'x');
     if (S.power[id]) { flushQueues(); syncAll(); }
+    checkTalkRoutes();
     refresh();
   }
   document.getElementById('net').addEventListener('change', e => {
     S.internet = e.target.checked;
     log(S.internet ? 'Internet voltou' : 'Internet desligada', 'o');
     if (S.internet) { flushQueues(); cloudSync(); }
+    checkTalkRoutes();
     refresh();
   });
   document.getElementById('hl').addEventListener('change', e => {
@@ -710,12 +966,48 @@ main.wrap { padding-block: 18px 40px; display: grid; gap: 18px; grid-template-co
   document.getElementById('reset').addEventListener('click', () => {
     for (const id of IDS) { S.seen[id].clear(); S.carry[id].clear(); S.inbox[id] = []; S.queue[id] = []; S.power[id] = true; }
     S.stats = { sent: 0, deliv: 0, dup: 0, fwd: 0 }; S.packets = {}; S.checks = {}; S.cloud.clear();
+    for (const list of Object.values(S.floor)) for (const h of list) { clearTimeout(h.timer); clearTimeout(h.lostTimer); }
+    S.floor = {}; pressedDown = false; S.me = { state: 'idle', reason: '', speaker: null, end: '' };
     logEl.textContent = '';
     log('Bancada limpa');
     refresh();
   });
 
+  document.getElementById('talklimit').addEventListener('change', e => {
+    S.talkLimit = parseInt(e.target.value, 10);
+    log('Limite de fala: ' + S.talkLimit + ' s (vale para a próxima fala)');
+    refresh();
+  });
+  const spk = document.getElementById('spk');
+  for (const id of IDS) { const o = document.createElement('option'); o.value = id; o.textContent = NODES[id].name; spk.appendChild(o); }
+  spk.value = 'A2';
+  document.getElementById('spk-go').addEventListener('click', () => {
+    if (spk.value === S.selected) { log('Para falar com o seu aparelho, segure o PTT do celular', 'x'); return; }
+    otherTalks(spk.value, 5000); refresh();
+  });
+  document.getElementById('collide').addEventListener('click', collide);
+  document.getElementById('chan').addEventListener('change', () => {
+    for (const list of Object.values(S.floor)) for (const h of [...list]) if (h.peer === S.selected && S.me.state === 'talking') endTalk(h, 'channel');
+    pressedDown = false; S.me = { state: 'idle', reason: '', speaker: null, end: '' };
+    refresh();
+  });
+
+  // Atualiza contagem regressiva e "OUVINDO" enquanto alguém fala (sem redesenhar a malha).
+  setInterval(() => { if (Object.values(S.floor).some(l => l.length)) { renderPhone(); renderFloorline(); } }, 250);
+
+  function renderFloorline() {
+    const parts = [];
+    for (const [ch, list] of Object.entries(S.floor)) for (const h of list) {
+      const left = Math.max(0, Math.ceil((h.expiresAt - Date.now()) / 1000));
+      parts.push(NODES[h.peer].name + ' em "' + ch + '" via ' + h.route.toUpperCase() + (h.lost ? ' (sem sinal)' : ' · ' + left + ' s'));
+    }
+    const fl = document.getElementById('floorline');
+    fl.innerHTML = '<b>Com a palavra:</b> ';
+    fl.append(parts.length ? parts.join(' · ') : 'ninguém, canais livres');
+  }
+
   function refresh() {
+    renderFloorline();
     draw();
     renderPhone();
     renderChecks();
