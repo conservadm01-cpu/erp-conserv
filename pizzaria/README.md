@@ -1,6 +1,8 @@
 # App de Pizzaria
 
-Cardápio online com pedidos, entrega acompanhada por GPS e painel da loja.
+ERP de pizzaria: cardápio online com delivery acompanhado por GPS, pedidos
+no salão (QR code na mesa e totem de autoatendimento), cardápio em TV e em
+telas LCD com ESP32, caixa e relatórios.
 Mesmo stack do ERP da confecção: Vite + React, e os dados ficam no Supabase.
 
 ## O que tem
@@ -11,7 +13,10 @@ Mesmo stack do ERP da confecção: Vite + React, e os dados ficam no Supabase.
 | | `/#/pedido/<id>` | Acompanhamento: linha do tempo, mapa com o motoboy ao vivo e tempo estimado |
 | | `/#/pedidos` | Histórico de pedidos do cliente |
 | | `/#/carteira` | Saldo, cashback, extrato e endereços salvos |
-| **Loja** (PIN) | `/#/loja` | Quadro de pedidos, mapa ao vivo dos motoboys, produtos, promoções, motoboys, clientes e configurações |
+| **Salão** | `/#/mesa/<n>` | Aberto pelo QR code da mesa: cardápio, pedido direto para a cozinha, conta da mesa, chamar atendente |
+| | `/#/totem` | Totem de autoatendimento (tablet/tela touch): pedido, senha na tela, volta sozinho ao início |
+| | `/#/painel/<id>` | Cardápio para TV em tela cheia, com senhas prontas e promoções rolando |
+| **Loja** (PIN) | `/#/loja` | Pedidos (delivery e salão), salão e mesas, motoboys, produtos, promoções, telas e TV, caixa e relatórios, clientes, configurações |
 | **Motoboy** (nome + PIN) | `/#/motoboy` | Entregas atribuídas, pegar entregas prontas, rota no Google Maps, envio do GPS, repasse do dia |
 
 ### Regras principais
@@ -23,6 +28,31 @@ Mesmo stack do ERP da confecção: Vite + React, e os dados ficam no Supabase.
 - **Valor da entrega**: `taxa base + (km além dos inclusos × R$/km)`. A distância é calculada em linha reta e multiplicada pelo "fator de rota" (1,3) para se aproximar do caminho pelas ruas. Existe um raio máximo de atendimento.
 - **Entrega dedicada (plus)**: o motoboy sai direto, sem outras paradas. Cobra um adicional fixo e/ou um % sobre a taxa. Aparece destacada para a loja e para o motoboy, e o motoboy recebe um bônus no repasse. O frete grátis zera só a taxa normal; o adicional dedicado continua sendo cobrado.
 - **Geolocalização**: o motoboy envia a posição a cada ~5 s enquanto tem entrega. O cliente e a loja veem o motoboy no mapa (OpenStreetMap) com o tempo estimado de chegada. O endereço de entrega pode ser buscado por texto, pela localização atual do aparelho ou ajustado tocando no mapa.
+
+- **Salão e mesas**: cada mesa tem um QR code (Loja → Salão e mesas → QR codes, pronto para imprimir). Os pedidos da mesa vão para a conta; a loja fecha a conta com taxa de serviço opcional e a forma de pagamento. Os chamados ("chamar atendente", "pedir a conta") aparecem na mesma tela.
+- **Totem**: pedido de balcão com nome para chamar e senha de 3 dígitos. Quando a cozinha marca "pronto", a senha aparece no painel da TV e nas telas ESP32 que mostram senhas.
+- **Caixa e relatórios**: faturamento, ticket médio, descontos, taxas de entrega e de serviço, repasse dos motoboys, fechamento por forma de pagamento, vendas por canal, mais vendidos e pedidos por horário (hoje, ontem, 7 dias, 30 dias, mês).
+
+## Cardápio em telas LCD com ESP32
+
+A pasta `esp32/` tem o programa da tela (PlatformIO ou Arduino IDE). A
+placa lê do Supabase o cardápio da tela cadastrada em **Loja → Telas e TV**
+e passa as páginas sozinha; a cada minuto busca de novo, então preço novo
+ou produto pausado aparece na tela sem regravar a placa.
+
+- Placas prontas: **ESP32-2432S028R** (a "CYD", tela de 2,8" 320×240,
+  ambiente `cyd-28`) e **ESP32 + tela ILI9488 de 3,5"** (480×320,
+  ambiente `ili9488-35`). Outras telas: ajuste os pinos/driver no
+  `platformio.ini` (são as opções da biblioteca TFT_eSPI).
+- Configuração: copie `esp32/PainelCardapio/config.exemplo.h` para
+  `config.h` e preencha Wi-Fi, URL e chave anon do Supabase e o ID da
+  tela (a área da loja mostra esse bloco pronto em "Configurar ESP32").
+- PlatformIO: `cd esp32 && pio run -e cyd-28 -t upload`.
+- Arduino IDE: instale as bibliotecas **TFT_eSPI** e **ArduinoJson 7**,
+  copie os `-D` do ambiente da sua tela no `platformio.ini` para o
+  `User_Setup.h` da TFT_eSPI e abra `PainelCardapio/PainelCardapio.ino`.
+- O ESP32 só funciona com o Supabase configurado (no modo demonstração
+  os dados ficam no navegador e a placa não tem como lê-los).
 
 ## Rodar localmente
 
@@ -65,5 +95,10 @@ botão que cria cardápio, promoções e um motoboy de exemplo (motoboy
 - **Busca de endereço** usa o Nominatim (OpenStreetMap), que é gratuito,
   mas tem limite de uso (cerca de 1 busca por segundo). Para volume alto,
   vale trocar pela API do Google Maps.
+- **Pagamento**: o app registra como o cliente vai pagar e o que foi
+  recebido, mas não emite NFC-e nem integra maquininha/TEF.
+- **ESP32**: a conexão HTTPS não valida o certificado (`setInsecure`).
+  A chave usada já é pública, mas para validar troque por
+  `setCACert` com o certificado raiz do Supabase.
 - As telas se atualizam a cada 5 s (*polling*). Dá para trocar pelo
   Supabase Realtime se precisar de atualização instantânea.

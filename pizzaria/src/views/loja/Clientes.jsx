@@ -33,7 +33,7 @@ export default function Clientes() {
                 <td>{c.qtd}</td>
                 <td>{brl(c.total)}</td>
                 <td className="suave pequeno">{dataHora(c.ultimo)}</td>
-                <td className="forte" style={{ color: "#15803d" }}>{brl(c.saldo)}</td>
+                <td className="forte" style={{ color: "var(--manjericao)" }}>{brl(c.saldo)}</td>
               </tr>
             ))}
           </tbody>
@@ -93,7 +93,7 @@ function DetalheCliente({ c, pedidos, aoFechar }) {
           {(c.movimentos || []).map((m) => (
             <div key={m.id} className="linha pequeno" style={{ padding: "3px 0" }}>
               <span className="suave">{dataHora(m.em)}</span><span>{m.descricao}</span>
-              <span className="direita forte" style={{ color: m.valor >= 0 ? "#15803d" : "#b91c1c" }}>{brl(m.valor)}</span>
+              <span className="direita forte" style={{ color: m.valor >= 0 ? "var(--manjericao)" : "#b42318" }}>{brl(m.valor)}</span>
             </div>
           ))}
         </div>

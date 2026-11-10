@@ -31,9 +31,9 @@ export default function Carteira() {
         <button className="btn pequeno" onClick={() => { sairCliente(); recarregar(); }}><LogOut size={14} /> Sair</button>
       </div>
 
-      <div className="cartao" style={{ background: "linear-gradient(135deg, #b3261e, #7f1d17)", color: "#fff", border: "none" }}>
+      <div className="cartao" style={{ background: "var(--forno)", color: "#fff", border: "none" }}>
         <div className="pequeno" style={{ opacity: 0.85 }}>Saldo disponível</div>
-        <div style={{ fontSize: 34, fontWeight: 800, fontFamily: "Fraunces, serif" }}>{brl(cliente.saldo)}</div>
+        <div style={{ fontSize: 34, fontWeight: 800, fontFamily: "var(--fonte-titulo)" }}>{brl(cliente.saldo)}</div>
         <div className="pequeno" style={{ opacity: 0.85 }}>
           {cliente.nome} · {cliente.telefone}
           {cfg.carteira.cashbackPercentual > 0 && <> · {cfg.carteira.cashbackPercentual}% de volta em cada pedido entregue</>}
@@ -43,7 +43,7 @@ export default function Carteira() {
       <div className="cartao coluna">
         <h3>Endereços salvos</h3>
         {(cliente.enderecos || []).map((e) => (
-          <div key={e.id} className="linha" style={{ borderBottom: "1px solid #ecdcc8", paddingBottom: 8 }}>
+          <div key={e.id} className="linha" style={{ borderBottom: "1px solid var(--linha)", paddingBottom: 8 }}>
             <div style={{ flex: 1 }}>
               <div className="forte">{e.rotulo}</div>
               <div className="suave pequeno">{e.complemento ? e.complemento + " — " : ""}{e.texto}</div>
@@ -73,7 +73,7 @@ export default function Carteira() {
               <tr key={m.id}>
                 <td className="suave pequeno">{dataHora(m.em)}</td>
                 <td>{m.descricao}</td>
-                <td className="forte" style={{ textAlign: "right", color: m.valor >= 0 ? "#15803d" : "#b91c1c" }}>
+                <td className="forte" style={{ textAlign: "right", color: m.valor >= 0 ? "var(--manjericao)" : "#b42318" }}>
                   {m.valor >= 0 ? "+" : ""}{brl(m.valor)}
                 </td>
               </tr>

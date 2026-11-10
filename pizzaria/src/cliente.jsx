@@ -56,7 +56,7 @@ export function Identificacao({ aoEntrar, titulo = "Identifique-se" }) {
       {precisaNome && (
         <Campo rotulo="Primeira vez aqui? Como podemos te chamar?" value={nome} onChange={(e) => setNome(e.target.value)} autoFocus />
       )}
-      {erro && <div className="pequeno" style={{ color: "#b91c1c" }}>{erro}</div>}
+      {erro && <div className="pequeno" style={{ color: "#b42318" }}>{erro}</div>}
       <button className="btn primario" disabled={ocupado}>{precisaNome ? "Criar cadastro" : "Continuar"}</button>
     </form>
   );

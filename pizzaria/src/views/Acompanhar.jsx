@@ -1,5 +1,5 @@
 import { Phone, MessageCircle } from "lucide-react";
-import { brl, hora, STATUS, FLUXO, PAGAMENTOS, useConfig, useRegistro, distanciaKm, soDigitos } from "../logic.js";
+import { brl, hora, STATUS, FLUXO, FLUXO_LOCAL, nomePagamento, nomeStatus, ehLocal, canalDo, senhaDo, useConfig, useRegistro, distanciaKm, soDigitos } from "../logic.js";
 import Mapa from "../Mapa.jsx";
 
 // Posição do motoboy é considerada "ao vivo" se chegou nos últimos 2 min.
@@ -14,6 +14,7 @@ export default function Acompanhar({ id }) {
 
   if (!carregado) return <div className="vazio">Carregando pedido…</div>;
   if (!pedido) return <div className="vazio">Pedido não encontrado.</div>;
+  if (ehLocal(pedido)) return <AcompanharLocal pedido={pedido} />;
 
   const st = pedido.status;
   const idxAtual = FLUXO.indexOf(st);
@@ -43,7 +44,7 @@ export default function Acompanhar({ id }) {
       </div>
 
       {st !== "cancelado" && st !== "entregue" && (
-        <div className="cartao" style={{ background: "#fff4e0", borderColor: "#f1d29e" }}>
+        <div className="cartao" style={{ background: "var(--aviso)", borderColor: "#f0d78c" }}>
           {eta ? (
             <div className="linha"><span className="pulso" /> <b>{motoboy?.nome || "O motoboy"}</b> está a {eta.km.toFixed(1)} km — chega em cerca de <b>{eta.min} min</b>.</div>
           ) : st === "em_rota" ? (
@@ -58,7 +59,7 @@ export default function Acompanhar({ id }) {
 
       <div className="cartao">
         {st === "cancelado" ? (
-          <div style={{ color: "#b91c1c" }}>Este pedido foi cancelado{pedido.usoCarteira > 0 ? "; o saldo da carteira usado foi devolvido" : ""}.</div>
+          <div style={{ color: "#b42318" }}>Este pedido foi cancelado{pedido.usoCarteira > 0 ? "; o saldo da carteira usado foi devolvido" : ""}.</div>
         ) : (
           <ul className="timeline">
             {FLUXO.map((s, i) => (
@@ -96,7 +97,7 @@ export default function Acompanhar({ id }) {
         {pedido.usoCarteira > 0 && <div className="desc"><span>Carteira</span><span>-{brl(pedido.usoCarteira)}</span></div>}
         <div className="total"><span>Total a pagar</span><span>{brl(pedido.aPagar)}</span></div>
         <div className="suave pequeno">
-          {PAGAMENTOS[pedido.pagamento.metodo]?.nome}
+          {nomePagamento(pedido.pagamento.metodo)}
           {pedido.pagamento.trocoPara ? ` · troco para ${brl(pedido.pagamento.trocoPara)}` : ""}
         </div>
         <div className="suave pequeno" style={{ marginTop: 6 }}>📍 {pedido.endereco.complemento ? pedido.endereco.complemento + " — " : ""}{pedido.endereco.texto}</div>
@@ -107,6 +108,51 @@ export default function Acompanhar({ id }) {
           <MessageCircle size={16} /> Falar com a pizzaria
         </a>
       )}
+    </div>
+  );
+}
+
+// Pedido feito no salão (mesa) ou no totem: sem mapa, com a senha grande.
+function AcompanharLocal({ pedido }) {
+  const st = pedido.status;
+  const idxAtual = FLUXO_LOCAL.indexOf(st);
+  const quando = (s) => (pedido.historico || []).filter((h) => h.status === s).pop()?.em;
+  const mesa = canalDo(pedido) === "mesa";
+  return (
+    <div className="coluna" style={{ gap: 16, maxWidth: 560, margin: "0 auto" }}>
+      <div className="cartao coluna" style={{ alignItems: "center", textAlign: "center", padding: 28 }}>
+        <div className="rotulo">{mesa ? `Mesa ${pedido.mesa}` : "Sua senha"}</div>
+        <div className="senha-grande">{mesa ? pedido.mesa : senhaDo(pedido)}</div>
+        <span className="selo" style={{ background: STATUS[st]?.cor, fontSize: 14, padding: "5px 12px" }}>{nomeStatus(pedido)}</span>
+        {st !== "entregue" && st !== "cancelado" && <div className="suave">Previsão: {hora(pedido.previsaoEm)}</div>}
+      </div>
+      <div className="cartao">
+        {st === "cancelado" ? (
+          <div style={{ color: "#b42318" }}>Este pedido foi cancelado.</div>
+        ) : (
+          <ul className="timeline">
+            {FLUXO_LOCAL.map((s, i) => (
+              <li key={s} className={i < idxAtual ? "feito" : i === idxAtual ? "feito atual" : ""}>
+                <span className="ponto" />
+                <span style={{ flex: 1 }}>{nomeStatus(pedido, s)}</span>
+                <span className="pequeno suave tabular">{hora(quando(s))}</span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+      <div className="cartao resumo">
+        {pedido.itens.map((i, k) => (
+          <div key={k}>
+            <span>{i.qtd}× {i.nome}{i.sabor2 ? ` / ${i.sabor2.nome}` : ""} <span className="suave pequeno">({i.tamanho})</span></span>
+            <span>{brl(i.precoUnit * i.qtd)}</span>
+          </div>
+        ))}
+        {(pedido.descontos || []).map((d) => <div key={d.promocaoId} className="desc"><span>{d.nome}</span><span>-{brl(d.valor)}</span></div>)}
+        <div className="total"><span>Total</span><span>{brl(pedido.total)}</span></div>
+        <div className="suave pequeno">{pedido.pago ? "Pago" : nomePagamento(pedido.pagamento.metodo)}</div>
+      </div>
+      {mesa && <a className="btn" href={`#/mesa/${pedido.mesa}`}>Voltar ao cardápio da mesa</a>}
     </div>
   );
 }

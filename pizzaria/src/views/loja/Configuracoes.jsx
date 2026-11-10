@@ -34,6 +34,8 @@ export default function Configuracoes() {
     e.dedicada.adicionalPercentual = numero(e.dedicada.adicionalPercentual);
     n.carteira.cashbackPercentual = numero(n.carteira.cashbackPercentual);
     for (const k of Object.keys(n.motoboy)) n.motoboy[k] = numero(n.motoboy[k]);
+    for (const k of Object.keys(n.salao)) n.salao[k] = numero(n.salao[k]);
+    n.salao.mesas = Math.max(0, Math.min(200, Math.round(n.salao.mesas)));
     if (!/^\d{4,8}$/.test(String(n.adminPin))) return toast("O PIN da loja deve ter de 4 a 8 números.");
     await salvarConfig(n);
     setCfg(n);
@@ -133,6 +135,16 @@ export default function Configuracoes() {
             })}
           </tbody>
         </table>
+      </section>
+
+      <section className="cartao coluna">
+        <h3>Salão, mesas e totem</h3>
+        <div className="campos">
+          <Campo rotulo="Número de mesas" {...num("salao.mesas")} />
+          <Campo rotulo="Taxa de serviço (%)" {...num("salao.taxaServicoPercentual")} />
+          <Campo rotulo="Tempo de preparo no salão (min)" {...num("salao.tempoPreparoMin")} />
+        </div>
+        <div className="suave pequeno">Cada mesa ganha um QR code (em Salão e mesas) que abre o cardápio já com o número da mesa.</div>
       </section>
 
       <section className="cartao coluna">

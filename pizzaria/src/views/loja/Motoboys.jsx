@@ -34,7 +34,7 @@ export default function Motoboys() {
             <div key={m.id} className="cartao coluna" style={{ gap: 6, opacity: m.ativo === false ? 0.55 : 1 }}>
               <div className="linha entre">
                 <h3>🛵 {m.nome}</h3>
-                {online ? <span className="selo" style={{ background: "#15803d" }}>GPS ativo</span> : <span className="selo claro">{loc ? `visto ${hora(loc.em)}` : "offline"}</span>}
+                {online ? <span className="selo" style={{ background: "var(--manjericao)" }}>GPS ativo</span> : <span className="selo claro">{loc ? `visto ${hora(loc.em)}` : "offline"}</span>}
               </div>
               <div className="suave pequeno">{m.telefone} · {m.veiculo} {m.placa}</div>
               <div className="pequeno">

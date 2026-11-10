@@ -38,7 +38,7 @@ export default function Promocoes() {
           <div key={p.id} className="cartao coluna" style={{ gap: 6 }}>
             <div className="linha entre">
               <h3>{p.nome || p.codigo}</h3>
-              {promocaoValida(p) ? <span className="selo" style={{ background: "#15803d" }}>Valendo</span> : <span className="selo claro">Inativa</span>}
+              {promocaoValida(p) ? <span className="selo" style={{ background: "var(--manjericao)" }}>Valendo</span> : <span className="selo claro">Inativa</span>}
             </div>
             <div className="pequeno">
               {p.tipo === "cupom" ? <span className="selo" style={{ background: "#6d5bd0" }}>Cupom {p.codigo}</span> : <span className="selo claro">Automática</span>}

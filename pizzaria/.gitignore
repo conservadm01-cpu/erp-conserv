@@ -3,3 +3,5 @@ dist
 .env
 .env.local
 .DS_Store
+esp32/PainelCardapio/config.h
+esp32/.pio

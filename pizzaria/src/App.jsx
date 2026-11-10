@@ -2,13 +2,16 @@ import { useEffect, useState } from "react";
 import { Pizza, ClipboardList, Wallet, Store, Bike } from "lucide-react";
 import { modoDemo, modoTeste, listar, salvarItem, armazem } from "./db.js";
 import { useConfig, criarExemplos, CONFIG_PADRAO } from "./logic.js";
-import { Toasts } from "./ui.jsx";
+import { Toasts, PizzaIlustrada } from "./ui.jsx";
 import Cardapio from "./views/Cardapio.jsx";
 import MeusPedidos from "./views/MeusPedidos.jsx";
 import Carteira from "./views/Carteira.jsx";
 import Acompanhar from "./views/Acompanhar.jsx";
 import Loja from "./views/Loja.jsx";
 import Motoboy from "./views/Motoboy.jsx";
+import Totem from "./views/Totem.jsx";
+import Mesa from "./views/Mesa.jsx";
+import Painel from "./views/Painel.jsx";
 
 // Rotas por hash (#/...), funcionam em qualquer hospedagem estática.
 function useRota() {
@@ -49,6 +52,10 @@ export default function App() {
   const [cfg] = useConfig();
   const pagina = rota[0] || "";
   const areaInterna = pagina === "loja" || pagina === "motoboy";
+  // Telas do salão: sem menu do cliente nem rodapé.
+  const telaDeLoja = pagina === "totem" || pagina === "mesa";
+
+  if (pagina === "painel") return <Painel telaId={rota[1]} />;
 
   let tela;
   if (pagina === "pedidos") tela = <MeusPedidos />;
@@ -56,6 +63,8 @@ export default function App() {
   else if (pagina === "pedido") tela = <Acompanhar id={rota[1]} />;
   else if (pagina === "loja") tela = <Loja aba={rota[1] || "pedidos"} />;
   else if (pagina === "motoboy") tela = <Motoboy />;
+  else if (pagina === "totem") tela = <Totem />;
+  else if (pagina === "mesa") tela = <Mesa numero={rota[1]} />;
   else tela = <Cardapio />;
 
   const link = (href, rotulo, Icone, ativo) => (
@@ -65,9 +74,15 @@ export default function App() {
   return (
     <>
       <header className="topo">
-        <a className="marca" href="#/">🍕 {cfg.loja.nome}</a>
+        <a className="marca" href={telaDeLoja ? undefined : "#/"}>
+          <PizzaIlustrada nome={cfg.loja.nome} className="disco" tamanho={34} /> <span className="nome-loja">{cfg.loja.nome}</span>
+        </a>
         <nav>
-          {pagina === "loja" ? (
+          {pagina === "mesa" ? (
+            <span className="selo ouro" style={{ fontSize: 14, padding: "6px 12px" }}>Mesa {rota[1]}</span>
+          ) : pagina === "totem" ? (
+            <span className="selo ouro" style={{ fontSize: 14, padding: "6px 12px" }}>Autoatendimento</span>
+          ) : pagina === "loja" ? (
             link("#/loja", "Loja", Store, true)
           ) : pagina === "motoboy" ? (
             link("#/motoboy", "Motoboy", Bike, true)
@@ -90,13 +105,13 @@ export default function App() {
         </div>
       )}
       <main className="conteudo">{tela}</main>
-      {!areaInterna && (
-        <footer className="suave pequeno" style={{ textAlign: "center", paddingBottom: 100 }}>
+      {!areaInterna && !telaDeLoja && (
+        <footer className="rodape">
           <a href="#/loja">Área da loja</a> · <a href="#/motoboy">Sou motoboy</a>
         </footer>
       )}
       {areaInterna && (
-        <footer className="suave pequeno" style={{ textAlign: "center", padding: 20 }}>
+        <footer className="rodape" style={{ paddingBottom: 30 }}>
           <a href="#/">Voltar ao cardápio</a>
         </footer>
       )}

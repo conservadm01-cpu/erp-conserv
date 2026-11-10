@@ -69,3 +69,43 @@ export function BotaoConfirmar({ aoConfirmar, children, texto = "Confirmar?", cl
     </button>
   );
 }
+
+// Pizza desenhada em SVG, usada quando o produto não tem foto. A cobertura
+// varia conforme o nome, para cada sabor ter a sua cara.
+const COBERTURAS = [
+  ["#8f1d14", "#f6efd9"], // calabresa / mussarela
+  ["#2e7a48", "#f6efd9"], // manjericão
+  ["#5b3a1e", "#f3d27a"], // frango / catupiry
+  ["#3b2a20", "#fff3d6"], // chocolate
+  ["#c2272d", "#7a1d12"], // morango
+];
+export function PizzaIlustrada({ nome = "", tamanho = 120, doce = false, className }) {
+  let h = 0;
+  for (const c of nome) h = (h * 31 + c.charCodeAt(0)) >>> 0;
+  const [cor1, cor2] = doce ? COBERTURAS[3 + (h % 2)] : COBERTURAS[h % 3];
+  const molho = doce ? "#4a2c1d" : "#c8361d";
+  const pontos = Array.from({ length: 9 }, (_, i) => {
+    const a = (i / 9) * Math.PI * 2 + (h % 7);
+    const r = 14 + ((h >> i) % 3) * 9;
+    return [50 + Math.cos(a) * r, 50 + Math.sin(a) * r, i % 3 === 0 ? cor2 : cor1];
+  });
+  return (
+    <svg viewBox="0 0 100 100" width={tamanho} height={tamanho} className={className} aria-hidden="true">
+      <circle cx="50" cy="50" r="48" fill="#e7a43c" />
+      <circle cx="50" cy="50" r="48" fill="none" stroke="#c9822a" strokeWidth="2" strokeDasharray="3 5" />
+      <circle cx="50" cy="50" r="40" fill={molho} />
+      <circle cx="50" cy="50" r="38" fill={doce ? "#5a3624" : "#f4d48a"} opacity="0.9" />
+      <path d="M50 50 L50 10 A40 40 0 0 1 84.6 30 Z" fill="none" stroke="#c9822a" strokeWidth="0.8" opacity="0.5" />
+      <path d="M50 50 L84.6 70 M50 50 L15.4 70 M50 50 L15.4 30" stroke="#c9822a" strokeWidth="0.8" opacity="0.5" />
+      {pontos.map(([x, y, c], i) => <circle key={i} cx={x} cy={y} r={i % 3 === 0 ? 4 : 5.5} fill={c} />)}
+    </svg>
+  );
+}
+
+export function FotoProduto({ produto }) {
+  if (produto.imagem) return null;
+  if (produto.categoria === "pizza" || produto.categoria === "doce") {
+    return <PizzaIlustrada nome={produto.nome} doce={produto.categoria === "doce"} className="ilustra" />;
+  }
+  return <span className="emoji"><Emoji categoria={produto.categoria} /></span>;
+}

@@ -156,7 +156,7 @@ export default function Checkout({ itens, promocoes, aoFechar, aoConcluir }) {
                 <span className="preco">{brl(entregaDedicada.total)}</span>
               </button>
             )}
-            {entrega?.foraDoRaio && <div className="pequeno" style={{ color: "#b91c1c" }}>Este endereço está fora da nossa área de entrega.</div>}
+            {entrega?.foraDoRaio && <div className="pequeno" style={{ color: "#b42318" }}>Este endereço está fora da nossa área de entrega.</div>}
           </section>
         )}
 
@@ -166,20 +166,20 @@ export default function Checkout({ itens, promocoes, aoFechar, aoConcluir }) {
             <input className="in" placeholder="Código do cupom" value={cupomDigitado} onChange={(e) => setCupomDigitado(e.target.value.toUpperCase())} />
             <button className="btn" onClick={() => setCupom(cupomDigitado)}>Aplicar</button>
           </div>
-          {cupom && cupomAplicado && <div className="pequeno" style={{ color: "#15803d" }}>Cupom {cupomAplicado.codigo} aplicado.</div>}
-          {cupom && cupomErro && <div className="pequeno" style={{ color: "#b91c1c" }}>{cupomErro}</div>}
+          {cupom && cupomAplicado && <div className="pequeno" style={{ color: "var(--manjericao)" }}>Cupom {cupomAplicado.codigo} aplicado.</div>}
+          {cupom && cupomErro && <div className="pequeno" style={{ color: "#b42318" }}>{cupomErro}</div>}
         </section>
 
         <section className="coluna">
           <h3>Pagamento</h3>
           {carteiraDisponivel && (
-            <label className="opcao" style={usarCarteira ? { borderColor: "#15803d", background: "#f0fbf3" } : null}>
+            <label className="opcao" style={usarCarteira ? { borderColor: "var(--manjericao)", background: "#f0fbf3" } : null}>
               <input type="checkbox" checked={usarCarteira} onChange={(e) => setUsarCarteira(e.target.checked)} />
               <div style={{ flex: 1 }}>
                 <div className="forte">Usar saldo da carteira</div>
                 <div className="suave pequeno">Disponível: {brl(saldo)}</div>
               </div>
-              {usarCarteira && <span className="forte" style={{ color: "#15803d" }}>-{brl(usoCarteira)}</span>}
+              {usarCarteira && <span className="forte" style={{ color: "var(--manjericao)" }}>-{brl(usoCarteira)}</span>}
             </label>
           )}
           {aPagar > 0 && metodos.map((k) => (

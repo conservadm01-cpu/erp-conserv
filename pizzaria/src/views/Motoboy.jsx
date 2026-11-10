@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Navigation, Phone, LogOut, MapPin, Zap } from "lucide-react";
 import { gravar, salvarItem, armazem, modoTeste } from "../db.js";
 import {
-  brl, hora, useColecao, useConfig, mudarStatus, repasseMotoboy, ehHoje, soDigitos, PAGAMENTOS, distanciaKm,
+  brl, hora, useColecao, useConfig, mudarStatus, repasseMotoboy, ehHoje, soDigitos, nomePagamento, ehLocal, distanciaKm,
 } from "../logic.js";
 import { Campo, SeloStatus, toast } from "../ui.jsx";
 import Mapa from "../Mapa.jsx";
@@ -86,7 +86,7 @@ export default function Motoboy() {
   const eu = motoboys.find((m) => m.id === meuId);
 
   const meus = pedidos.filter((p) => p.motoboyId === meuId && (p.status === "pronto" || p.status === "em_rota"));
-  const disponiveis = pedidos.filter((p) => p.status === "pronto" && !p.motoboyId);
+  const disponiveis = pedidos.filter((p) => !ehLocal(p) && p.status === "pronto" && !p.motoboyId);
   const emRota = meus.some((p) => p.status === "em_rota");
   const destinoSimulado = meus.find((p) => p.status === "em_rota")?.endereco;
   const gpsReal = useRastreamento(meuId, !modoTeste && !!eu && gpsLigado && (emRota || meus.length > 0));
@@ -112,7 +112,7 @@ export default function Motoboy() {
       </div>
 
       <div className="cartao linha">
-        {gps.ativo ? <span className="pulso" /> : <MapPin size={16} color="#7a6656" />}
+        {gps.ativo ? <span className="pulso" /> : <MapPin size={16} color="var(--suave)" />}
         <div style={{ flex: 1 }} className="pequeno">
           {gps.ativo
             ? <>Localização sendo compartilhada{gps.ultima ? ` · precisão ${gps.ultima.precisao} m · ${hora(gps.ultima.em)}` : ""}</>
@@ -181,7 +181,7 @@ function CartaoEntrega({ p, cfg, children }) {
       </div>
       <div className="pequeno">📍 {p.endereco.complemento ? <b>{p.endereco.complemento} — </b> : ""}{p.endereco.texto}</div>
       <div className="suave pequeno">
-        {p.entrega?.km?.toFixed(1)} km · Cobrar {brl(p.aPagar)} ({PAGAMENTOS[p.pagamento.metodo]?.nome}
+        {p.entrega?.km?.toFixed(1)} km · Cobrar {brl(p.aPagar)} ({nomePagamento(p.pagamento.metodo)}
         {p.pagamento.trocoPara ? `, troco para ${brl(p.pagamento.trocoPara)}` : ""}) · repasse {brl(repasseMotoboy(p, cfg))}
       </div>
       <div className="linha">{children}</div>
@@ -214,7 +214,7 @@ function EntrarMotoboy({ motoboys, aoEntrar }) {
         </select>
       </Campo>
       <Campo rotulo="PIN" type="password" inputMode="numeric" value={pin} onChange={(e) => setPin(e.target.value)} />
-      {erro && <div className="pequeno" style={{ color: "#b91c1c" }}>{erro}</div>}
+      {erro && <div className="pequeno" style={{ color: "#b42318" }}>{erro}</div>}
       <button className="btn primario">Entrar</button>
     </form>
   );

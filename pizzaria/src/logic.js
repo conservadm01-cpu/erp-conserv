@@ -46,7 +46,27 @@ export const CONFIG_PADRAO = {
   },
   carteira: { cashbackPercentual: 5 },
   motoboy: { repassePorEntrega: 5, repasseKm: 0.5, repasseDedicada: 5 },
+  salao: { mesas: 12, taxaServicoPercentual: 10, tempoPreparoMin: 20 },
 };
+
+// ---------- Canais de venda ----------
+// delivery: pedido online com entrega; mesa: cliente no salão pede pelo QR
+// code da mesa; balcao: totem de autoatendimento / retirada no balcão.
+export const CANAIS = {
+  delivery: { nome: "Delivery", emoji: "🛵" },
+  mesa: { nome: "Mesa", emoji: "🍽️" },
+  balcao: { nome: "Balcão", emoji: "🧾" },
+};
+export const canalDo = (p) => p?.canal || "delivery";
+export const ehLocal = (p) => canalDo(p) !== "delivery";
+// Senha curta para chamar no balcão / mostrar no painel.
+export const senhaDo = (p) => String(p?.numero || "").slice(-3);
+export function rotuloPedido(p) {
+  const c = canalDo(p);
+  if (c === "mesa") return `Mesa ${p.mesa}`;
+  if (c === "balcao") return `Senha ${senhaDo(p)}`;
+  return `#${p.numero}`;
+}
 
 export const PAGAMENTOS = {
   pix: { nome: "Pix", detalhe: "Pague agora pela chave Pix" },
@@ -56,6 +76,8 @@ export const PAGAMENTOS = {
   vale: { nome: "Vale-refeição", detalhe: "Maquininha na entrega" },
   carteira: { nome: "Saldo da carteira", detalhe: "Usa seu saldo/cashback" },
 };
+
+export const nomePagamento = (m) => (m === "conta" ? "Conta da mesa" : PAGAMENTOS[m]?.nome || m);
 
 function mesclar(padrao, salvo) {
   if (!salvo || typeof salvo !== "object" || Array.isArray(salvo)) return salvo ?? padrao;
@@ -78,6 +100,21 @@ export const STATUS = {
   cancelado: { nome: "Cancelado", curto: "Cancelado", cor: "#b91c1c" },
 };
 export const FLUXO = ["recebido", "preparo", "pronto", "em_rota", "entregue"];
+export const FLUXO_LOCAL = ["recebido", "preparo", "pronto", "entregue"];
+export const fluxoDo = (p) => (ehLocal(p) ? FLUXO_LOCAL : FLUXO);
+
+// Nome do status conforme o canal (no salão não há motoboy nem rota).
+export function nomeStatus(p, s = p.status) {
+  if (canalDo(p) === "mesa") {
+    if (s === "pronto") return "Pronto, a caminho da mesa";
+    if (s === "entregue") return "Servido";
+  }
+  if (canalDo(p) === "balcao") {
+    if (s === "pronto") return "Pronto! Retire no balcão";
+    if (s === "entregue") return "Retirado";
+  }
+  return STATUS[s]?.nome || s;
+}
 
 export const CATEGORIAS = {
   pizza: "Pizzas",
@@ -323,6 +360,7 @@ export async function mudarStatus(pedido, status, extra = {}, cfg) {
     atualizado.carteiraEstornada = true;
   }
   await salvarItem("pedido", atualizado);
+  if (ehLocal(atualizado)) await atualizarProntos().catch(() => {});
   return atualizado;
 }
 
@@ -368,7 +406,80 @@ export async function criarExemplos() {
     id: uid(), nome: "Primeira compra", tipo: "cupom", codigo: "BEMVINDO", descontoTipo: "valor", valor: 10,
     alvo: "pedido", pedidoMinimo: 50, diasSemana: [], ativo: true,
   });
+  await salvarItem("tela", {
+    id: "balcao-pizzas", nome: "Balcão — pizzas", tipo: "lcd", categorias: ["pizza", "doce"],
+    itensPorPagina: 5, segundosPorPagina: 10, mostrarProntos: false, mostrarDescricao: false,
+  });
+  await salvarItem("tela", {
+    id: "tv-salao", nome: "TV do salão", tipo: "tv", categorias: [],
+    itensPorPagina: 8, segundosPorPagina: 12, mostrarProntos: true, mostrarDescricao: true,
+  });
+  await publicarTelas();
   await salvarItem("motoboy", {
     id: uid(), nome: "Carlos", telefone: "", veiculo: "Honda CG 160", placa: "ABC1D23", pin: "1111", ativo: true,
   });
+}
+
+// ---------- Painéis (TV e telas LCD com ESP32) ----------
+// Cada tela cadastrada recebe um resumo pronto para exibir em "painel:<id>".
+// O ESP32 lê só essa linha (pequena, sem acentos, preços já formatados), o
+// que cabe com folga na memória dele.
+export const semAcento = (s) =>
+  String(s || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^\x20-\x7E]/g, "").trim();
+
+const precoTxt = (v) => (Number(v) || 0).toFixed(2).replace(".", ",");
+
+export function montarPainel(tela, produtos, promocoes, cfg) {
+  const cats = (tela.categorias && tela.categorias.length ? tela.categorias : Object.keys(CATEGORIAS));
+  const porPagina = Math.max(1, Number(tela.itensPorPagina) || 6);
+  const paginas = [];
+  for (const c of cats) {
+    const itens = produtos
+      .filter((p) => p.ativo !== false && p.categoria === c)
+      .sort((a, b) => a.nome.localeCompare(b.nome))
+      .map((p) => {
+        const promo = precoPromocional(p, promocoes);
+        const fator = promo ? 1 - promo.valor / 100 : 1;
+        return {
+          n: semAcento(p.nome),
+          d: tela.mostrarDescricao === false ? "" : semAcento(p.descricao).slice(0, 70),
+          // Preços por tamanho: "Broto 32,00 | Grande 58,00"
+          p: p.tamanhos.map((t) => (p.tamanhos.length > 1 ? semAcento(t.nome) + " " : "") + precoTxt(t.preco * fator)).join("  "),
+          o: promo ? 1 : 0,
+        };
+      });
+    for (let i = 0; i < itens.length; i += porPagina) {
+      paginas.push({ t: semAcento(CATEGORIAS[c]), i: itens.slice(i, i + porPagina) });
+    }
+  }
+  return {
+    v: 1,
+    loja: semAcento(cfg.loja.nome),
+    seg: Math.max(4, Number(tela.segundosPorPagina) || 10),
+    prontos: tela.mostrarProntos ? 1 : 0,
+    promo: promocoes.filter((p) => p.tipo !== "cupom" && promocaoValida(p)).map((p) => semAcento(p.nome)).slice(0, 4),
+    pag: paginas,
+    em: new Date().toISOString(),
+  };
+}
+
+// Regrava o resumo de todas as telas. Chamado ao salvar produtos,
+// promoções ou a própria tela.
+export async function publicarTelas(cfg) {
+  const [telas, produtos, promocoes] = await Promise.all([listar("tela"), listar("produto"), listar("promocao")]);
+  const config = cfg || mesclar(CONFIG_PADRAO, await obter("config"));
+  await Promise.all(telas.map((t) => gravar(`painel:${t.id}`, montarPainel(t, produtos, promocoes, config))));
+  return telas.length;
+}
+
+// Lista de senhas/mesas prontas, lida pelo painel da TV e pelo ESP32.
+export async function atualizarProntos() {
+  const pedidos = await listar("pedido");
+  const limite = Date.now() - 40 * 60 * 1000;
+  const prontos = pedidos
+    .filter((p) => ehLocal(p) && p.status === "pronto" && new Date(p.criadoEm).getTime() > limite)
+    .sort((a, b) => b.criadoEm.localeCompare(a.criadoEm))
+    .slice(0, 8)
+    .map((p) => (canalDo(p) === "mesa" ? `M${p.mesa}` : senhaDo(p)));
+  await gravar("prontos", { l: prontos, em: new Date().toISOString() });
 }
