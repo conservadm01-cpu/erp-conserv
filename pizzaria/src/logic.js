@@ -92,12 +92,12 @@ function mesclar(padrao, salvo) {
 
 // ---------- Status do pedido ----------
 export const STATUS = {
-  recebido: { nome: "Pedido recebido", curto: "Recebido", cor: "#6d5bd0" },
-  preparo: { nome: "Em preparo", curto: "Preparo", cor: "#d97706" },
-  pronto: { nome: "Pronto, aguardando motoboy", curto: "Pronto", cor: "#0e7490" },
-  em_rota: { nome: "Saiu para entrega", curto: "Em rota", cor: "#2563eb" },
-  entregue: { nome: "Entregue", curto: "Entregue", cor: "#15803d" },
-  cancelado: { nome: "Cancelado", curto: "Cancelado", cor: "#b91c1c" },
+  recebido: { nome: "Pedido recebido", curto: "Recebido", cor: "#7468b8" },
+  preparo: { nome: "Em preparo", curto: "Preparo", cor: "#b97f2c" },
+  pronto: { nome: "Pronto, aguardando motoboy", curto: "Pronto", cor: "#3a8590" },
+  em_rota: { nome: "Saiu para entrega", curto: "Em rota", cor: "#4d6fb8" },
+  entregue: { nome: "Entregue", curto: "Entregue", cor: "#4a8d63" },
+  cancelado: { nome: "Cancelado", curto: "Cancelado", cor: "#a8473d" },
 };
 export const FLUXO = ["recebido", "preparo", "pronto", "em_rota", "entregue"];
 export const FLUXO_LOCAL = ["recebido", "preparo", "pronto", "entregue"];

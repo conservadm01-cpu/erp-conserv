@@ -67,7 +67,7 @@ export default function Loja({ aba }) {
       >
         <h2><Lock size={20} style={{ verticalAlign: -3 }} /> Área da loja</h2>
         <input className="in" type="password" inputMode="numeric" placeholder="PIN da loja" value={pin} onChange={(e) => { setPin(e.target.value); setErro(false); }} autoFocus />
-        {erro && <div className="pequeno" style={{ color: "#b42318" }}>PIN incorreto. Tente de novo.</div>}
+        {erro && <div className="pequeno" style={{ color: "var(--erro)" }}>PIN incorreto. Tente de novo.</div>}
         <button className="btn primario">Entrar</button>
         <div className="suave pequeno">PIN inicial: 1234. Troque em Configurações.</div>
       </form>

@@ -171,11 +171,11 @@ export default function Motoboy() {
 
 function CartaoEntrega({ p, cfg, children }) {
   return (
-    <div className="cartao coluna" style={p.entrega?.dedicada ? { borderColor: "#d97706", boxShadow: "inset 0 0 0 1px #d97706" } : null}>
+    <div className="cartao coluna" style={p.entrega?.dedicada ? { borderColor: "var(--ambar)", boxShadow: "inset 0 0 0 1px var(--ambar)" } : null}>
       <div className="linha entre">
         <span className="forte">#{p.numero} · {p.cliente.nome}</span>
         <div className="linha" style={{ gap: 6 }}>
-          {p.entrega?.dedicada && <span className="selo" style={{ background: "#d97706" }}><Zap size={12} /> Dedicada</span>}
+          {p.entrega?.dedicada && <span className="selo" style={{ background: "var(--ambar)" }}><Zap size={12} /> Dedicada</span>}
           <SeloStatus status={p.status} />
         </div>
       </div>
@@ -214,7 +214,7 @@ function EntrarMotoboy({ motoboys, aoEntrar }) {
         </select>
       </Campo>
       <Campo rotulo="PIN" type="password" inputMode="numeric" value={pin} onChange={(e) => setPin(e.target.value)} />
-      {erro && <div className="pequeno" style={{ color: "#b42318" }}>{erro}</div>}
+      {erro && <div className="pequeno" style={{ color: "var(--erro)" }}>{erro}</div>}
       <button className="btn primario">Entrar</button>
     </form>
   );

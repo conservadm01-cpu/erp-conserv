@@ -158,8 +158,8 @@ void desenharPagina() {
 
   // Topo: nome da loja e página
   int hTopo = grande ? 40 : 26;
-  tft.fillRect(0, 0, W, hTopo, COR_TOPO);
-  tft.setTextColor(TFT_WHITE, COR_TOPO);
+  tft.drawFastHLine(0, hTopo - 1, W, COR_TOPO);
+  tft.setTextColor(COR_OURO, COR_FUNDO);
   tft.setTextDatum(ML_DATUM);
   tft.drawString(caber(painel["loja"].as<String>(), W - 70, grande ? 4 : 2), 8, hTopo / 2, grande ? 4 : 2);
   tft.setTextDatum(MR_DATUM);
@@ -170,8 +170,8 @@ void desenharPagina() {
   JsonArray promos = painel["promo"].as<JsonArray>();
   int hRodape = promos.size() ? (grande ? 30 : 20) : 0;
   if (hRodape) {
-    tft.fillRect(0, H - hRodape, W, hRodape, COR_VERDE);
-    tft.setTextColor(TFT_WHITE, COR_VERDE);
+    tft.drawFastHLine(0, H - hRodape, W, COR_TOPO);
+    tft.setTextColor(COR_OURO, COR_FUNDO);
     tft.setTextDatum(ML_DATUM);
     String promo = "* " + promos[pagina % promos.size()].as<String>();
     tft.drawString(caber(promo, W - 16, 2), 8, H - hRodape / 2, 2);
@@ -203,7 +203,7 @@ void desenharPagina() {
     tft.setTextColor(COR_TEXTO, COR_FUNDO);
     tft.setTextDatum(TL_DATUM);
     tft.drawString(caber(nome, umaLinha ? areaW - wPreco - 24 : areaW - 16, fNome), 8, y, fNome);
-    tft.setTextColor(promo ? TFT_ORANGE : COR_OURO, COR_FUNDO);
+    tft.setTextColor(promo ? COR_TOPO : COR_OURO, COR_FUNDO);
     tft.setTextDatum(TR_DATUM);
     if (umaLinha) {
       tft.drawString(preco, areaW - 8, y, fPreco);
@@ -237,13 +237,14 @@ void setup() {
   pinMode(TFT_BL, OUTPUT);
   digitalWrite(TFT_BL, TFT_BACKLIGHT_ON);
 #endif
-  COR_FUNDO = tft.color565(22, 37, 29);    // verde forno
-  COR_TOPO  = tft.color565(212, 65, 42);   // tomate
-  COR_OURO  = tft.color565(240, 185, 74);  // borda da pizza
-  COR_TEXTO = TFT_WHITE;
-  COR_SUAVE = tft.color565(160, 175, 165);
-  COR_VERDE = tft.color565(46, 122, 72);
-  COR_LINHA = tft.color565(33, 54, 42);
+  // Mesmas cores do app (escuro premium): grafite, dourado e marfim.
+  COR_FUNDO = tft.color565(14, 13, 12);
+  COR_TOPO  = tft.color565(201, 164, 92);   // fio dourado
+  COR_OURO  = tft.color565(230, 205, 150);  // dourado claro (preços, títulos)
+  COR_TEXTO = tft.color565(242, 236, 226);
+  COR_SUAVE = tft.color565(160, 151, 139);
+  COR_VERDE = tft.color565(124, 197, 150);  // "pronto"
+  COR_LINHA = tft.color565(30, 27, 24);
 
   mensagem("Conectando...", WIFI_SSID);
   conectarWifi();

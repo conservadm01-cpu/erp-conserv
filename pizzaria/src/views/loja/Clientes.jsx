@@ -62,7 +62,7 @@ function DetalheCliente({ c, pedidos, aoFechar }) {
     <Modal titulo={c.nome} aoFechar={aoFechar}>
       <div className="coluna" style={{ gap: 14 }}>
         <div className="suave">{c.telefone} · cliente desde {dataHora(c.criadoEm)}</div>
-        <div className="cartao linha entre" style={{ background: "#f0fbf3" }}>
+        <div className="cartao linha entre" style={{ background: "var(--sucesso-fundo)" }}>
           <span>Saldo na carteira</span><span className="forte" style={{ fontSize: 22 }}>{brl(c.saldo)}</span>
         </div>
         <div className="coluna">
@@ -93,7 +93,7 @@ function DetalheCliente({ c, pedidos, aoFechar }) {
           {(c.movimentos || []).map((m) => (
             <div key={m.id} className="linha pequeno" style={{ padding: "3px 0" }}>
               <span className="suave">{dataHora(m.em)}</span><span>{m.descricao}</span>
-              <span className="direita forte" style={{ color: m.valor >= 0 ? "var(--manjericao)" : "#b42318" }}>{brl(m.valor)}</span>
+              <span className="direita forte" style={{ color: m.valor >= 0 ? "var(--manjericao)" : "var(--erro)" }}>{brl(m.valor)}</span>
             </div>
           ))}
         </div>

@@ -1,0 +1,4 @@
+Fontes usadas na ficha técnica em PDF (as mesmas do app):
+- Cormorant Garamond — SIL Open Font License 1.1
+- Manrope — SIL Open Font License 1.1
+Baixadas do Google Fonts. Licença: https://openfontlicense.org

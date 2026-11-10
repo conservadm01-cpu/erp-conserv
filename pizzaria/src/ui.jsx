@@ -70,34 +70,41 @@ export function BotaoConfirmar({ aoConfirmar, children, texto = "Confirmar?", cl
   );
 }
 
-// Pizza desenhada em SVG, usada quando o produto não tem foto. A cobertura
-// varia conforme o nome, para cada sabor ter a sua cara.
-const COBERTURAS = [
-  ["#8f1d14", "#f6efd9"], // calabresa / mussarela
-  ["#2e7a48", "#f6efd9"], // manjericão
-  ["#5b3a1e", "#f3d27a"], // frango / catupiry
-  ["#3b2a20", "#fff3d6"], // chocolate
-  ["#c2272d", "#7a1d12"], // morango
-];
+// Pizza em traço dourado, usada quando o produto não tem foto. A posição
+// das coberturas varia conforme o nome, para cada sabor ter a sua cara.
 export function PizzaIlustrada({ nome = "", tamanho = 120, doce = false, className }) {
   let h = 0;
   for (const c of nome) h = (h * 31 + c.charCodeAt(0)) >>> 0;
-  const [cor1, cor2] = doce ? COBERTURAS[3 + (h % 2)] : COBERTURAS[h % 3];
-  const molho = doce ? "#4a2c1d" : "#c8361d";
-  const pontos = Array.from({ length: 9 }, (_, i) => {
-    const a = (i / 9) * Math.PI * 2 + (h % 7);
-    const r = 14 + ((h >> i) % 3) * 9;
-    return [50 + Math.cos(a) * r, 50 + Math.sin(a) * r, i % 3 === 0 ? cor2 : cor1];
+  const id = "pz" + (h % 100000);
+  const fatias = 8;
+  const cobertura = Array.from({ length: 11 }, (_, i) => {
+    const a = (i / 11) * Math.PI * 2 + (h % 13) * 0.3;
+    const r = 10 + (((h >> (i % 16)) & 7) * 3.4);
+    return [50 + Math.cos(a) * r, 50 + Math.sin(a) * r, i % 3];
   });
   return (
     <svg viewBox="0 0 100 100" width={tamanho} height={tamanho} className={className} aria-hidden="true">
-      <circle cx="50" cy="50" r="48" fill="#e7a43c" />
-      <circle cx="50" cy="50" r="48" fill="none" stroke="#c9822a" strokeWidth="2" strokeDasharray="3 5" />
-      <circle cx="50" cy="50" r="40" fill={molho} />
-      <circle cx="50" cy="50" r="38" fill={doce ? "#5a3624" : "#f4d48a"} opacity="0.9" />
-      <path d="M50 50 L50 10 A40 40 0 0 1 84.6 30 Z" fill="none" stroke="#c9822a" strokeWidth="0.8" opacity="0.5" />
-      <path d="M50 50 L84.6 70 M50 50 L15.4 70 M50 50 L15.4 30" stroke="#c9822a" strokeWidth="0.8" opacity="0.5" />
-      {pontos.map(([x, y, c], i) => <circle key={i} cx={x} cy={y} r={i % 3 === 0 ? 4 : 5.5} fill={c} />)}
+      <defs>
+        <linearGradient id={id} x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0" stopColor="#e6cd96" />
+          <stop offset="0.5" stopColor="#c9a45c" />
+          <stop offset="1" stopColor="#8a6d35" />
+        </linearGradient>
+      </defs>
+      <g fill="none" stroke={`url(#${id})`} strokeLinecap="round">
+        <circle cx="50" cy="50" r="46" strokeWidth="1.6" />
+        <circle cx="50" cy="50" r="40.5" strokeWidth="0.7" strokeDasharray="1.2 2.6" />
+        <circle cx="50" cy="50" r="37" strokeWidth="0.9" opacity="0.85" />
+        {Array.from({ length: fatias }, (_, i) => {
+          const a = (i / fatias) * Math.PI * 2 + 0.2;
+          return <line key={i} x1={50 + Math.cos(a) * 4} y1={50 + Math.sin(a) * 4} x2={50 + Math.cos(a) * 37} y2={50 + Math.sin(a) * 37} strokeWidth="0.5" opacity="0.45" />;
+        })}
+        {cobertura.map(([x, y, t], i) =>
+          t === 0 ? <circle key={i} cx={x} cy={y} r={doce ? 2.6 : 3.6} strokeWidth="0.9" />
+          : t === 1 ? <path key={i} d={`M${x - 3} ${y + 1.5} q3 -5 6 0`} strokeWidth="0.9" />
+          : <circle key={i} cx={x} cy={y} r="1" fill={`url(#${id})`} stroke="none" />
+        )}
+      </g>
     </svg>
   );
 }

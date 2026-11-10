@@ -111,7 +111,7 @@ export default function CheckoutLocal({ canal, mesa, itens, promocoes, aoFechar,
             <button className="btn" onClick={() => setCupom(cupomDigitado)}>Aplicar</button>
           </div>
           {cupom && cupomAplicado && <div className="pequeno" style={{ color: "var(--manjericao)" }}>Cupom {cupomAplicado.codigo} aplicado.</div>}
-          {cupom && cupomErro && <div className="pequeno" style={{ color: "#b42318" }}>{cupomErro}</div>}
+          {cupom && cupomErro && <div className="pequeno" style={{ color: "var(--erro)" }}>{cupomErro}</div>}
         </section>
 
         <section className="coluna">

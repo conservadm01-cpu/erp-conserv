@@ -87,7 +87,7 @@ export default function Cardapio({ canal = "delivery", mesa = null, aoConcluirLo
         <button className={categoria === "todas" ? "ativo" : ""} onClick={() => setCategoria("todas")}>Tudo</button>
         {categorias.map((c) => (
           <button key={c} className={categoria === c ? "ativo" : ""} onClick={() => setCategoria(c)}>
-            <Emoji categoria={c} /> {CATEGORIAS[c]}
+            {CATEGORIAS[c]}
           </button>
         ))}
       </div>

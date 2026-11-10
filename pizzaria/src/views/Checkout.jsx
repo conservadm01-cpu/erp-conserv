@@ -148,7 +148,7 @@ export default function Checkout({ itens, promocoes, aoFechar, aoConcluir }) {
             </button>
             {cfg.entrega.dedicada.ativo && (
               <button className={"opcao" + (dedicada ? " sel" : "")} onClick={() => setDedicada(true)}>
-                <Zap size={22} color="#d97706" />
+                <Zap size={22} color="var(--ambar)" />
                 <div style={{ flex: 1 }}>
                   <div className="forte">Dedicada / expressa</div>
                   <div className="suave pequeno">{cfg.entrega.dedicada.descricao} Cerca de {entregaDedicada.minutos} min.</div>
@@ -156,7 +156,7 @@ export default function Checkout({ itens, promocoes, aoFechar, aoConcluir }) {
                 <span className="preco">{brl(entregaDedicada.total)}</span>
               </button>
             )}
-            {entrega?.foraDoRaio && <div className="pequeno" style={{ color: "#b42318" }}>Este endereço está fora da nossa área de entrega.</div>}
+            {entrega?.foraDoRaio && <div className="pequeno" style={{ color: "var(--erro)" }}>Este endereço está fora da nossa área de entrega.</div>}
           </section>
         )}
 
@@ -167,13 +167,13 @@ export default function Checkout({ itens, promocoes, aoFechar, aoConcluir }) {
             <button className="btn" onClick={() => setCupom(cupomDigitado)}>Aplicar</button>
           </div>
           {cupom && cupomAplicado && <div className="pequeno" style={{ color: "var(--manjericao)" }}>Cupom {cupomAplicado.codigo} aplicado.</div>}
-          {cupom && cupomErro && <div className="pequeno" style={{ color: "#b42318" }}>{cupomErro}</div>}
+          {cupom && cupomErro && <div className="pequeno" style={{ color: "var(--erro)" }}>{cupomErro}</div>}
         </section>
 
         <section className="coluna">
           <h3>Pagamento</h3>
           {carteiraDisponivel && (
-            <label className="opcao" style={usarCarteira ? { borderColor: "var(--manjericao)", background: "#f0fbf3" } : null}>
+            <label className="opcao" style={usarCarteira ? { borderColor: "var(--manjericao)", background: "var(--sucesso-fundo)" } : null}>
               <input type="checkbox" checked={usarCarteira} onChange={(e) => setUsarCarteira(e.target.checked)} />
               <div style={{ flex: 1 }}>
                 <div className="forte">Usar saldo da carteira</div>
@@ -191,7 +191,7 @@ export default function Checkout({ itens, promocoes, aoFechar, aoConcluir }) {
             </button>
           ))}
           {aPagar > 0 && metodo === "pix" && pg.pix.chave && (
-            <div className="cartao pequeno linha entre" style={{ background: "#f0fbf3" }}>
+            <div className="cartao pequeno linha entre" style={{ background: "var(--sucesso-fundo)" }}>
               <span>Chave Pix: <b>{pg.pix.chave}</b></span>
               <button className="btn pequeno" onClick={() => navigator.clipboard?.writeText(pg.pix.chave).then(() => toast("Chave copiada"), () => toast("Copie a chave: " + pg.pix.chave))}><Copy size={14} /> Copiar</button>
             </div>

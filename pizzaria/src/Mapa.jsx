@@ -73,7 +73,7 @@ export default function Mapa({ pontos = [], altura = 280, aoClicar, seguir = tru
     }
     if (linha.current) { linha.current.remove(); linha.current = null; }
     if (validos.length >= 2) {
-      linha.current = L.polyline(validos.map((p) => [p.lat, p.lng]), { color: "#b3261e", weight: 3, dashArray: "6 8", opacity: 0.7 }).addTo(m);
+      linha.current = L.polyline(validos.map((p) => [p.lat, p.lng]), { color: "#c9a45c", weight: 3, dashArray: "6 8", opacity: 0.7 }).addTo(m);
     }
     // Enquadra todos os pontos na primeira vez e, se `seguir`, sempre que
     // eles se moverem (ex.: motoboy andando).

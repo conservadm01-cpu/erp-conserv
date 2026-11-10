@@ -16,22 +16,34 @@ from reportlab.lib.colors import HexColor, white
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle
 from reportlab.pdfgen import canvas
+from reportlab.lib.fonts import addMapping
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.platypus import Paragraph
 
 AQUI = Path(__file__).parent
+
+# Mesmas fontes do app (licença OFL, pasta fontes/).
+for _nome, _arq in [("Corm", "Cormorant-SemiBold.ttf"), ("CormI", "Cormorant-MediumItalic.ttf"),
+                    ("Man", "Manrope-Regular.ttf"), ("ManB", "Manrope-Bold.ttf")]:
+    pdfmetrics.registerFont(TTFont(_nome, str(AQUI / "fontes" / _arq)))
+addMapping("Man", 0, 0, "Man")
+addMapping("Man", 1, 0, "ManB")
+addMapping("Man", 0, 1, "Man")
+addMapping("Man", 1, 1, "ManB")
 W, H = A4
 M = 36  # margem
 
-FORNO = HexColor("#16251d")
-FORNO2 = HexColor("#21362a")
-TOMATE = HexColor("#d4412a")
-OURO = HexColor("#f0b94a")
-OURO_CLARO = HexColor("#fdf3d8")
-FARINHA = HexColor("#f5f3ee")
-LINHA = HexColor("#d3cbbd")
-TEXTO = HexColor("#1c1814")
-SUAVE = HexColor("#6f675d")
-VERDE = HexColor("#2e7a48")
+FORNO = HexColor("#0e0d0c")
+FORNO2 = HexColor("#1e1b18")
+TOMATE = HexColor("#a8843f")
+OURO = HexColor("#c9a45c")
+OURO_CLARO = HexColor("#f6eedc")
+FARINHA = HexColor("#f6f2ea")
+LINHA = HexColor("#dcd3c4")
+TEXTO = HexColor("#1a1714")
+SUAVE = HexColor("#6e665c")
+VERDE = HexColor("#c9a45c")
 CAMPO = HexColor("#ffffff")
 
 N_INSUMOS = 14
@@ -39,7 +51,7 @@ N_ETAPAS = 8
 TAM = ["B", "M", "G"]
 TAM_NOME = {"B": "Broto", "M": "Média", "G": "Grande"}
 
-estilo = ParagraphStyle("t", fontName="Helvetica", fontSize=9.5, leading=13, textColor=TEXTO)
+estilo = ParagraphStyle("t", fontName="Man", fontSize=9.5, leading=13, textColor=TEXTO)
 estilo_suave = ParagraphStyle("s", parent=estilo, fontSize=8.5, leading=11.5, textColor=SUAVE)
 estilo_branco = ParagraphStyle("b", parent=estilo, textColor=white, fontSize=10, leading=14)
 
@@ -59,42 +71,37 @@ def paragrafo(c, texto, x, y_topo, largura, st=estilo):
     return h
 
 
-def xadrez(c, y_topo, altura=7):
-    passo = altura
-    x = 0
-    i = 0
-    while x < W:
-        for linha in range(2):
-            c.setFillColor(TOMATE if (i + linha) % 2 == 0 else white)
-            c.rect(x, T(y_topo) - altura / 2 * (linha + 1), passo, altura / 2, stroke=0, fill=1)
-        x += passo
-        i += 1
+def fio_dourado(c, y_topo):
+    c.setStrokeColor(OURO)
+    c.setLineWidth(1.2)
+    c.line(0, T(y_topo), W, T(y_topo))
+    c.setLineWidth(1)
 
 
 def cabecalho(c, etapa, titulo, resumo):
     c.setFillColor(FORNO)
     c.rect(0, T(78), W, 78, stroke=0, fill=1)
-    xadrez(c, 78)
+    fio_dourado(c, 78)
     c.setFillColor(OURO)
-    c.setFont("Helvetica-Bold", 9)
+    c.setFont("ManB", 9)
     c.drawString(M, T(28), f"ETAPA {etapa} DE 6" if etapa else "FICHA TÉCNICA DO PRODUTO")
-    c.setFillColor(white)
-    c.setFont("Helvetica-Bold", 21)
+    c.setFillColor(HexColor("#f2ece2"))
+    c.setFont("Corm", 27)
     c.drawString(M, T(54), titulo)
-    c.setFont("Helvetica", 9)
-    c.setFillColor(HexColor("#c9d6cd"))
-    c.drawString(M, T(68), resumo)
+    c.setFont("Man", 8.5)
+    c.setFillColor(HexColor("#a0978b"))
+    c.drawString(M, T(71), resumo)
 
 
 def rodape(c, pagina):
-    c.setFont("Helvetica", 7.5)
+    c.setFont("Man", 7.5)
     c.setFillColor(SUAVE)
     c.drawString(M, 20, "Ficha técnica do produto · Pizzaria · campos amarelos são calculados automaticamente")
     c.drawRightString(W - M, 20, f"{pagina} / 7")
 
 
 def rotulo(c, texto, x, y_topo, tam=7.5, cor=SUAVE):
-    c.setFont("Helvetica-Bold", tam)
+    c.setFont("ManB", tam)
     c.setFillColor(cor)
     c.drawString(x, T(y_topo), texto.upper())
 
@@ -123,7 +130,7 @@ def caixa_marcar(c, nome, x, y_topo, texto, dica="", marcado=False):
         name=nome, tooltip=dica or texto, x=x, y=T(y_topo) - 11, size=11, buttonStyle="check",
         borderColor=SUAVE, fillColor=white, textColor=TOMATE, forceBorder=True, checked=marcado,
     )
-    c.setFont("Helvetica", 9)
+    c.setFont("Man", 9)
     c.setFillColor(TEXTO)
     c.drawString(x + 16, T(y_topo) - 9, texto)
 
@@ -146,19 +153,19 @@ def nota(c, x, y_topo, largura, titulo, texto, cor=VERDE):
     c.roundRect(x, T(y_topo) - altura, largura, altura, 6, stroke=0, fill=1)
     c.setFillColor(cor)
     c.rect(x, T(y_topo) - altura, 3, altura, stroke=0, fill=1)
-    c.setFont("Helvetica-Bold", 8.5)
+    c.setFont("ManB", 8.5)
     c.drawString(x + 12, T(y_topo) - 15, titulo)
     p.drawOn(c, x + 12, T(y_topo) - 22 - h)
     return altura
 
 
 def secao(c, texto, y_topo):
-    c.setFont("Helvetica-Bold", 12)
+    c.setFont("CormI", 18)
     c.setFillColor(FORNO)
     c.drawString(M, T(y_topo), texto)
     c.setStrokeColor(OURO)
-    c.setLineWidth(2)
-    c.line(M, T(y_topo + 5), M + 28, T(y_topo + 5))
+    c.setLineWidth(1)
+    c.line(M, T(y_topo + 5), M + 34, T(y_topo + 5))
     c.setLineWidth(1)
 
 
@@ -188,15 +195,16 @@ def pagina_capa(c, v):
         col, lin = i % 3, i // 3
         x = M + col * (larg + 12)
         yt = y + lin * (alt + 14)
-        c.setFillColor(FORNO if i < 5 else TOMATE)
-        c.roundRect(x, T(yt) - alt, larg, alt, 8, stroke=0, fill=1)
+        c.setFillColor(FORNO)
+        c.setStrokeColor(OURO if i == 5 else FORNO)
+        c.roundRect(x, T(yt) - alt, larg, alt, 8, stroke=1, fill=1)
         c.setFillColor(OURO)
-        c.setFont("Helvetica-Bold", 22)
-        c.drawString(x + 12, T(yt) - 30, n)
-        c.setFillColor(white)
-        c.setFont("Helvetica-Bold", 11)
-        c.drawString(x + 34, T(yt) - 27, nome)
-        p = Paragraph(desc, ParagraphStyle("c", parent=estilo, textColor=HexColor("#d7e2da"), fontSize=8.5, leading=11))
+        c.setFont("Corm", 30)
+        c.drawString(x + 12, T(yt) - 32, n)
+        c.setFillColor(HexColor("#f2ece2"))
+        c.setFont("Corm", 14.5)
+        c.drawString(x + 32, T(yt) - 28, nome)
+        p = Paragraph(desc, ParagraphStyle("c", parent=estilo, textColor=HexColor("#a0978b"), fontSize=8.5, leading=11))
         p.wrap(larg - 24, 100)
         p.drawOn(c, x + 12, T(yt) - 44 - p.height)
         if col < 2:
@@ -272,7 +280,7 @@ def pagina_identificacao(c, v):
     y += 14
     for s, nome in [("B", "Broto"), ("M", "Média"), ("G", "Grande"), ("U", "Único (bebidas, sobremesas)")]:
         x = M
-        c.setFont("Helvetica-Bold", 9)
+        c.setFont("ManB", 9)
         c.setFillColor(TEXTO)
         c.drawString(x, T(y) - 12, nome if s != "U" else "Único")
         x += cols[0][1]
@@ -329,7 +337,7 @@ def pagina_insumos(c, v):
     c.setFillColor(FORNO)
     c.rect(M, T(y) - 20, W - 2 * M, 20, stroke=0, fill=1)
     for t, w in cols:
-        c.setFont("Helvetica-Bold", 7.5)
+        c.setFont("ManB", 7.5)
         c.setFillColor(white)
         c.drawString(x + 4, T(y) - 13, t.upper())
         x += w
@@ -352,7 +360,7 @@ def pagina_insumos(c, v):
     y += 4
     c.setFillColor(FARINHA)
     c.rect(M, T(y) - 26, W - 2 * M, 26, stroke=0, fill=1)
-    c.setFont("Helvetica-Bold", 9.5)
+    c.setFont("ManB", 9.5)
     c.setFillColor(FORNO)
     c.drawString(M + 8, T(y) - 17, "Custo dos insumos por unidade vendida (R$)")
     x = M + sum(w for _, w in cols[:5])
@@ -380,7 +388,7 @@ def pagina_custo(c, v):
         x = M + i * 172
         rotulo(c, t, x, y)
         campo(c, n, x, y + 4, 70, dica=d, valor=v.get(n, ""))
-        c.setFont("Helvetica", 8)
+        c.setFont("Man", 8)
         c.setFillColor(SUAVE)
         c.drawString(x + 76, T(y + 16), d)
     y += 40
@@ -394,7 +402,7 @@ def pagina_custo(c, v):
         c.setFillColor(FORNO)
         c.rect(xl + lrot + i * lcol + 2, T(y) - 20, lcol - 4, 20, stroke=0, fill=1)
         c.setFillColor(white)
-        c.setFont("Helvetica-Bold", 9)
+        c.setFont("ManB", 9)
         c.drawCentredString(xl + lrot + i * lcol + lcol / 2, T(y) - 13, TAM_NOME[s].upper())
     y += 26
 
@@ -403,10 +411,10 @@ def pagina_custo(c, v):
         if destaque:
             c.setFillColor(FARINHA)
             c.rect(M, T(y) - 24, W - 2 * M, 26, stroke=0, fill=1)
-        c.setFont("Helvetica-Bold", 9.5)
+        c.setFont("ManB", 9.5)
         c.setFillColor(TOMATE if destaque else TEXTO)
         c.drawString(M + 4, T(y) - 9, rot)
-        c.setFont("Helvetica", 7.5)
+        c.setFont("Man", 7.5)
         c.setFillColor(SUAVE)
         c.drawString(M + 4, T(y) - 19, desc)
         for i, s in enumerate(TAM):
@@ -468,7 +476,7 @@ def pagina_processo(c, v):
     c.rect(M, T(y) - 20, W - 2 * M, 20, stroke=0, fill=1)
     x = M
     for t, w in cols:
-        c.setFont("Helvetica-Bold", 7.5)
+        c.setFont("ManB", 7.5)
         c.setFillColor(white)
         c.drawString(x + 4, T(y) - 13, t.upper())
         x += w
@@ -476,7 +484,7 @@ def pagina_processo(c, v):
     for k in range(1, N_ETAPAS + 1):
         padrao = ETAPAS_PADRAO[k - 1]
         x = M
-        c.setFont("Helvetica-Bold", 10)
+        c.setFont("ManB", 10)
         c.setFillColor(TOMATE)
         c.drawString(x + 4, T(y) - 14, str(k))
         x += cols[0][1]
@@ -488,7 +496,7 @@ def pagina_processo(c, v):
     y += 4
     c.setFillColor(FARINHA)
     c.rect(M, T(y) - 26, W - 2 * M, 26, stroke=0, fill=1)
-    c.setFont("Helvetica-Bold", 9.5)
+    c.setFont("ManB", 9.5)
     c.setFillColor(FORNO)
     c.drawString(M + 8, T(y) - 17, "Tempo total de preparo (min) — deixe em branco o que é feito antes do pedido")
     soma = "+".join(f'pzN("tempo_{k}")' for k in range(1, N_ETAPAS + 1))
@@ -527,48 +535,64 @@ def pagina_processo(c, v):
     rodape(c, 5)
 
 
+def pizza_traco(c, cx, cy, r):
+    """Pizza em traço dourado, como no app."""
+    c.setStrokeColor(OURO)
+    c.setLineWidth(1.1); c.circle(cx, cy, r, stroke=1, fill=0)
+    c.setLineWidth(0.5); c.setDash(1, 2); c.circle(cx, cy, r * 0.88, stroke=1, fill=0); c.setDash()
+    c.setLineWidth(0.6); c.circle(cx, cy, r * 0.8, stroke=1, fill=0)
+    import math
+    c.setLineWidth(0.3)
+    for k in range(8):
+        a = k * math.pi / 4 + 0.2
+        c.line(cx + math.cos(a) * 2, cy + math.sin(a) * 2, cx + math.cos(a) * r * 0.8, cy + math.sin(a) * r * 0.8)
+    c.setLineWidth(0.6)
+    for dx, dy in [(-0.35, 0.25), (0.3, 0.35), (0.15, -0.4), (-0.4, -0.25), (0.45, -0.05)]:
+        c.circle(cx + dx * r, cy + dy * r, r * 0.08, stroke=1, fill=0)
+    c.setLineWidth(1)
+
+
 def mock_card_web(c, x, y_topo, w):
     """Desenho de como o produto aparece no site/totem."""
-    h = 150
-    c.setFillColor(white)
-    c.setStrokeColor(LINHA)
+    h = 156
+    c.setFillColor(HexColor("#161412"))
+    c.setStrokeColor(HexColor("#2a2622"))
     c.roundRect(x, T(y_topo) - h, w, h, 8, stroke=1, fill=1)
-    c.setFillColor(HexColor("#f1ece2"))
+    c.setFillColor(HexColor("#121110"))
     c.rect(x + 1, T(y_topo) - 82, w - 2, 81, stroke=0, fill=1)
-    cx, cy = x + w / 2, T(y_topo) - 41
-    c.setFillColor(HexColor("#e7a43c")); c.circle(cx, cy, 32, stroke=0, fill=1)
-    c.setFillColor(HexColor("#c8361d")); c.circle(cx, cy, 26, stroke=0, fill=1)
-    c.setFillColor(HexColor("#f4d48a")); c.circle(cx, cy, 24, stroke=0, fill=1)
-    c.setFillColor(VERDE)
-    for dx, dy in [(-9, 6), (8, 10), (4, -10), (-12, -7)]:
-        c.circle(cx + dx, cy + dy, 4, stroke=0, fill=1)
-    c.setFillColor(TEXTO); c.setFont("Helvetica-Bold", 10); c.drawString(x + 10, T(y_topo) - 98, "Nome no cardápio")
-    c.setFillColor(SUAVE); c.setFont("Helvetica", 7.5)
-    c.drawString(x + 10, T(y_topo) - 110, "Descrição para web/totem (2 linhas)")
-    c.drawString(x + 10, T(y_topo) - 120, "aparecem; o resto é cortado...")
-    c.setFillColor(TEXTO); c.setFont("Helvetica-Bold", 10); c.drawString(x + 10, T(y_topo) - 140, "R$ 58,00")
-    c.setFillColor(TOMATE); c.circle(x + w - 18, T(y_topo) - 136, 9, stroke=0, fill=1)
-    c.setFillColor(white); c.setFont("Helvetica-Bold", 11); c.drawCentredString(x + w - 18, T(y_topo) - 140, "+")
+    pizza_traco(c, x + w / 2, T(y_topo) - 41, 30)
+    c.setFillColor(HexColor("#f2ece2")); c.setFont("Corm", 15); c.drawString(x + 10, T(y_topo) - 100, "Nome no cardápio")
+    c.setFillColor(HexColor("#a0978b")); c.setFont("Man", 7)
+    c.drawString(x + 10, T(y_topo) - 112, "Descrição para web/totem (2 linhas")
+    c.drawString(x + 10, T(y_topo) - 121, "aparecem; o resto é cortado...)")
+    c.setStrokeColor(HexColor("#2a2622")); c.line(x + 10, T(y_topo) - 129, x + w - 10, T(y_topo) - 129)
+    c.setFillColor(HexColor("#e6cd96")); c.setFont("ManB", 10); c.drawString(x + 10, T(y_topo) - 146, "R$ 58,00")
+    c.setStrokeColor(OURO); c.circle(x + w - 20, T(y_topo) - 142, 9, stroke=1, fill=0)
+    c.setFillColor(HexColor("#e6cd96")); c.setFont("Man", 11); c.drawCentredString(x + w - 20, T(y_topo) - 146, "+")
     return h
 
 
 def mock_lcd(c, x, y_topo, w):
+    """Como a tela LCD do ESP32 desenha o cardápio (mesmas cores do programa)."""
     h = w * 0.75
-    c.setFillColor(HexColor("#222222"))
+    ouro, ouro_cl, txt = HexColor("#c9a45c"), HexColor("#e6cd96"), HexColor("#f2ece2")
+    c.setFillColor(HexColor("#26221e"))
     c.roundRect(x - 6, T(y_topo) - h - 6, w + 12, h + 12, 5, stroke=0, fill=1)
-    c.setFillColor(HexColor("#000000")); c.rect(x, T(y_topo) - h, w, h, stroke=0, fill=1)
-    c.setFillColor(HexColor("#c8361d")); c.rect(x, T(y_topo) - 14, w, 14, stroke=0, fill=1)
-    c.setFillColor(white); c.setFont("Courier-Bold", 7.5); c.drawString(x + 4, T(y_topo) - 10, "PIZZARIA")
+    c.setFillColor(HexColor("#0e0d0c")); c.rect(x, T(y_topo) - h, w, h, stroke=0, fill=1)
+    c.setFillColor(ouro_cl); c.setFont("Courier-Bold", 7.5); c.drawString(x + 4, T(y_topo) - 10, "PIZZARIA")
     c.drawRightString(x + w - 4, T(y_topo) - 10, "1/3")
-    c.setFillColor(HexColor("#ffb400")); c.setFont("Courier-Bold", 8.5); c.drawString(x + 4, T(y_topo) - 27, "Pizzas")
+    c.setStrokeColor(ouro); c.setLineWidth(0.6); c.line(x, T(y_topo) - 14, x + w, T(y_topo) - 14)
+    c.setFillColor(ouro_cl); c.setFont("Courier-Bold", 8.5); c.drawString(x + 4, T(y_topo) - 27, "Pizzas")
     linhas = [("Margherita", "58,00"), ("4 Queijos", "66,00"), ("Calabresa", "55,00"), ("Portuguesa", "62,00")]
     yy = 40
     for n, p in linhas:
-        c.setFillColor(white); c.setFont("Courier", 7.5); c.drawString(x + 4, T(y_topo) - yy, n)
-        c.setFillColor(HexColor("#ffb400")); c.drawRightString(x + w - 4, T(y_topo) - yy, p)
+        c.setFillColor(txt); c.setFont("Courier", 7.5); c.drawString(x + 4, T(y_topo) - yy, n)
+        c.setFillColor(ouro); c.drawRightString(x + w - 4, T(y_topo) - yy, p)
+        c.setStrokeColor(HexColor("#1e1b18")); c.line(x + 4, T(y_topo) - yy - 3, x + w - 4, T(y_topo) - yy - 3)
         yy += 12
-    c.setFillColor(HexColor("#1e5f37")); c.rect(x, T(y_topo) - h, w, 11, stroke=0, fill=1)
-    c.setFillColor(white); c.setFont("Courier", 6.5); c.drawString(x + 4, T(y_topo) - h + 3, "* Terca da pizza: 15% off")
+    c.setStrokeColor(ouro); c.line(x, T(y_topo) - h + 11, x + w, T(y_topo) - h + 11)
+    c.setFillColor(ouro_cl); c.setFont("Courier", 6.5); c.drawString(x + 4, T(y_topo) - h + 3, "* Terca da pizza: 15% off")
+    c.setLineWidth(1)
     return h + 6
 
 
@@ -621,7 +645,7 @@ def pagina_imagem(c, v):
     rotulo(c, "Site, mesa e totem", xr, yd, cor=FORNO)
     yd += 8
     yd += mock_card_web(c, xr, yd, 170) + 10
-    c.setFont("Helvetica", 7.5); c.setFillColor(SUAVE)
+    c.setFont("Man", 7.5); c.setFillColor(SUAVE)
     c.drawString(xr, T(yd), "Foto 4:3 + nome + descrição + preço")
     yd += 22
     rotulo(c, "Tela LCD ESP32 (320 × 240)", xr, yd, cor=FORNO)
@@ -633,9 +657,9 @@ def pagina_imagem(c, v):
     rotulo(c, "TV do salão", xr, yd, cor=FORNO)
     yd += 6
     c.setFillColor(FORNO); c.roundRect(xr, T(yd) - 46, 170, 46, 5, stroke=0, fill=1)
-    c.setFillColor(white); c.setFont("Helvetica-Bold", 9); c.drawString(xr + 8, T(yd) - 15, "Nome no cardápio")
-    c.setFillColor(OURO); c.drawString(xr + 8, T(yd) - 28, "Broto 32,00   Grande 58,00")
-    c.setFillColor(HexColor("#a9b8ad")); c.setFont("Helvetica", 7); c.drawString(xr + 8, T(yd) - 39, "Descrição curta para a TV")
+    c.setFillColor(HexColor("#f2ece2")); c.setFont("Corm", 13); c.drawString(xr + 8, T(yd) - 16, "Nome no cardápio")
+    c.setFillColor(OURO); c.setFont("ManB", 8.5); c.drawString(xr + 8, T(yd) - 29, "Broto 32,00   Grande 58,00")
+    c.setFillColor(HexColor("#a0978b")); c.setFont("Man", 7); c.drawString(xr + 8, T(yd) - 39, "Descrição curta para a TV")
     rodape(c, 6)
 
 
@@ -654,15 +678,15 @@ def pagina_publicacao(c, v):
     ]
     c.setFillColor(FORNO)
     c.rect(M, T(y) - 20, W - 2 * M, 20, stroke=0, fill=1)
-    c.setFillColor(white); c.setFont("Helvetica-Bold", 7.5)
+    c.setFillColor(white); c.setFont("ManB", 7.5)
     c.drawString(M + 6, T(y) - 13, "INFORMAÇÃO DA FICHA")
     c.drawString(M + 220, T(y) - 13, "ONDE LANÇAR")
     y += 20
     for i, (a, b) in enumerate(linhas):
         if i % 2 == 0:
             c.setFillColor(FARINHA); c.rect(M, T(y) - 22, W - 2 * M, 22, stroke=0, fill=1)
-        c.setFillColor(TEXTO); c.setFont("Helvetica-Bold", 8.5); c.drawString(M + 6, T(y) - 14, a)
-        c.setFont("Helvetica", 8.5); c.drawString(M + 220, T(y) - 14, b)
+        c.setFillColor(TEXTO); c.setFont("ManB", 8.5); c.drawString(M + 6, T(y) - 14, a)
+        c.setFont("Man", 8.5); c.drawString(M + 220, T(y) - 14, b)
         y += 22
     y += 20
 

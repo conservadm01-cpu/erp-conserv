@@ -73,7 +73,7 @@ export default function Carteira() {
               <tr key={m.id}>
                 <td className="suave pequeno">{dataHora(m.em)}</td>
                 <td>{m.descricao}</td>
-                <td className="forte" style={{ textAlign: "right", color: m.valor >= 0 ? "var(--manjericao)" : "#b42318" }}>
+                <td className="forte" style={{ textAlign: "right", color: m.valor >= 0 ? "var(--manjericao)" : "var(--erro)" }}>
                   {m.valor >= 0 ? "+" : ""}{brl(m.valor)}
                 </td>
               </tr>

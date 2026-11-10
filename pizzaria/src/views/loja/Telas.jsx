@@ -37,7 +37,7 @@ export default function Telas() {
         As telas se atualizam sozinhas quando você muda produtos, preços ou promoções aqui na loja.
       </div>
       {modoDemo && (
-        <div className="cartao pequeno" style={{ background: "var(--aviso)", borderColor: "#f0d78c" }}>
+        <div className="cartao pequeno" style={{ background: "var(--aviso)", borderColor: "var(--linha-forte)" }}>
           O app está em modo demonstração (sem Supabase). A TV funciona neste navegador, mas o ESP32 só lê o cardápio depois que o Supabase estiver configurado.
         </div>
       )}

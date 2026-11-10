@@ -40,7 +40,7 @@ export default function Salao() {
       </div>
 
       {chamados.length > 0 && (
-        <div className="cartao coluna" style={{ borderColor: "var(--tomate)", background: "#fff6f3" }}>
+        <div className="cartao coluna" style={{ borderColor: "var(--tomate)", background: "var(--destaque-fundo)" }}>
           <h3><BellRing size={17} style={{ verticalAlign: -3 }} /> Chamados</h3>
           {chamados.sort((a, b) => a.em.localeCompare(b.em)).map((c) => (
             <div key={c.mesa} className="linha">

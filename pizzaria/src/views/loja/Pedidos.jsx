@@ -111,7 +111,7 @@ export default function Pedidos() {
                     {(p.nomeChamada || p.cliente?.nome) && <div className="pequeno">{p.nomeChamada || p.cliente.nome}</div>}
                     <div className="suave pequeno">{p.itens.map((i) => `${i.qtd}× ${i.nome}${i.sabor2 ? "/" + i.sabor2.nome : ""}${i.tamanho === "Único" ? "" : " " + i.tamanho}`).join(", ")}</div>
                     <div className="linha entre pequeno">
-                      {p.entrega?.dedicada ? <span className="selo" style={{ background: "#d97706" }}><Zap size={11} /> Dedicada</span> : <span />}
+                      {p.entrega?.dedicada ? <span className="selo" style={{ background: "var(--ambar)" }}><Zap size={11} /> Dedicada</span> : <span />}
                       <span className="preco">{brl(p.total)}</span>
                     </div>
                     {p.motoboyId && <div className="pequeno">🛵 {motoboys.find((m) => m.id === p.motoboyId)?.nome || "—"}</div>}

@@ -57,7 +57,7 @@ export default function EscolherEndereco({ inicial, aoSalvar, aoCancelar, textoB
       <button type="button" className="btn" onClick={minhaLocalizacao} disabled={ocupado}>
         <LocateFixed size={16} /> Usar minha localização atual
       </button>
-      {msg && <div className="pequeno" style={{ color: "#b42318" }}>{msg}</div>}
+      {msg && <div className="pequeno" style={{ color: "var(--erro)" }}>{msg}</div>}
       {resultados.length > 1 && (
         <div className="coluna" style={{ gap: 6 }}>
           {resultados.map((r, i) => (

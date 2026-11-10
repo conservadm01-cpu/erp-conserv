@@ -44,7 +44,7 @@ export default function Acompanhar({ id }) {
       </div>
 
       {st !== "cancelado" && st !== "entregue" && (
-        <div className="cartao" style={{ background: "var(--aviso)", borderColor: "#f0d78c" }}>
+        <div className="cartao" style={{ background: "var(--aviso)", borderColor: "var(--linha-forte)" }}>
           {eta ? (
             <div className="linha"><span className="pulso" /> <b>{motoboy?.nome || "O motoboy"}</b> está a {eta.km.toFixed(1)} km — chega em cerca de <b>{eta.min} min</b>.</div>
           ) : st === "em_rota" ? (
@@ -59,7 +59,7 @@ export default function Acompanhar({ id }) {
 
       <div className="cartao">
         {st === "cancelado" ? (
-          <div style={{ color: "#b42318" }}>Este pedido foi cancelado{pedido.usoCarteira > 0 ? "; o saldo da carteira usado foi devolvido" : ""}.</div>
+          <div style={{ color: "var(--erro)" }}>Este pedido foi cancelado{pedido.usoCarteira > 0 ? "; o saldo da carteira usado foi devolvido" : ""}.</div>
         ) : (
           <ul className="timeline">
             {FLUXO.map((s, i) => (
@@ -128,7 +128,7 @@ function AcompanharLocal({ pedido }) {
       </div>
       <div className="cartao">
         {st === "cancelado" ? (
-          <div style={{ color: "#b42318" }}>Este pedido foi cancelado.</div>
+          <div style={{ color: "var(--erro)" }}>Este pedido foi cancelado.</div>
         ) : (
           <ul className="timeline">
             {FLUXO_LOCAL.map((s, i) => (
