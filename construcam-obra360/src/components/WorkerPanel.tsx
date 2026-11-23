@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import type { User } from "@supabase/supabase-js";
 import { AlertTriangle, HardHat } from "lucide-react";
 import CameraRecorder from "@/components/CameraRecorder";
+import TermoCiencia, { useTermo } from "@/components/TermoCiencia";
 import RecordingHistory from "@/components/RecordingHistory";
 import { obrasPorIds } from "@/lib/data";
 import { nomeUnidade, type ObraDetalhada } from "@/types";
@@ -14,6 +15,7 @@ export default function WorkerPanel({ user, obraIds }: { user: User; obraIds: st
   const [error, setError] = useState("");
   const [recording, setRecording] = useState(false);
   const onActiveChange = useCallback((a: boolean) => setRecording(a), []);
+  const termo = useTermo(user.id);
 
   useEffect(() => {
     obrasPorIds(obraIds)
@@ -36,7 +38,9 @@ export default function WorkerPanel({ user, obraIds }: { user: User; obraIds: st
       {error && <div className="error"><AlertTriangle size={17}/>{error}</div>}
       {!error && ativas.length === 0 && <div className="empty-state compact"><HardHat size={28}/><strong>Nenhuma obra ativa</strong>
         <p>Você não está vinculado a nenhuma obra em andamento. Peça à administração do condomínio para incluir o seu e-mail ({user.email}) na obra.</p></div>}
-      {ativas.length > 0 && <>
+      {termo.error && <div className="error"><AlertTriangle size={17}/>{termo.error}</div>}
+      {ativas.length > 0 && !termo.loading && !termo.error && !termo.aceito && <TermoCiencia versao={termo.versao} onAceito={termo.marcarAceito}/>}
+      {ativas.length > 0 && termo.aceito && <>
         <div className="form-grid single">
           <label>Obra
             <select value={obraId} onChange={e => setObraId(e.target.value)} disabled={recording}>

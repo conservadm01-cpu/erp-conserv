@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { AlertTriangle, Home, HardHat } from "lucide-react";
+import { AlertTriangle, Home, HardHat, Eye, Flag } from "lucide-react";
+import { AcessosList, OcorrenciasPainel } from "@/components/Auditoria";
 import LiveView from "@/components/LiveView";
 import RecordingHistory from "@/components/RecordingHistory";
 import { supabase } from "@/lib/supabase";
@@ -61,6 +62,8 @@ function ObraCard({ obra, equipe }: { obra: ObraDetalhada; equipe: Membro[] }) {
     </div>
     {equipe.length > 0 && <p className="team"><HardHat size={14}/> Profissionais: {equipe.map(m => m.nome || m.email).join(", ")}</p>}
     {obra.status === "ativa" && <LiveView obraId={obra.id} onLiveChange={setLive}/>}
-    <RecordingHistory obraId={obra.id} eyebrow="HISTÓRICO DA OBRA" title="Gravações" showWorker/>
+    <RecordingHistory obraId={obra.id} eyebrow="HISTÓRICO DA OBRA" title="Gravações" showWorker canReport/>
+    <details className="fold"><summary><Flag size={14}/> Ocorrências desta obra</summary><OcorrenciasPainel obraIds={[obra.id]} canResolve={false}/></details>
+    <details className="fold"><summary><Eye size={14}/> Quem assistiu aos vídeos</summary><AcessosList obraIds={[obra.id]}/></details>
   </div>;
 }

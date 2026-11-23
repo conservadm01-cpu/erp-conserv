@@ -1,14 +1,15 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { AlertTriangle, Building2, Plus, X, Home, HardHat, ShieldCheck, ChevronDown, ChevronUp } from "lucide-react";
+import { AlertTriangle, Building2, Plus, X, Home, HardHat, ShieldCheck, ChevronDown, ChevronUp, Flag, Eye, FileCheck2 } from "lucide-react";
+import { AcessosList, OcorrenciasPainel } from "@/components/Auditoria";
 import RecordingHistory from "@/components/RecordingHistory";
 import { supabase } from "@/lib/supabase";
 import { check, emailValido, normalizarEmail, OBRA_COLS } from "@/lib/data";
 import { nomeUnidade, type Condominio, type Membro, type Obra, type Papel, type Unidade } from "@/types";
 
 type Props = { platformAdmin: boolean; adminCondos: string[]; onChanged: () => void };
-type Dados = { unidades: Unidade[]; obras: Obra[]; membros: Membro[]; hoje: number; andamento: number };
+type Dados = { unidades: Unidade[]; obras: Obra[]; membros: Membro[]; hoje: number; andamento: number; abertas: number; termos: Record<string, string> };
 
 function db() { if (!supabase) throw new Error("Supabase não configurado."); return supabase; }
 const MEMBRO_COLS = "id,email,nome,papel,condominio_id,unidade_id,obra_id";
@@ -47,7 +48,19 @@ export default function AdminPanel({ platformAdmin, adminCondos, onChanged }: Pr
         const gs = check(await db().from("gravacoes").select("id,status").in("obra_id", oIds).gte("inicio", inicioDia.toISOString())) as { status: string }[];
         hoje = gs.length; andamento = gs.filter(g => g.status === "iniciada").length;
       }
-      setDados({ unidades, obras, membros, hoje, andamento });
+      let abertas = 0;
+      const termos: Record<string, string> = {};
+      if (oIds.length) {
+        const oc = await db().from("ocorrencias").select("id").in("obra_id", oIds).eq("status", "aberta");
+        abertas = oc.data?.length ?? 0;
+      }
+      const emails = [...new Set(membros.filter(m => m.papel === "profissional").map(m => m.email))];
+      if (emails.length) {
+        const { data: versao } = await db().rpc("termo_versao_atual");
+        const t = await db().from("termos_aceite").select("email,aceito_em").in("email", emails).eq("versao", versao as string);
+        (t.data ?? []).forEach((r: { email: string; aceito_em: string }) => { termos[r.email] = r.aceito_em; });
+      }
+      setDados({ unidades, obras, membros, hoje, andamento, abertas, termos });
       setError("");
     } catch (e) { setError((e as Error).message); }
   }, [condoId]);
@@ -100,6 +113,7 @@ export default function AdminPanel({ platformAdmin, adminCondos, onChanged }: Pr
         <div><strong>{dados.hoje}</strong><span>Gravações hoje</span></div>
         <div><strong>{dados.andamento}</strong><span>Em andamento</span></div>
       </div>
+      {dados.abertas > 0 && <div className="warning"><Flag size={16}/> {dados.abertas} {dados.abertas === 1 ? "ocorrência aberta" : "ocorrências abertas"} aguardando a administração.</div>}
 
       <div className="admin-block">
         <h3><ShieldCheck size={16}/> Administradores do condomínio</h3>
@@ -113,15 +127,31 @@ export default function AdminPanel({ platformAdmin, adminCondos, onChanged }: Pr
         <ul className="unit-list">
           {dados.unidades.map(u => <UnidadeItem key={u.id} unidade={u}
             obras={dados.obras.filter(o => o.unidade_id === u.id)}
-            membros={dados.membros}
+            membros={dados.membros} termos={dados.termos}
             onAddMembro={addMembro} onRemoveMembro={removeMembro}
             onNovaObra={(descricao, empresa) => run(() => db().from("obras").insert({ unidade_id: u.id, descricao: descricao.trim(), empresa: empresa.trim() || null, status: "ativa" }))}
             onStatus={(obraId, status) => run(() => db().from("obras").update({ status }).eq("id", obraId))}
           />)}
         </ul>
       </div>
+
+      <div className="admin-block">
+        <h3><Flag size={16}/> Ocorrências</h3>
+        <OcorrenciasPainel obraIds={dados.obras.map(o => o.id)} nomes={nomesObras(dados)} canResolve/>
+      </div>
+
+      <div className="admin-block">
+        <h3><Eye size={16}/> Registro de acessos aos vídeos</h3>
+        <AcessosList obraIds={dados.obras.map(o => o.id)} nomes={nomesObras(dados)}/>
+      </div>
     </>}
   </section>;
+}
+
+function nomesObras(d: Dados) {
+  const out: Record<string, string> = {};
+  d.obras.forEach(o => { out[o.id] = `${nomeUnidade(d.unidades.find(u => u.id === o.unidade_id))} · ${o.descricao || "Obra"}`; });
+  return out;
 }
 
 function traduzErro(msg: string) {
@@ -155,14 +185,14 @@ function NovaUnidade({ onCreate }: { onCreate: (bloco: string, id: string) => Pr
 }
 
 type UnidadeProps = {
-  unidade: Unidade; obras: Obra[]; membros: Membro[];
+  unidade: Unidade; obras: Obra[]; membros: Membro[]; termos: Record<string, string>;
   onAddMembro: (papel: Papel, alvo: Partial<Membro>) => (email: string) => Promise<boolean>;
   onRemoveMembro: (id: string) => Promise<boolean>;
   onNovaObra: (descricao: string, empresa: string) => Promise<boolean>;
   onStatus: (obraId: string, status: string) => Promise<boolean>;
 };
 
-function UnidadeItem({ unidade, obras, membros, onAddMembro, onRemoveMembro, onNovaObra, onStatus }: UnidadeProps) {
+function UnidadeItem({ unidade, obras, membros, termos, onAddMembro, onRemoveMembro, onNovaObra, onStatus }: UnidadeProps) {
   const [open, setOpen] = useState(false);
   const [descricao, setDescricao] = useState(""); const [empresa, setEmpresa] = useState("");
   const donos = membros.filter(m => m.papel === "proprietario" && m.unidade_id === unidade.id);
@@ -178,7 +208,7 @@ function UnidadeItem({ unidade, obras, membros, onAddMembro, onRemoveMembro, onN
       <h4>Proprietários</h4>
       <Pessoas membros={donos} onAdd={onAddMembro("proprietario", { unidade_id: unidade.id })} onRemove={onRemoveMembro} placeholder="e-mail do proprietário"/>
       <h4>Obras</h4>
-      {obras.map(o => <ObraItem key={o.id} obra={o} profissionais={membros.filter(m => m.papel === "profissional" && m.obra_id === o.id)}
+      {obras.map(o => <ObraItem key={o.id} obra={o} termos={termos} profissionais={membros.filter(m => m.papel === "profissional" && m.obra_id === o.id)}
         onAdd={onAddMembro("profissional", { obra_id: o.id })} onRemove={onRemoveMembro} onStatus={s => onStatus(o.id, s)}/>)}
       <form className="inline-form" onSubmit={async e => { e.preventDefault(); if (await onNovaObra(descricao, empresa)) { setDescricao(""); setEmpresa(""); } }}>
         <input placeholder="Nova obra (ex.: Reforma de cozinha)" value={descricao} onChange={e => setDescricao(e.target.value)} required/>
@@ -189,8 +219,8 @@ function UnidadeItem({ unidade, obras, membros, onAddMembro, onRemoveMembro, onN
   </li>;
 }
 
-function ObraItem({ obra, profissionais, onAdd, onRemove, onStatus }: {
-  obra: Obra; profissionais: Membro[]; onAdd: (email: string) => Promise<boolean>; onRemove: (id: string) => Promise<boolean>; onStatus: (s: string) => Promise<boolean>;
+function ObraItem({ obra, profissionais, termos, onAdd, onRemove, onStatus }: {
+  obra: Obra; profissionais: Membro[]; termos: Record<string, string>; onAdd: (email: string) => Promise<boolean>; onRemove: (id: string) => Promise<boolean>; onStatus: (s: string) => Promise<boolean>;
 }) {
   const [hist, setHist] = useState(false);
   const ativa = obra.status === "ativa";
@@ -200,26 +230,30 @@ function ObraItem({ obra, profissionais, onAdd, onRemove, onStatus }: {
       <span className={ativa ? "tag green" : "tag"}>{ativa ? "Ativa" : "Encerrada"}</span>
     </div>
     <div className="obra-team"><HardHat size={14}/> Profissionais autorizados a gravar</div>
-    <Pessoas membros={profissionais} onAdd={onAdd} onRemove={onRemove} placeholder="e-mail do profissional"/>
+    <Pessoas membros={profissionais} onAdd={onAdd} onRemove={onRemove} placeholder="e-mail do profissional"
+      extra={m => termos[m.email]
+        ? <span className="termo-ok" title={`Termo aceito em ${new Date(termos[m.email]).toLocaleString("pt-BR")}`}><FileCheck2 size={12}/></span>
+        : <span className="termo-pend" title="Ainda não aceitou o termo de ciência">termo pendente</span>}/>
     <div className="controls">
       <button className="button secondary" onClick={() => setHist(!hist)}>{hist ? "Ocultar gravações" : "Ver gravações"}</button>
       <button className={ativa ? "button danger" : "button secondary"} onClick={() => {
         if (!ativa || confirm("Encerrar a obra? Os profissionais não poderão mais gravar nela.")) void onStatus(ativa ? "concluida" : "ativa");
       }}>{ativa ? "Encerrar obra" : "Reabrir obra"}</button>
     </div>
-    {hist && <RecordingHistory obraId={obra.id} eyebrow="HISTÓRICO DA OBRA" title="Gravações" showWorker/>}
+    {hist && <RecordingHistory obraId={obra.id} eyebrow="HISTÓRICO DA OBRA" title="Gravações" showWorker canReport/>}
   </div>;
 }
 
-function Pessoas({ membros, onAdd, onRemove, placeholder }: {
+function Pessoas({ membros, onAdd, onRemove, placeholder, extra }: {
   membros: Membro[]; onAdd: (email: string) => Promise<boolean>; onRemove: (id: string) => Promise<boolean>; placeholder: string;
+  extra?: (m: Membro) => React.ReactNode;
 }) {
   const [email, setEmail] = useState("");
   const [invalid, setInvalid] = useState(false);
   return <div className="people">
     <div className="chips">
       {membros.length === 0 && <span className="microcopy">Ninguém cadastrado.</span>}
-      {membros.map(m => <span key={m.id} className="chip">{m.nome || m.email}
+      {membros.map(m => <span key={m.id} className="chip">{m.nome || m.email}{extra?.(m)}
         <button title="Remover acesso" aria-label={`Remover ${m.email}`} onClick={() => { if (confirm(`Remover o acesso de ${m.email}?`)) void onRemove(m.id); }}><X size={13}/></button>
       </span>)}
     </div>

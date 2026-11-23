@@ -12,3 +12,11 @@ export type ObraDetalhada = Obra & { unidade: Unidade | null; condominio: Condom
 
 export const nomeUnidade = (u: Pick<Unidade, "bloco" | "identificador"> | null | undefined) =>
   !u ? "—" : u.bloco ? `Bloco ${u.bloco} · Apto. ${u.identificador}` : `Apto. ${u.identificador}`;
+
+export type Ocorrencia = {
+  id: string; gravacao_id: string; obra_id: string | null; descricao: string;
+  segmento_inicio: number | null; segmento_fim: number | null;
+  status: "aberta" | "resolvida"; preservada: boolean; resolucao: string | null;
+  solicitado_email: string | null; created_at: string; resolvido_em: string | null;
+};
+export type AcessoVideo = { id: number; email: string | null; gravacao_id: string; obra_id: string | null; tipo: "historico" | "ao_vivo"; segmentos: number[] | null; created_at: string };

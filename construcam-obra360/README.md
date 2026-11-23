@@ -17,7 +17,13 @@ Aplicativo web responsivo/PWA para gravação audiovisual de reformas em condom�
 - Câmera traseira/frontal, áudio desativado, pausa de privacidade, tela mantida acesa (Wake Lock).
 - Trechos de 10 segundos, **cada um é um arquivo de vídeo completo**.
 - **Fila de envio persistente** (IndexedDB): cada trecho é salvo no aparelho antes de ir para a nuvem; se a internet cair ou o navegador fechar, o envio continua quando o app for aberto de novo.
-- Histórico com player que encadeia os trechos (links assinados e temporários; o bucket é privado).
+- Histórico com player que encadeia os trechos.
+
+**Proteção e transparência**
+- **Termo de ciência**: o profissional só consegue gravar depois de aceitar o termo (exigido pelo banco). A administração vê quem já aceitou. *O texto é um modelo — revise com assessoria jurídica.*
+- **Ocorrências**: proprietário ou administração marcam um intervalo de trechos com uma descrição; esses trechos ficam **preservados** (não são apagados pela retenção). Só a administração resolve a ocorrência ou libera a preservação.
+- **Registro de acessos**: os links dos vídeos são emitidos apenas pelo servidor do app, que confere a permissão e registra quem assistiu (histórico ou ao vivo). Administração e proprietário veem esse registro. O navegador não consegue mais gerar links direto no Storage.
+- **Retenção de 60 dias**: rotina diária apaga os trechos com mais de 60 dias, exceto os preservados; a gravação fica marcada como "Expirada".
 
 ## Limitações importantes desta versão
 
@@ -26,9 +32,8 @@ Aplicativo web responsivo/PWA para gravação audiovisual de reformas em condom�
 3. Os trechos são arquivos independentes; um arquivo único por gravação (para exportar/baixar) ainda exige montagem no servidor.
 4. Navegadores móveis podem suspender a gravação com a tela bloqueada ou em segundo plano. Para jornada completa confiável, será necessário app nativo ou equipamento dedicado.
 5. A fila fica no navegador do aparelho: se os dados do site forem apagados antes do envio, os trechos pendentes se perdem. Se o navegador fechar no meio de um trecho, perdem-se no máximo ~10 segundos.
-6. A retenção de 60 dias ainda deve ser implementada por rotina de servidor, com exceção para evidências preservadas.
-7. Não há ainda registro (auditoria) de quem assistiu a cada vídeo.
-8. O projeto não deve ser usado para gravação clandestina. Exija autorização, aviso aos trabalhadores, pausa de privacidade e avaliação jurídica/LGPD antes de qualquer piloto real.
+6. O registro de acessos marca quando o link do vídeo foi emitido (não quanto tempo a pessoa assistiu). O link vale 10 minutos.
+7. O projeto não deve ser usado para gravação clandestina. Exija autorização, aviso aos trabalhadores, pausa de privacidade e avaliação jurídica/LGPD antes de qualquer piloto real.
 
 ## Requisitos
 
@@ -44,15 +49,24 @@ npm install
 cp .env.example .env.local
 ```
 
-Edite `.env.local` com `NEXT_PUBLIC_SUPABASE_URL` e `NEXT_PUBLIC_SUPABASE_ANON_KEY`.
+Edite `.env.local`:
+
+| Variável | Onde achar | Observação |
+|---|---|---|
+| `NEXT_PUBLIC_SUPABASE_URL` | Supabase → Project Settings → API | |
+| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | idem, chave `anon` | pública |
+| `SUPABASE_SERVICE_ROLE_KEY` | idem, chave `service_role` | **secreta**, só no servidor; sem ela os vídeos não abrem |
+| `CRON_SECRET` | invente um texto longo e aleatório | protege a rotina de retenção |
+| `RETENCAO_DIAS` | opcional | padrão 60 |
 
 ### Banco de dados (Supabase → SQL Editor)
 
 **Instalação nova:** rode, nesta ordem:
 1. `supabase/schema.sql`
 2. `supabase/003_condominios_acessos.sql`
+3. `supabase/004_termo_ocorrencias_auditoria.sql`
 
-**Já tinha rodado a versão original:** rode `supabase/002_fila_historico.sql` e depois `supabase/003_condominios_acessos.sql`. (Os scripts 002 e 003 podem ser executados mais de uma vez.)
+**Já tinha rodado versões anteriores:** rode o que faltar entre `002_fila_historico.sql`, `003_condominios_acessos.sql` e `004_termo_ocorrencias_auditoria.sql`, nesta ordem. (Os scripts 002–004 podem ser executados mais de uma vez.)
 
 Depois, cadastre você como administrador da plataforma:
 
@@ -78,22 +92,26 @@ Abra `http://localhost:3000`.
 
 ## Publicação
 
-Pode ser publicado no Vercel ou outro host compatível com Next.js (no Vercel, defina **Root Directory** = `construcam-obra360`). Configure as duas variáveis de ambiente e use HTTPS.
+Pode ser publicado no Vercel ou outro host compatível com Next.js (no Vercel, defina **Root Directory** = `construcam-obra360`). Configure as variáveis de ambiente da tabela acima (a `SUPABASE_SERVICE_ROLE_KEY` **sem** o prefixo `NEXT_PUBLIC_`) e use HTTPS.
+
+A retenção roda todo dia às 06:17 UTC pelo Vercel Cron (`vercel.json`), que envia o `CRON_SECRET` automaticamente. Em outro host, agende uma chamada diária:
+
+```bash
+curl -H "Authorization: Bearer $CRON_SECRET" https://SEU-SITE/api/cron/retencao
+```
 
 ## Fluxo de teste
 
 1. **Administrador da plataforma**: entre, crie um condomínio, cadastre o e-mail do síndico, adicione uma unidade, abra-a, cadastre o proprietário, registre uma obra e dê acesso ao profissional.
-2. **Profissional** (outro celular ou janela anônima): entre, escolha a obra e inicie a gravação.
-3. **Proprietário**: entre e veja "Gravando agora" com o vídeo quase ao vivo; depois de encerrada, assista no histórico.
-4. **Síndico**: veja os números do condomínio e encerre a obra — o profissional deixa de poder gravar nela.
+2. **Profissional** (outro celular ou janela anônima): entre, aceite o termo, escolha a obra e inicie a gravação.
+3. **Proprietário**: entre e veja "Gravando agora" com o vídeo quase ao vivo; depois de encerrada, assista no histórico e registre uma ocorrência num trecho.
+4. **Síndico**: veja o alerta de ocorrência aberta, o "termo aceito" ao lado do profissional e o registro de acessos; resolva a ocorrência e encerre a obra.
 5. Teste o modo avião durante uma gravação: os trechos ficam guardados e são enviados quando a conexão voltar.
 
 ## Próximas etapas de desenvolvimento
 
-- Registro de ocorrências pelo proprietário/síndico, com preservação do trecho (legal hold).
-- Auditoria de acesso: quem assistiu a qual vídeo e quando.
-- Retenção automática de 60 dias.
-- Aviso/termo de ciência do profissional antes da primeira gravação.
+- Exportar os trechos de uma ocorrência (arquivo único para entregar à construtora ou ao jurídico).
+- Notificações (e-mail/WhatsApp) para nova ocorrência e início de gravação.
 - WebRTC com LiveKit ou equivalente para ao vivo real.
 - Montagem de um arquivo único por gravação para exportação.
 - Testes reais em Android e iPhone.

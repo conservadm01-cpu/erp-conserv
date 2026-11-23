@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Radio, VideoOff } from "lucide-react";
 import { supabase } from "@/lib/supabase";
+import { assinarTrechos } from "@/lib/videoUrls";
 
 // "Quase ao vivo": sem WebRTC, acompanha a gravação em andamento tocando o
 // trecho mais recente que chegou à nuvem e emendando os seguintes.
@@ -64,12 +65,15 @@ export default function LiveView({ obraId, onLiveChange }: { obraId: string; onL
   }, [playlist.length, waiting, idx]);
 
   const current = playlist[idx];
+  const [error, setError] = useState("");
   useEffect(() => {
     setUrl("");
-    if (!current || !supabase) return;
+    if (!current || !gravRef.current) return;
     let cancelled = false;
-    supabase.storage.from("obras-videos").createSignedUrl(current.caminho_storage, 600)
-      .then(({ data }) => { if (!cancelled && data?.signedUrl) setUrl(data.signedUrl); });
+    // Link emitido pelo servidor, que registra o acompanhamento ao vivo.
+    assinarTrechos(gravRef.current, "ao_vivo", [current.numero_segmento])
+      .then(r => { if (!cancelled) { setError(""); if (r[0]?.url) setUrl(r[0].url); } })
+      .catch(e => { if (!cancelled) setError((e as Error).message); });
     return () => { cancelled = true; };
   }, [current]);
 
@@ -86,6 +90,7 @@ export default function LiveView({ obraId, onLiveChange }: { obraId: string; onL
         onEnded={() => { if (idx < playlist.length - 1) setIdx(idx + 1); else setWaiting(true); }}/>}
       <div className={live ? "rec-indicator live" : "rec-indicator"}><i/>{live ? "QUASE AO VIVO" : "SEM SINAL RECENTE"}</div>
       {waiting && <div className="live-waiting">Aguardando o próximo trecho…</div>}
+      {error && <div className="live-waiting">{error}</div>}
     </div>
     <div className="player-meta">
       <span><Radio size={13}/> {grav.metadata?.worker || "Profissional"} · desde {new Date(grav.inicio).toLocaleTimeString("pt-BR", { timeStyle: "short" })}</span>
