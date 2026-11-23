@@ -9,7 +9,7 @@
 import { supabase } from "@/lib/supabase";
 
 export type QueueJob =
-  | { kind: "session"; userId: string; gravacaoId: string; inicio: string; metadata: Record<string, string> }
+  | { kind: "session"; userId: string; gravacaoId: string; obraId: string | null; inicio: string; metadata: Record<string, string> }
   | { kind: "segment"; userId: string; gravacaoId: string; part: number; blob: Blob; inicio: string; duracaoMs: number }
   | { kind: "finalize"; userId: string; gravacaoId: string; fim: string };
 
@@ -87,7 +87,7 @@ async function runJob(job: StoredJob) {
   if (!supabase) throw new Error("Supabase não configurado.");
   if (job.kind === "session") {
     const { error } = await supabase.from("gravacoes").insert({
-      id: job.gravacaoId, obra_id: null, profissional_id: job.userId,
+      id: job.gravacaoId, obra_id: job.obraId ?? null, profissional_id: job.userId,
       status: "iniciada", inicio: job.inicio, metadata: job.metadata
     });
     if (error && !isDuplicate(error)) throw error;

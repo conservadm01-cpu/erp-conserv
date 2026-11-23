@@ -5,7 +5,7 @@ import { Camera, CircleStop, Play, Pause, RefreshCw, CloudUpload, AlertTriangle,
 import { enqueue, subscribeQueue, processQueue, type QueueSnapshot } from "@/lib/uploadQueue";
 
 type Metadata = { condo: string; unit: string; worker: string; job: string };
-type Props = { metadata: Metadata; userId: string };
+type Props = { metadata: Metadata; userId: string; obraId: string; onActiveChange?: (active: boolean) => void };
 type Phase = "off" | "ready" | "recording" | "paused" | "stopping" | "done";
 
 const SEGMENT_SECONDS = 10;
@@ -27,7 +27,7 @@ function formatBytes(n: number) {
   return `${(n / 1024 / 1024).toFixed(1)} MB`;
 }
 
-export default function CameraRecorder({ metadata, userId }: Props) {
+export default function CameraRecorder({ metadata, userId, obraId, onActiveChange }: Props) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const segmentRef = useRef<Segment | null>(null);
@@ -50,6 +50,7 @@ export default function CameraRecorder({ metadata, userId }: Props) {
   const active = phase === "recording" || phase === "paused";
 
   useEffect(() => subscribeQueue(setQueue), []);
+  useEffect(() => { onActiveChange?.(phase === "recording" || phase === "paused" || phase === "stopping"); }, [phase, onActiveChange]);
 
   // Relógio + rotação dos segmentos.
   useEffect(() => {
@@ -186,7 +187,7 @@ export default function CameraRecorder({ metadata, userId }: Props) {
       gravacaoRef.current = gravacaoId;
       partRef.current = 0;
       // A sessão entra na fila primeiro: funciona mesmo sem internet no início.
-      await queueWrite({ kind: "session", userId, gravacaoId, inicio: new Date().toISOString(), metadata });
+      await queueWrite({ kind: "session", userId, gravacaoId, obraId, inicio: new Date().toISOString(), metadata });
 
       segmentRef.current = startSegment(stream, mimeType);
       await acquireWakeLock();
@@ -238,7 +239,7 @@ export default function CameraRecorder({ metadata, userId }: Props) {
       {active && <div className="rec-indicator"><i className={phase === "paused" ? "paused" : ""}/>{phase === "recording" ? "REC" : "PAUSADO"} · {time} · {segments} trechos</div>}
     </div>
     <div className="camera-meta">
-      <div><strong>{metadata.worker}</strong><span>{metadata.job} · Apto. {metadata.unit}</span></div>
+      <div><strong>{metadata.worker}</strong><span>{metadata.job} · {metadata.unit}</span></div>
       <span className={phase === "recording" ? "tag green" : phase === "paused" ? "tag amber" : "tag"}>{LABEL[phase]}</span>
     </div>
     <div className="controls">

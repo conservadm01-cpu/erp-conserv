@@ -1,26 +1,31 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Camera, Building2, HardHat, ShieldCheck, Video, Clock3, CloudUpload, ClipboardList, LogOut } from "lucide-react";
-import CameraRecorder from "@/components/CameraRecorder";
+import { Camera, Building2, HardHat, ShieldCheck, Video, Clock3, LogOut, AlertTriangle, Lock } from "lucide-react";
 import LoginForm from "@/components/LoginForm";
-import RecordingHistory from "@/components/RecordingHistory";
+import WorkerPanel from "@/components/WorkerPanel";
+import OwnerPanel from "@/components/OwnerPanel";
+import AdminPanel from "@/components/AdminPanel";
 import { isSupabaseConfigured } from "@/lib/supabase";
 import { startQueueWorker } from "@/lib/uploadQueue";
 import { useAuth } from "@/lib/useAuth";
+import { useAccess } from "@/lib/useAccess";
 
-type Role = "admin" | "worker" | "owner";
+type Role = "worker" | "owner" | "admin";
 
 export default function Home() {
-  const [role, setRole] = useState<Role>("worker");
-  const [condo, setCondo] = useState("Condomínio piloto");
-  const [unit, setUnit] = useState("104");
-  const [worker, setWorker] = useState("Profissional 01");
-  const [job, setJob] = useState("Reforma de cozinha");
   const { user, loading, signOut } = useAuth();
+  const access = useAccess(user);
+  const [role, setRole] = useState<Role | null>(null);
 
   // Retoma envios pendentes (de gravações anteriores) assim que o app abre.
   useEffect(() => { startQueueWorker(); }, []);
+
+  const roles: [Role, string, typeof HardHat][] = [];
+  if (access.workerObras.length) roles.push(["worker", "Profissional", HardHat]);
+  if (access.ownerUnits.length) roles.push(["owner", "Proprietário", Video]);
+  if (access.platformAdmin || access.adminCondos.length) roles.push(["admin", "Administração", Building2]);
+  const activeRole = roles.find(r => r[0] === role)?.[0] ?? roles[0]?.[0] ?? null;
 
   return (
     <main className="shell">
@@ -32,69 +37,44 @@ export default function Home() {
           : <div className="top-status"><i/> MVP</div>}
       </header>
 
-      <section className="hero">
+      {!user && <section className="hero">
         <div className="eyebrow">GESTÃO AUDIOVISUAL DE REFORMAS</div>
         <h1>Sua obra, acompanhada<br/><em>de qualquer lugar.</em></h1>
         <p>Gravação pelo celular, organização por obra e histórico audiovisual protegido.</p>
         <div className="hero-pills"><span><Video size={14}/> Câmera móvel</span><span><Clock3 size={14}/> Retenção planejada: 60 dias</span></div>
-      </section>
+      </section>}
 
-      <nav className="role-tabs" aria-label="Perfil">
-        {([
-          ["worker", "Profissional", HardHat],
-          ["owner", "Proprietário", Video],
-          ["admin", "Administração", Building2]
-        ] as const).map(([value, label, Icon]) => (
-          <button key={value} className={role === value ? "role active" : "role"} onClick={() => setRole(value)}>
+      {loading && <section className="content"><div className="empty-state compact"><strong>Carregando…</strong></div></section>}
+      {!loading && !user && <section className="content"><LoginForm/></section>}
+
+      {user && access.loading && <section className="content"><div className="empty-state compact"><strong>Carregando seus acessos…</strong></div></section>}
+      {user && !access.loading && access.error && <section className="content"><div className="error"><AlertTriangle size={17}/>{access.error}</div></section>}
+      {user && !access.loading && !access.error && roles.length === 0 && <section className="content">
+        <div className="empty-state"><Lock size={30}/><strong>Acesso ainda não liberado</strong>
+          <p>Você entrou como <b>{user.email}</b>, mas este e-mail ainda não está vinculado a nenhum condomínio, unidade ou obra. Peça à administração do condomínio para cadastrá-lo e depois toque em “Verificar de novo”.</p>
+          <button className="button secondary" onClick={access.reload}>Verificar de novo</button>
+        </div>
+      </section>}
+
+      {user && !access.loading && roles.length > 1 && <nav className="role-tabs" aria-label="Perfil">
+        {roles.map(([value, label, Icon]) => (
+          <button key={value} className={activeRole === value ? "role active" : "role"} onClick={() => setRole(value)}>
             <Icon size={17}/>{label}
           </button>
         ))}
-      </nav>
+      </nav>}
 
-      <section className="content">
-        {role === "worker" && loading && <div className="empty-state compact"><strong>Carregando…</strong></div>}
-        {role === "worker" && !loading && !user && <LoginForm/>}
-        {role === "worker" && user && <>
-          <div className="section-head"><div><div className="eyebrow">ÁREA DO PROFISSIONAL</div><h2>Registrar execução</h2></div><span className="tag green">Conectado</span></div>
-          <div className="form-grid">
-            <label>Condomínio<input value={condo} onChange={e=>setCondo(e.target.value)}/></label>
-            <label>Apartamento<input value={unit} onChange={e=>setUnit(e.target.value)}/></label>
-            <label>Profissional<input value={worker} onChange={e=>setWorker(e.target.value)}/></label>
-            <label>Serviço / etapa<input value={job} onChange={e=>setJob(e.target.value)}/></label>
-          </div>
-          <CameraRecorder metadata={{ condo, unit, worker, job }} userId={user.id}/>
-        </>}
-        {role === "owner" && <OwnerPanel condo={condo} unit={unit}/>}
-        {role === "admin" && <AdminPanel condo={condo}/>}
-      </section>
-
-      {role === "worker" && user && <section className="content"><RecordingHistory/></section>}
+      {user && !access.loading && activeRole === "worker" && <WorkerPanel user={user} obraIds={access.workerObras}/>}
+      {user && !access.loading && activeRole === "owner" && <OwnerPanel unidadeIds={access.ownerUnits}/>}
+      {user && !access.loading && activeRole === "admin" && <AdminPanel platformAdmin={access.platformAdmin} adminCondos={access.adminCondos} onChanged={access.reload}/>}
 
       <section className="notice">
         <ShieldCheck size={20}/>
-        <div><strong>Privacidade e transparência</strong><p>Use somente com autorização e aviso prévio aos envolvidos. Áudio desativado nesta versão. Não grave banheiros, vestiários, intervalos ou áreas de intimidade. Os painéis de Proprietário e Administração ainda são demonstrativos.</p></div>
+        <div><strong>Privacidade e transparência</strong><p>Use somente com autorização e aviso prévio aos envolvidos. Áudio desativado. Não grave banheiros, vestiários, intervalos ou áreas de intimidade. Cada pessoa só vê as obras às quais foi vinculada pela administração.</p></div>
       </section>
 
-      <footer>CONSTRUCAM OBRA 360 <span>•</span> Protótipo funcional inicial</footer>
-      {!isSupabaseConfigured && <div className="setup-banner">Configuração pendente: conecte o Supabase seguindo o README para habilitar upload e histórico na nuvem.</div>}
+      <footer>CONSTRUCAM OBRA 360 <span>•</span> Protótipo funcional</footer>
+      {!isSupabaseConfigured && <div className="setup-banner">Configuração pendente: conecte o Supabase seguindo o README para habilitar login e gravação.</div>}
     </main>
   );
-}
-
-function OwnerPanel({ condo, unit }: { condo: string; unit: string }) {
-  return <div className="panel">
-    <div className="section-head"><div><div className="eyebrow">ÁREA DO PROPRIETÁRIO</div><h2>Acompanhamento da obra</h2></div><span className="tag">Demonstração</span></div>
-    <div className="owner-card"><div className="owner-icon"><Video size={22}/></div><div><strong>{condo} · Apartamento {unit}</strong><p>Reforma de cozinha · Profissional 01</p></div><span className="tag amber">Aguardando transmissão</span></div>
-    <div className="empty-state"><Camera size={32}/><strong>Nenhuma transmissão conectada</strong><p>Quando a sessão autorizada estiver ativa e o módulo WebRTC for configurado, o vídeo aparecerá aqui.</p></div>
-    <div className="feature-row"><span><Clock3/> Histórico de até 60 dias</span><span><CloudUpload/> Arquivos na nuvem</span></div>
-  </div>;
-}
-
-function AdminPanel({ condo }: { condo: string }) {
-  return <div className="panel">
-    <div className="section-head"><div><div className="eyebrow">PAINEL ADMINISTRATIVO</div><h2>Visão do condomínio</h2></div><span className="tag green">Piloto</span></div>
-    <div className="stats"><div><strong>240</strong><span>Unidades cadastradas (referência)</span></div><div><strong>4</strong><span>Obras simultâneas planejadas</span></div><div><strong>30</strong><span>Celulares/coletes previstos</span></div></div>
-    <div className="owner-card"><Building2/><div><strong>{condo}</strong><p>Ambiente demonstrativo — cadastros reais serão vinculados ao banco Supabase.</p></div></div>
-    <div className="empty-state compact"><ClipboardList size={28}/><strong>Gestão de obras</strong><p>O próximo módulo incluirá cadastro de unidades, empresas, profissionais, permissões, contratos e ocorrências.</p></div>
-  </div>;
 }

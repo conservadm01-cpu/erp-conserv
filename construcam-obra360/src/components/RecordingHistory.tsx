@@ -8,17 +8,20 @@ import { subscribeQueue } from "@/lib/uploadQueue";
 type Gravacao = {
   id: string; status: string; inicio: string; fim: string | null;
   metadata: { condo?: string; unit?: string; worker?: string; job?: string };
-  arquivos_video: { count: number }[];
+  trechos: number;
 };
 type Arquivo = { id: string; caminho_storage: string; numero_segmento: number; tamanho_bytes: number | null; duracao_ms: number | null; inicio_segmento: string | null };
 
+const fmtUnit = (u?: string) => !u ? "—" : /^\d/.test(u) ? `Apto. ${u}` : u;
 const fmtDate = (iso: string) => new Date(iso).toLocaleString("pt-BR", { dateStyle: "short", timeStyle: "short" });
 function fmtDuration(ms: number) {
   const s = Math.round(ms / 1000);
   return `${Math.floor(s / 60)}min ${String(s % 60).padStart(2, "0")}s`;
 }
 
-export default function RecordingHistory() {
+type Props = { obraId?: string; title?: string; eyebrow?: string; showWorker?: boolean };
+
+export default function RecordingHistory({ obraId, title = "Minhas gravações", eyebrow = "HISTÓRICO", showWorker = false }: Props) {
   const [items, setItems] = useState<Gravacao[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -27,17 +30,30 @@ export default function RecordingHistory() {
   const load = useCallback(async () => {
     if (!supabase) return;
     setLoading(true); setError("");
-    const { data, error } = await supabase
-      .from("gravacoes")
-      .select("id,status,inicio,fim,metadata,arquivos_video(count)")
-      .order("inicio", { ascending: false })
-      .limit(30);
+    let q = supabase.from("gravacoes").select("id,status,inicio,fim,metadata").order("inicio", { ascending: false }).limit(30);
+    if (obraId) q = q.eq("obra_id", obraId);
+    const { data, error } = await q;
+    if (error) { setLoading(false); setError(error.message); return; }
+    const rows = (data ?? []) as Omit<Gravacao, "trechos">[];
+    const counts: Record<string, number> = {};
+    if (rows.length) {
+      const { data: segs, error: segErr } = await supabase.from("arquivos_video").select("gravacao_id").in("gravacao_id", rows.map(r => r.id));
+      if (segErr) { setLoading(false); setError(segErr.message); return; }
+      (segs ?? []).forEach((s: { gravacao_id: string }) => { counts[s.gravacao_id] = (counts[s.gravacao_id] ?? 0) + 1; });
+    }
     setLoading(false);
-    if (error) setError(error.message);
-    else setItems((data ?? []) as Gravacao[]);
-  }, []);
+    setItems(rows.map(r => ({ ...r, trechos: counts[r.id] ?? 0 })));
+  }, [obraId]);
 
   useEffect(() => { void load(); }, [load]);
+
+  // Histórico de uma obra (proprietário/administração): as gravações vêm de
+  // outro aparelho, então atualiza periodicamente.
+  useEffect(() => {
+    if (!obraId) return;
+    const t = setInterval(() => void load(), 30000);
+    return () => clearInterval(t);
+  }, [obraId, load]);
 
   // Recarrega quando a fila termina de enviar algo.
   const lastPending = useRef<number | null>(null);
@@ -50,21 +66,21 @@ export default function RecordingHistory() {
 
   return <div className="history">
     <div className="section-head">
-      <div><div className="eyebrow">HISTÓRICO</div><h2>Minhas gravações</h2></div>
+      <div><div className="eyebrow">{eyebrow}</div><h2>{title}</h2></div>
       <button className="button secondary" onClick={load} disabled={loading}><RefreshCw size={16}/> Atualizar</button>
     </div>
     {error && <div className="error"><AlertTriangle size={17}/>{error}</div>}
     {!error && items.length === 0 && !loading && <div className="empty-state compact"><History size={28}/><strong>Nenhuma gravação ainda</strong><p>As gravações enviadas aparecem aqui.</p></div>}
     <ul className="history-list">
       {items.map(g => {
-        const count = g.arquivos_video?.[0]?.count ?? 0;
+        const count = g.trechos;
         const open = openId === g.id;
         return <li key={g.id} className={open ? "open" : ""}>
           <button className="history-row" onClick={() => setOpenId(open ? null : g.id)}>
             <PlayCircle size={22}/>
             <div>
-              <strong>{g.metadata?.job || "Gravação"} · Apto. {g.metadata?.unit || "—"}</strong>
-              <span>{fmtDate(g.inicio)}{g.fim ? ` até ${new Date(g.fim).toLocaleTimeString("pt-BR", { timeStyle: "short" })}` : ""} · {count} trechos</span>
+              <strong>{g.metadata?.job || "Gravação"} · {fmtUnit(g.metadata?.unit)}</strong>
+              <span>{showWorker && g.metadata?.worker ? `${g.metadata.worker} · ` : ""}{fmtDate(g.inicio)}{g.fim ? ` até ${new Date(g.fim).toLocaleTimeString("pt-BR", { timeStyle: "short" })}` : ""} · {count} trechos</span>
             </div>
             <span className={g.status === "finalizada" ? "tag green" : "tag amber"}>{g.status === "finalizada" ? "Finalizada" : "Em andamento"}</span>
             {open ? <ChevronUp size={18}/> : <ChevronDown size={18}/>}

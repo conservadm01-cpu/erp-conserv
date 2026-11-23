@@ -26,7 +26,7 @@ export default function LoginForm() {
     setBusy(true); setError(""); setInfo("");
     const { error } = await supabase.auth.signInWithOtp({
       email: email.trim(),
-      options: { shouldCreateUser: false, emailRedirectTo: window.location.origin }
+      options: { shouldCreateUser: true, emailRedirectTo: window.location.origin }
     });
     setBusy(false);
     if (error) setError(error.message);
@@ -44,7 +44,7 @@ export default function LoginForm() {
   return <form className="login" onSubmit={signInWithPassword}>
     <div className="eyebrow">ACESSO</div>
     <h2>Entrar</h2>
-    <p className="microcopy">Use o e-mail cadastrado pela administração. Não há cadastro aberto.</p>
+    <p className="microcopy">Use o e-mail que a administração do condomínio cadastrou. Primeiro acesso ou esqueceu a senha? Use “Receber link por e-mail”.</p>
     <div className="form-grid single">
       <label>E-mail<input type="email" autoComplete="email" required value={email} onChange={e => setEmail(e.target.value)}/></label>
       <label>Senha<input type="password" autoComplete="current-password" value={password} onChange={e => setPassword(e.target.value)}/></label>
