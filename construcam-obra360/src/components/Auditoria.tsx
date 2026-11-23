@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Eye, Flag, ShieldCheck, ShieldOff, CheckCircle2, AlertTriangle, Radio } from "lucide-react";
 import { supabase } from "@/lib/supabase";
+import { confirmSheet, promptSheet } from "@/components/Sheet";
 import { OCORRENCIA_COLS, faixa } from "@/components/RecordingHistory";
 import type { AcessoVideo, Ocorrencia } from "@/types";
 
@@ -53,13 +54,13 @@ export function OcorrenciasPainel({ obraIds, nomes = {}, canResolve }: { obraIds
     else void load();
   }
   async function resolver(o: Ocorrencia) {
-    const resolucao = prompt("Como a ocorrência foi resolvida?");
+    const resolucao = await promptSheet({ title: "Resolver ocorrência", message: faixa(o) + " · " + o.descricao, label: "Como foi resolvida?", placeholder: "Ex.: Construtora fará o reparo até sexta.", confirmLabel: "Marcar como resolvida" });
     if (!resolucao?.trim() || !supabase) return;
     const { data: s } = await supabase.auth.getSession();
     await atualizar(o, { status: "resolvida", resolucao: resolucao.trim(), resolvido_por: s.session?.user.id, resolvido_em: new Date().toISOString() });
   }
   async function liberar(o: Ocorrencia) {
-    if (!confirm("Liberar a preservação? Os trechos voltam a seguir a retenção de 60 dias e podem ser apagados.")) return;
+    if (!await confirmSheet({ title: "Liberar a preservação?", message: "Os trechos voltam a seguir a retenção de 60 dias e podem ser apagados.", confirmLabel: "Liberar", danger: true })) return;
     await atualizar(o, { preservada: false });
   }
 

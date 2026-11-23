@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { AlertTriangle, Home, HardHat, Eye, Flag } from "lucide-react";
+import { AlertTriangle, Home, HardHat } from "lucide-react";
 import { AcessosList, OcorrenciasPainel } from "@/components/Auditoria";
 import LiveView from "@/components/LiveView";
 import RecordingHistory from "@/components/RecordingHistory";
@@ -9,7 +9,9 @@ import { supabase } from "@/lib/supabase";
 import { check, obrasPorUnidades } from "@/lib/data";
 import { nomeUnidade, type Membro, type ObraDetalhada } from "@/types";
 
-export default function OwnerPanel({ unidadeIds }: { unidadeIds: string[] }) {
+export type OwnerView = "acompanhar" | "ocorrencias" | "acessos";
+
+export default function OwnerPanel({ unidadeIds, view }: { unidadeIds: string[]; view: OwnerView }) {
   const [obras, setObras] = useState<ObraDetalhada[]>([]);
   const [equipe, setEquipe] = useState<Membro[]>([]);
   const [loaded, setLoaded] = useState(false);
@@ -28,42 +30,49 @@ export default function OwnerPanel({ unidadeIds }: { unidadeIds: string[] }) {
 
   const ativas = obras.filter(o => o.status === "ativa");
   const encerradas = obras.filter(o => o.status !== "ativa");
+  const nomes = Object.fromEntries(obras.map(o => [o.id, `${nomeUnidade(o.unidade)} · ${o.descricao || "Obra"}`]));
 
-  return <>
-    <section className="content">
-      <div className="section-head">
-        <div><div className="eyebrow">ÁREA DO PROPRIETÁRIO</div><h2>Acompanhamento da obra</h2></div>
-        <span className="tag">{unidadeIds.length} {unidadeIds.length === 1 ? "unidade" : "unidades"}</span>
-      </div>
-      {error && <div className="error"><AlertTriangle size={17}/>{error}</div>}
-      {loaded && !error && obras.length === 0 && <div className="empty-state compact"><Home size={28}/><strong>Nenhuma obra cadastrada</strong>
-        <p>Quando a administração do condomínio registrar uma obra na sua unidade, ela aparecerá aqui.</p></div>}
+  return <div className="screen">
+    {error && <div className="error"><AlertTriangle size={17}/>{error}</div>}
+    {loaded && !error && obras.length === 0 && <div className="empty-state"><Home size={30}/><strong>Nenhuma obra cadastrada</strong>
+      <p>Quando a administração do condomínio registrar uma obra na sua unidade, ela aparecerá aqui.</p></div>}
+
+    {view === "acompanhar" && <>
       {ativas.map(o => <ObraCard key={o.id} obra={o} equipe={equipe.filter(m => m.obra_id === o.id)}/>)}
-    </section>
-    {encerradas.length > 0 && <section className="content">
-      <div className="section-head"><div><div className="eyebrow">ARQUIVO</div><h2>Obras encerradas</h2></div></div>
-      {encerradas.map(o => <ObraCard key={o.id} obra={o} equipe={equipe.filter(m => m.obra_id === o.id)}/>)}
+      {encerradas.length > 0 && <>
+        <h3 className="list-title">Obras encerradas</h3>
+        {encerradas.map(o => <ObraCard key={o.id} obra={o} equipe={equipe.filter(m => m.obra_id === o.id)}/>)}
+      </>}
+    </>}
+
+    {view === "ocorrencias" && obras.length > 0 && <section className="card">
+      <div className="card-head"><div><div className="eyebrow">Sua unidade</div><h2>Ocorrências</h2></div></div>
+      <p className="microcopy">Para registrar uma ocorrência, abra a gravação em “Acompanhar” e toque em “Registrar ocorrência neste trecho”.</p>
+      <OcorrenciasPainel obraIds={obras.map(o => o.id)} nomes={nomes} canResolve={false}/>
     </section>}
-  </>;
+
+    {view === "acessos" && obras.length > 0 && <section className="card">
+      <div className="card-head"><div><div className="eyebrow">Transparência</div><h2>Quem assistiu</h2></div></div>
+      <p className="microcopy">Cada vez que alguém abre um vídeo da sua obra, fica registrado aqui.</p>
+      <AcessosList obraIds={obras.map(o => o.id)} nomes={nomes}/>
+    </section>}
+  </div>;
 }
 
 function ObraCard({ obra, equipe }: { obra: ObraDetalhada; equipe: Membro[] }) {
   const [live, setLive] = useState(false);
-  return <div className="obra-card">
-    <div className="owner-card">
-      <div className="owner-icon"><Home size={22}/></div>
+  const ativa = obra.status === "ativa";
+  return <section className="card obra-card">
+    <div className="card-head">
       <div>
-        <strong>{obra.condominio?.nome} · {nomeUnidade(obra.unidade)}</strong>
-        <p>{obra.descricao || "Obra"}{obra.empresa ? ` · ${obra.empresa}` : ""}</p>
+        <div className="eyebrow">{obra.condominio?.nome} · {nomeUnidade(obra.unidade)}</div>
+        <h2>{obra.descricao || "Obra"}</h2>
+        {obra.empresa && <p className="sub">{obra.empresa}</p>}
       </div>
-      <span className={obra.status !== "ativa" ? "tag" : live ? "tag green" : "tag amber"}>
-        {obra.status !== "ativa" ? "Encerrada" : live ? "Gravando agora" : "Sem gravação agora"}
-      </span>
+      <span className={!ativa ? "tag" : live ? "tag live" : "tag"}>{!ativa ? "Encerrada" : live ? "Gravando agora" : "Sem gravação agora"}</span>
     </div>
-    {equipe.length > 0 && <p className="team"><HardHat size={14}/> Profissionais: {equipe.map(m => m.nome || m.email).join(", ")}</p>}
-    {obra.status === "ativa" && <LiveView obraId={obra.id} onLiveChange={setLive}/>}
-    <RecordingHistory obraId={obra.id} eyebrow="HISTÓRICO DA OBRA" title="Gravações" showWorker canReport/>
-    <details className="fold"><summary><Flag size={14}/> Ocorrências desta obra</summary><OcorrenciasPainel obraIds={[obra.id]} canResolve={false}/></details>
-    <details className="fold"><summary><Eye size={14}/> Quem assistiu aos vídeos</summary><AcessosList obraIds={[obra.id]}/></details>
-  </div>;
+    {equipe.length > 0 && <p className="team"><HardHat size={14}/> {equipe.map(m => m.nome || m.email).join(", ")}</p>}
+    {ativa && <LiveView obraId={obra.id} onLiveChange={setLive}/>}
+    <RecordingHistory obraId={obra.id} eyebrow="Histórico" title="Gravações" showWorker canReport/>
+  </section>;
 }

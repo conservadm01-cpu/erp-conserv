@@ -100,6 +100,14 @@ A retenção roda todo dia às 06:17 UTC pelo Vercel Cron (`vercel.json`), que e
 curl -H "Authorization: Bearer $CRON_SECRET" https://SEU-SITE/api/cron/retencao
 ```
 
+## Instalar no celular
+
+O app é um PWA: abra o endereço no celular e
+- **Android (Chrome):** menu ⋮ → *Instalar app* / *Adicionar à tela inicial*;
+- **iPhone (Safari):** botão Compartilhar → *Adicionar à Tela de Início*.
+
+Ele abre em tela cheia, com ícone próprio e barra de abas embaixo. No computador, as abas viram uma barra lateral.
+
 ## Fluxo de teste
 
 1. **Administrador da plataforma**: entre, crie um condomínio, cadastre o e-mail do síndico, adicione uma unidade, abra-a, cadastre o proprietário, registre uma obra e dê acesso ao profissional.

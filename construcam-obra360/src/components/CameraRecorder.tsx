@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Camera, CircleStop, Play, Pause, RefreshCw, CloudUpload, AlertTriangle, WifiOff, CheckCircle2 } from "lucide-react";
+import { Camera, Play, Pause, RefreshCw, CloudUpload, AlertTriangle, WifiOff, CheckCircle2 } from "lucide-react";
 import { enqueue, subscribeQueue, processQueue, type QueueSnapshot } from "@/lib/uploadQueue";
 
 type Metadata = { condo: string; unit: string; worker: string; job: string };
@@ -229,32 +229,70 @@ export default function CameraRecorder({ metadata, userId, obraId, onActiveChang
     setPhase("done");
   }
 
-  const time = `${String(Math.floor(seconds / 3600)).padStart(2, "0")}:${String(Math.floor(seconds / 60) % 60).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`;
+  const time = `${seconds >= 3600 ? `${Math.floor(seconds / 3600)}:` : ""}${String(Math.floor(seconds / 60) % 60).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`;
   const cameraOn = phase !== "off" && phase !== "done";
+  const busy = phase === "stopping";
+  const hint = phase === "recording" ? `Gravando · ${segments} ${segments === 1 ? "trecho salvo" : "trechos salvos"}`
+    : phase === "paused" ? "Pausado para privacidade"
+    : phase === "stopping" ? "Finalizando…"
+    : phase === "done" ? "Gravação encerrada · toque para gravar de novo"
+    : "Toque no botão para gravar";
 
-  return <div className="camera-module">
-    <div className="camera-frame">
+  return <div className="recorder">
+    <div className={`viewfinder ${phase}`}>
       <video ref={videoRef} autoPlay muted playsInline/>
-      {!cameraOn && <div className="camera-placeholder"><Camera size={34}/><span>Pré-visualização da câmera</span></div>}
-      {active && <div className="rec-indicator"><i className={phase === "paused" ? "paused" : ""}/>{phase === "recording" ? "REC" : "PAUSADO"} · {time} · {segments} trechos</div>}
+      {!cameraOn && <button className="vf-empty" onClick={() => openCamera()}>
+        <span className="vf-empty-icon"><Camera size={28}/></span>
+        <strong>Abrir câmera</strong>
+        <span>Confira o enquadramento antes de gravar</span>
+      </button>}
+      <div className="vf-top">
+        {active
+          ? <span className={`rec-pill ${phase}`}><i/>{phase === "recording" ? "REC" : "PAUSADO"} {time}</span>
+          : <span className="vf-chip">{LABEL[phase]}</span>}
+        <QueueChip queue={queue}/>
+      </div>
+      {cameraOn && <div className="vf-bottom"><strong>{metadata.job || "Obra"}</strong><span>{metadata.unit}</span></div>}
     </div>
-    <div className="camera-meta">
-      <div><strong>{metadata.worker}</strong><span>{metadata.job} · {metadata.unit}</span></div>
-      <span className={phase === "recording" ? "tag green" : phase === "paused" ? "tag amber" : "tag"}>{LABEL[phase]}</span>
+
+    <div className="rec-bar">
+      <div className="rec-side">
+        {active
+          ? <button className="round-btn" onClick={phase === "paused" ? resumeRecording : pauseRecording} aria-label={phase === "paused" ? "Retomar" : "Pausar (privacidade)"}>
+              {phase === "paused" ? <Play size={22}/> : <Pause size={22}/>}
+            </button>
+          : <button className="round-btn" onClick={flipCamera} disabled={busy} aria-label="Virar câmera"><RefreshCw size={22}/></button>}
+        <span>{active ? (phase === "paused" ? "Retomar" : "Pausar") : "Virar"}</span>
+      </div>
+
+      <div className="rec-main">
+        {active || busy
+          ? <button className="rec-button stop" onClick={stopRecording} disabled={busy} aria-label="Encerrar"><span/></button>
+          : <button className="rec-button" onClick={startRecording} aria-label="Iniciar gravação"><span/></button>}
+        <span>{active || busy ? "Encerrar" : "Gravar"}</span>
+      </div>
+
+      <div className="rec-side">
+        <span className="rec-count"><b>{segments}</b>trechos</span>
+      </div>
     </div>
-    <div className="controls">
-      <button className="button secondary" onClick={() => openCamera()} disabled={active || phase === "stopping"}><Camera size={17}/> Abrir câmera</button>
-      <button className="button secondary" onClick={flipCamera} disabled={active || phase === "stopping"}><RefreshCw size={17}/> Virar câmera</button>
-      {!active && phase !== "stopping" && <button className="button primary" onClick={startRecording}><Play size={17}/> Iniciar gravação</button>}
-      {phase === "recording" && <button className="button secondary" onClick={pauseRecording}><Pause size={17}/> Pausar (privacidade)</button>}
-      {phase === "paused" && <button className="button primary" onClick={resumeRecording}><Play size={17}/> Retomar</button>}
-      {(active || phase === "stopping") && <button className="button danger" onClick={stopRecording} disabled={phase === "stopping"}><CircleStop size={17}/> Encerrar</button>}
-    </div>
+    <p className="rec-hint">{hint}</p>
+
     <QueueStatus queue={queue}/>
     {warning && <div className="warning"><AlertTriangle size={17}/>{warning}</div>}
     {error && <div className="error"><AlertTriangle size={17}/>{error}</div>}
-    <p className="microcopy">Áudio desativado. Cada trecho de {SEGMENT_SECONDS} s é salvo primeiro no aparelho e enviado à nuvem assim que houver conexão — se a internet cair ou o navegador fechar, o envio continua quando o app for aberto de novo. Mantenha a tela ativa: com o celular bloqueado, o navegador pode parar a câmera.</p>
+    <details className="fold">
+      <summary>Como funciona a gravação</summary>
+      <p className="microcopy">Áudio desativado. Cada trecho de {SEGMENT_SECONDS} s é salvo primeiro no aparelho e enviado à nuvem assim que houver conexão — se a internet cair ou o navegador fechar, o envio continua quando o app for aberto de novo. Mantenha a tela ativa: com o celular bloqueado, o navegador pode parar a câmera. Use “Pausar” em intervalos e chamadas pessoais.</p>
+    </details>
   </div>;
+}
+
+function QueueChip({ queue }: { queue: QueueSnapshot | null }) {
+  if (!queue) return null;
+  if (!queue.online) return <span className="vf-chip warn"><WifiOff size={13}/> Offline · {queue.pending}</span>;
+  if (queue.pending > 0) return <span className="vf-chip"><CloudUpload size={13}/> {queue.pending}</span>;
+  return <span className="vf-chip ok"><CheckCircle2 size={13}/> Na nuvem</span>;
 }
 
 function QueueStatus({ queue }: { queue: QueueSnapshot | null }) {
@@ -272,5 +310,5 @@ function QueueStatus({ queue }: { queue: QueueSnapshot | null }) {
       </>}
     </div>;
   }
-  return <div className="upload-state green"><CheckCircle2 size={16}/> Tudo enviado para a nuvem</div>;
+  return <div className="upload-state green sr-only">Tudo enviado para a nuvem</div>;
 }
