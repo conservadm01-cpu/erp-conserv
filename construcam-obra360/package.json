@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "demo:build": "node demo/build.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.49.1",
@@ -20,6 +21,7 @@
     "@types/node": "^22.10.5",
     "@types/react": "^19.0.6",
     "@types/react-dom": "^19.0.3",
+    "esbuild": "^0.24.2",
     "typescript": "^5.7.3"
   }
 }

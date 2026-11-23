@@ -1,0 +1,22 @@
+/* Ajustes do build de demonstração (artefato). */
+.app-header { top: env(safe-area-inset-top, 0px); padding-top: 0; min-height: var(--header-h); }
+body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px); z-index: 31; background: var(--bg); }
+.login-screen { margin-top: calc(-1 * env(safe-area-inset-top, 0px)); padding-top: env(safe-area-inset-top, 0px); padding-bottom: 230px; min-height: 100%; }
+.login-hero { padding-top: 40px; }
+.demo-login { position: fixed; left: 0; right: 0; bottom: 0; z-index: 60; background: #fff; border-top: 1px solid var(--line); box-shadow: 0 -10px 30px rgba(15,42,66,.1); padding: 14px max(16px, env(safe-area-inset-right, 0px)) calc(14px + env(safe-area-inset-bottom, 0px)) max(16px, env(safe-area-inset-left, 0px)); }
+.demo-login-head { display: flex; align-items: center; gap: 8px; max-width: 560px; margin: 0 auto 10px; color: var(--blue); font-size: 13px; }
+.demo-login-head strong { color: var(--ink); }
+.demo-login-head span { color: var(--muted); }
+.demo-people { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; max-width: 560px; margin: 0 auto; }
+.demo-people button { text-align: left; border: 1px solid var(--line); background: var(--field); border-radius: 14px; padding: 10px 12px; min-height: 52px; color: var(--ink); }
+.demo-people button b { display: flex; align-items: center; gap: 5px; font-size: 13.5px; }
+.demo-people button span { display: block; font-size: 11.5px; color: var(--muted); margin-top: 2px; overflow-wrap: anywhere; }
+.demo-people button.current { border-color: var(--blue); background: var(--blue-soft); }
+.demo-people button:focus-visible, .demo-fab:focus-visible { outline: 3px solid rgba(23,107,135,.4); outline-offset: 2px; }
+.app-header .avatar { margin-right: 86px; }
+.demo-fab { position: fixed; z-index: 45; right: max(16px, env(safe-area-inset-right, 0px)); top: calc(env(safe-area-inset-top, 0px) + 11px); min-height: 38px; display: inline-flex; align-items: center; gap: 6px; border: 0; border-radius: 999px; padding: 10px 14px; background: var(--navy); color: #fff; font-weight: 700; font-size: 13px; box-shadow: 0 8px 22px rgba(15,42,66,.3); }
+.demo-section { font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: #6d8597; margin: 16px 0 8px; }
+.demo-actions { display: flex; flex-direction: column; gap: 8px; }
+.sheet .success { margin-top: 12px; }
+@media (min-width: 900px) { .demo-fab { right: calc(32px + max(0px, (100vw - var(--side-w) - 760px) / 2 - 32px)); } }
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }

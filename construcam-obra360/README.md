@@ -108,6 +108,10 @@ O app é um PWA: abra o endereço no celular e
 
 Ele abre em tela cheia, com ícone próprio e barra de abas embaixo. No computador, as abas viram uma barra lateral.
 
+## Versão de demonstração
+
+`npm run demo:build` gera `demo/dist/construcam-demo.html`: um único HTML com as mesmas telas do app, mas com um banco em memória no navegador (mesmas regras de acesso), câmera simulada quando a real não é liberada e um botão **Demo** para trocar de pessoa, simular um profissional gravando ao vivo, avançar 61 dias (retenção) e reiniciar os dados. Serve para testar o fluxo sem Supabase; não envia nada para lugar nenhum.
+
 ## Fluxo de teste
 
 1. **Administrador da plataforma**: entre, crie um condomínio, cadastre o e-mail do síndico, adicione uma unidade, abra-a, cadastre o proprietário, registre uma obra e dê acesso ao profissional.
