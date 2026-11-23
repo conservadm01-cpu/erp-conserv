@@ -29,9 +29,14 @@ create table if not exists public.arquivos_video (
   caminho_storage text not null unique,
   numero_segmento integer not null,
   tamanho_bytes bigint,
+  inicio_segmento timestamptz,
+  duracao_ms integer,
   created_at timestamptz not null default now(),
   unique (gravacao_id, numero_segmento)
 );
+
+create index if not exists gravacoes_profissional_inicio_idx
+  on public.gravacoes (profissional_id, inicio desc);
 
 create table if not exists public.ocorrencias (
   id uuid primary key default gen_random_uuid(),
